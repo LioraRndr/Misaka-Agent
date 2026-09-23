@@ -685,8 +685,9 @@ def _resume(con, run_id, *, driver_lock, clarification):
     # A failed card is retried like a stopped one: without this the node it killed replays the
     # identical failure on every resume, and the only way out is editing this database by hand.
     for row in tasks(con, run_id):
-        unusable = row["status"] == "done" and task_store.latest_payload(
-            con, row["id"], "research_review_missing", generation=row["generation"])
+        unusable = row["status"] == "done" and (
+            task_store.latest_payload(con, row["id"], "research_review_missing", generation=row["generation"])
+            or task_store.latest_payload(con, row["id"], "research_artifact_drift", generation=row["generation"]))
         if row["status"] not in ("stopped", "failed") and not unusable:
             continue
         target = "todo" if task_store.parent_ids(con, row["id"]) else "ready"

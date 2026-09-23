@@ -158,14 +158,17 @@ def test_research_registration_does_not_relabel_post_submission_bytes(state, mut
     if mutated:
         path.write_text("changed after acceptance")
     if mutated:
-        with pytest.raises(ValueError, match="Accepted artifact changed"):
-            workflow.settle_done_tasks(con, run_id=run["id"])
+        # 2026-09-24: changed bytes send the card back to its Sister to declare again instead
+        # of failing the run; nothing is registered under the stale declaration.
+        workflow.settle_done_tasks(con, run_id=run["id"])
         assert (
             tasks.latest_payload(
                 con, tid, "research_v2_settled", generation=task["generation"]
             )
             is None
         )
+        assert tasks.latest_payload(con, tid, "research_artifact_drift", generation=task["generation"])
+        assert int(tasks.get(con, tid)["generation"]) == task["generation"] + 1
     else:
         workflow.settle_done_tasks(con, run_id=run["id"])
     artifacts = runs.artifacts(con, run["id"], task_id=tid)
@@ -871,8 +874,13 @@ def test_attachment_manifest_boundary(state, change):
         path.unlink()
         # The target need not exist: the path escape must be rejected before any read.
         path.symlink_to(Path(run["workspace"]).parent / "outside-fixture.md")
-    if change in {"deleted", "outside", "undigested"}:
-        with pytest.raises(ValueError, match="Accepted artifact|no artifact digests"):
+    if change == "deleted":
+        # 2026-09-24: a missing deliverable is drift, and drift reopens the card for its Sister.
+        workflow.settle_done_tasks(con, run_id=run["id"])
+        assert not runs.artifacts(con, run["id"], task_id=tid)
+        assert int(tasks.get(con, tid)["generation"]) == 2
+    elif change in {"outside", "undigested"}:
+        with pytest.raises(ValueError, match="outside the workspace|no artifact digests"):
             workflow.settle_done_tasks(con, run_id=run["id"])
         assert not runs.artifacts(con, run["id"], task_id=tid)
     else:

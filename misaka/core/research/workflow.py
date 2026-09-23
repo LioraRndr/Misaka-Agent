@@ -490,13 +490,33 @@ def _submitted_payload(con, task):
 ARTIFACT_ROOTS = ("nodes", "final")
 
 
+class ArtifactDrift(ValueError):
+    """A card's accepted files no longer match its submission. The bytes she declared are not
+    the bytes on disk, so nothing is registered under that declaration: the card is reopened
+    and the Sister declares again (her transcript continues, so that is one short turn)."""
+
+    def __init__(self, task_id, paths):
+        super().__init__(f"Card {task_id}: accepted artifacts changed after submission: {', '.join(paths)}")
+        self.task_id, self.paths = task_id, list(paths)
+
+
+DERIVED_BUNDLE_NAMES = frozenset({"SOURCES.md", "sources"})
+
+
 def _register_task_artifacts(con, run, task, submitted):
     """Register submitted project files at their original location. Nothing is copied or moved.
 
     Only files under the by-node layout (``nodes/``, ``final/``) are a card's outputs. A Sister
     who lists a page from the shared ``downloads/`` cache, or a file at the project root, has
     named a source, not a product: those are gathered by the bundles beside her outputs and
-    are neither registered nor committed with the node. Each such path is recorded on the card."""
+    are neither registered nor committed with the node. Each such path is recorded on the card.
+
+    Only files in the card's own folder are frozen by their submitted digest. Its derived
+    bundle (``SOURCES.md``, ``sources/``) is rebuilt at every settle, and a node-level file such
+    as a coordination ledger is written by every card that shares it; freezing either failed
+    whole runs (2026-09-24: 18 changed paths across 6 cards, one of them settle's own bundle).
+    A changed or missing file of the card's own raises ``ArtifactDrift`` after the whole list
+    is checked, and nothing of that card is registered under the stale declaration."""
     link = con.execute("SELECT * FROM research_run_tasks WHERE task_id=?", (task["id"],)).fetchone()
     if not link or not task["workspace"]:
         return
@@ -504,23 +524,37 @@ def _register_task_artifacts(con, run, task, submitted):
     digests = submitted.get("artifact_digests")
     if not isinstance(digests, dict):        # every submission records them (dispatch._submitted)
         raise ValueError(f"Card {task['id']}: its submission carries no artifact digests.")  # noqa: TRY004 - a bad submission, not a bad type
+    generation = int(dict(task).get("generation") or 1)
+    workspace = Path(run["workspace"]).resolve()
+    # A card without an output folder (a headless or hand-made one) has no "own" boundary:
+    # every layout file it declares is frozen, as before 2026-09-24.
+    output_dir = dict(task).get("output_dir")
+    own = Path(output_dir).resolve() if output_dir else None
+    accepted, drifted = [], []
     for rel in submitted.get("artifacts") or []:
         source = Path(task["workspace"], str(rel)).resolve()
         try:
-            inside = source.relative_to(Path(run["workspace"]).resolve())
+            inside = source.relative_to(workspace)
         except ValueError as error:
             raise ValueError(f"Accepted artifact moved outside the workspace: {rel}") from error
         if inside.parts[:1] not in {(root,) for root in ARTIFACT_ROOTS}:
-            task_store.add_event(con, task["id"], "artifact_outside_layout", {"path": str(rel)},
-                                 generation=int(dict(task).get("generation") or 1))
+            task_store.add_event(con, task["id"], "artifact_outside_layout", {"path": str(rel)}, generation=generation)
+            continue
+        if own is not None and not source.is_relative_to(own):
+            task_store.add_event(con, task["id"], "artifact_outside_card", {"path": str(rel)}, generation=generation)
+            continue
+        if DERIVED_BUNDLE_NAMES & set((source.relative_to(own) if own is not None else inside).parts):
+            task_store.add_event(con, task["id"], "artifact_derived_skipped", {"path": str(rel)}, generation=generation)
             continue
         try:
             raw = source.read_bytes()
-        except OSError as error:
-            raise ValueError(f"Accepted artifact is missing: {rel}") from error
+        except OSError:
+            drifted.append(str(rel))
+            continue
         digest = hashlib.sha256(raw).hexdigest()
         if digests.get(str(rel)) != digest:
-            raise ValueError(f"Accepted artifact changed before Research registration: {rel}")
+            drifted.append(str(rel))
+            continue
         try:
             raw.decode("utf-8")
             binary = False
@@ -528,11 +562,32 @@ def _register_task_artifacts(con, run, task, submitted):
             # Keep binary deliverables by identity. Document tools read their content;
             # registration neither decodes them as prose nor certifies any quotation.
             binary = True
-        kind = {"red_team": "critique", "final_review": "final_critique"}.get(link["kind"], "task_output")
+        accepted.append((rel, source, digest, binary))
+    if drifted:
+        raise ArtifactDrift(task["id"], drifted)
+    kind = {"red_team": "critique", "final_review": "final_critique"}.get(link["kind"], "task_output")
+    for rel, source, digest, binary in accepted:
         runs.register_file(con, run["id"], kind, f"[{task['id']}] {source.name}",
                            str(source), sha256=digest,
                            branch_id=_bid(node), task_id=task["id"],
                            metadata={"source_file": str(rel), **({"binary": True} if binary else {})})
+
+
+def _reopen_for_resubmission(con, task, generation):
+    """A drifted card goes back to the Sister as a new attempt, like a stopped one on resume."""
+    target = "todo" if task_store.parent_ids(con, task["id"]) else "ready"
+    if task_store.reopen_task(con, task["id"], target_status=target,
+                              expected_generation=generation, invalidate_descendants=False):
+        task_store.add_event(con, task["id"], "research_resumed",
+                             {"from_generation": generation, "reason": "artifact_drift"}, generation=generation + 1)
+        return True
+    return False
+
+
+def _cards_reopened(con, run, node):
+    """Research cards of the node that a settle sent back to their Sisters."""
+    return [row["id"] for row in runs.tasks(con, run["id"], kind="research", node_id=node["id"])
+            if row["status"] in {"todo", "ready", "running"}]
 
 
 def _clear_task_outputs(con, run_id, task_id):
@@ -553,8 +608,12 @@ def _clear_task_outputs(con, run_id, task_id):
     )
 
 
-def settle_done_tasks(con, *, run_id):
-    """Register accepted artifacts and ingest the Sisters' findings, once per task generation."""
+def settle_done_tasks(con, *, run_id, reopen_drift=True):
+    """Register accepted artifacts and ingest the Sisters' findings, once per task generation.
+
+    A card whose accepted files changed after submission is recorded (``research_artifact_drift``)
+    and, with ``reopen_drift``, sent back to its Sister as a new attempt; a halt path passes False
+    and leaves the reopening to ``runs.resume``, which reads the same event."""
     run = runs.get(con, run_id)
     for task in runs.tasks(con, run_id):
         if task["status"] != "done":
@@ -573,7 +632,15 @@ def settle_done_tasks(con, *, run_id):
                 continue
             submitted = _submitted_payload(con, current)
             _clear_task_outputs(con, run["id"], task["id"])
-            _register_task_artifacts(con, run, current, submitted)
+            try:
+                _register_task_artifacts(con, run, current, submitted)
+            except ArtifactDrift as drift:
+                task_store.add_event(con, task["id"], "research_artifact_drift", {"paths": drift.paths},
+                                     generation=generation)
+                _LOG.warning("Research %s: %s", run_id, drift)
+                if reopen_drift:
+                    _reopen_for_resubmission(con, current, generation)
+                continue
             result = {"kind": task["research_kind"]}
             if task["research_kind"] not in runs.REVIEW_KINDS:
                 result = ledger.ingest_report(con, run, task, submitted)
@@ -823,6 +890,12 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
                 return outcome
             check()
             settle_done_tasks(con, run_id=run["id"])
+            reopened = _cards_reopened(con, run, node)
+            if reopened:
+                await _progress(progress, "resubmitting",
+                                f"{len(reopened)} card(s) changed after submission and went back to their Sisters "
+                                "to declare again.", run, task_ids=reopened)
+                continue
             if not _done(con, run, node, "research"):
                 return _close(con, run, node, "failed")
             set_node(status="synthesizing")
@@ -1434,7 +1507,7 @@ async def run(con, cfg, spawner, *, run_id, poll_seconds=POLL_SECONDS, progress=
         # so the report and a later resume see it (2026-09-23: a driver crash left 39 done
         # cards unregistered for five hours). A settle failure must not cost the report.
         try:
-            settle_done_tasks(con, run_id=run_id)
+            settle_done_tasks(con, run_id=run_id, reopen_drift=False)
         except Exception:  # noqa: BLE001 - the partial report is what a halt owes the user
             _LOG.exception("Research %s: settling finished cards before the partial report failed", run_id)
         return _partial_result(con, run, reason, status=status, driver_lock=driver_lock)

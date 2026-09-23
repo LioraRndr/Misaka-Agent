@@ -16,7 +16,7 @@ from misaka.core.research import runs, workflow
 async def test_every_halt_path_settles_once_before_the_partial_report(root_run, monkeypatch, outcome):  # noqa: F811
     con, run, _root, _owner, _events = root_run
     settled = []
-    monkeypatch.setattr(workflow, "settle_done_tasks", lambda db, *, run_id: settled.append(run_id))
+    monkeypatch.setattr(workflow, "settle_done_tasks", lambda db, *, run_id, **kw: settled.append(run_id))
 
     async def expand(*args, **kwargs):
         if outcome == "cancel":
@@ -38,8 +38,8 @@ async def test_every_halt_path_settles_once_before_the_partial_report(root_run, 
 async def test_a_settle_failure_does_not_cost_the_partial_report(root_run, monkeypatch, caplog):  # noqa: F811
     con, run, _root, _owner, _events = root_run
 
-    def failing(db, *, run_id):
-        raise ValueError("Accepted artifact changed before Research registration: x.md")
+    def failing(db, *, run_id, **kw):
+        raise ValueError("fixture: settle failed")
 
     monkeypatch.setattr(workflow, "settle_done_tasks", failing)
 

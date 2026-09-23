@@ -628,6 +628,18 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
 - `tests/test_research_halt_registers_real_submission.py`：用 `dispatch.accept_state` 做一次真实提交（带摘要），驱动器 InterruptedError，
   真实 `settle_done_tasks` 跑通，`research_artifacts` 里出现 task_output、sha 一致、partial 报告列出该文件。此前只有 recorder 级别的测试。
 
+### B55 · P1 · settle 的完整性检查把"完卡后继续改文件"当篡改，整个 run 失败且 resume 死循环（2026-09-24，已修）
+- 现象：02:30 这波 53 张卡全部 done，executing 分支 settle 到 t_0e763d 抛 `Accepted artifact changed before Research registration`，run failed。
+  `/research resume` 不会重开 done 卡，回到 executing 再 settle 再炸。全盘核对：18 处漂移、6 张卡，三类原因——Sister 在 `misaka_card_complete` 之后
+  按 LO 的 DM 继续改交付物（t_0e763d 19:36–19:38，t_c69786、t_9f10b6、t_68821f、t_ec2248 同）；`SOURCES.md` 被 settle 自己的 bundle 重建（t_08b9e7 的唯一"漂移"）；
+  `nodes/<run>/coordination_ledger.md` 是节点级共享账本。首次扫描用错了键名（`digests` 应为 `artifact_digests`），误判为"提交没记摘要"，已纠正。
+- 修法：`_register_task_artifacts` 两遍走——只冻结卡自己目录里的文件；`SOURCES.md`、`sources/` 记 `artifact_derived_skipped`；目录之外的记 `artifact_outside_card`；
+  改动或丢失的收齐后抛 `ArtifactDrift`，整卡不登记。`settle_done_tasks` 接住它：记 `research_artifact_drift`，`reopen_drift=True` 时把卡重开成新一代
+  （transcript 接续，Sister 重新申报一轮即可）；executing 分支 settle 后发现有卡被重开就回到派卡循环，而不是进 synthesizing。停机路径 `reopen_drift=False`
+  只记事件，`runs._resume` 把带此事件的 done 卡视为 unusable 重开。移到 workspace 之外和没有摘要的提交仍然硬错。
+- 测试：`tests/test_research_artifact_drift.py`（四条），`test_research_sweep_repairs.py` 两条按新语义改。
+- 事故处置：LO 进程仍是旧代码，须重开 07-37-53 会话窗口后 `/research resume r_5b1357a9c6`；新代码会重开 5 张漂移卡、跳过 bundle 与共享账本。
+
 ### 关闭：B47 不是 bug（2026-09-24）
 - `dm --wait-message` 有界：`WAKE_ATTEMPTS` 5 次接触回合、退避上限 30 s、`LIVE_WAIT_SECONDS` 600 s，LO 死后由 headless 接触回合接手 DM 是设计；
   当晚的等待进程次日全部自然退出。做完的卡面板留着给人看也是设计（一卡一面板，daemon 在面板里换程序）。
