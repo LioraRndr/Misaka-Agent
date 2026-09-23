@@ -22,7 +22,11 @@ from misaka.core.platform.toolkit import register_tool as _register
 # The read tool already answers "this model cannot see images" for every attachment MISAKA sends;
 # one wording for the whole product beats a second one that drifts. It has no public alias.
 from misaka.core.tools.read import _get_non_vision_image_note
-from misaka.utils.image_resize import format_dimension_note, resize_image_bytes
+from misaka.utils.image_resize import (
+    ImageResizeOptions,
+    format_dimension_note,
+    resize_image_bytes,
+)
 from misaka.utils.values import signal_aborted
 
 
@@ -131,6 +135,14 @@ def _source(doc_id, ctx):
         return None, None, ""
     ddir = corpus.resolve_doc(doc_id, workspace=root)
     return root, (_source_path(ddir) if ddir else None), _row(doc_id, root).get("title") or doc_id
+
+
+# One rendered page: what the model needs to read a scan, not a print master. The byte cap
+# sits under the PNG size of a text page at 2000 px, so the resize's candidate list falls
+# through to JPEG (quality 80 first) for those and keeps PNG for small line art.
+PAGE_IMAGE_MAX_SCALE = 2.0
+PAGE_IMAGE_MAX_SIDE = 2000
+PAGE_IMAGE_MAX_BYTES = 768 * 1024
 
 
 def _render_page(pdf_path, page, scale):
@@ -251,7 +263,9 @@ def register(harn):
     class PageImageParams(BaseModel):
         doc_id: str = Field(description="Document ID from `doc_list`.")
         page: int = Field(description="Page number, counted from 1 as doc_read and doc_find report it.")
-        scale: float = Field(2.0, description="Render scale over the page's printed size; 2.0 is legible for most typefaces. Capped so neither side exceeds 2000 pixels.")
+        scale: float = Field(2.0, description=(
+            "Render scale over the page's printed size; 2.0 is legible for most typefaces and is the "
+            f"maximum (larger values are clamped to it). Neither side exceeds {PAGE_IMAGE_MAX_SIDE} pixels."))
 
     @_register(
         harn, name="doc_page_image", label="View document page",
@@ -271,8 +285,13 @@ def register(harn):
                              f"PDF pages can be rendered. Use doc_read for its text.")
         if not math.isfinite(params.scale) or params.scale <= 0:
             raise ValueError("scale must be finite and greater than 0.")
+        # A page at scale 3 came back as a 1.7 MB PNG and a Sister asked for the same pages
+        # again and again (2026-09-23, card t_9f10b6: 26 renders, ~25k provider tokens each on
+        # Codex); the transcript and every LCM checkpoint carried each copy. Scale 2 reads the
+        # same, and a byte cap under the PNG size of a text page makes the resize pick JPEG.
+        scale = min(params.scale, PAGE_IMAGE_MAX_SCALE)
         try:
-            png, count = await _off_loop(_render_page, source, params.page, params.scale)
+            png, count = await _off_loop(_render_page, source, params.page, scale)
         except Exception as e:
             # Child failures/timeouts are tool errors, with the requested locator attached.
             raise RuntimeError(f"Could not render {params.doc_id} p{params.page}: {e}") from e
@@ -284,7 +303,8 @@ def register(harn):
             # agree and a page number from doc_read/doc_find lands where the model expects.
             raise ValueError(f"Page {params.page} is outside {params.doc_id}: it has {count} page"
                              f"{'' if count == 1 else 's'}, numbered from 1.")
-        resized = await resize_image_bytes(png, "image/png")
+        resized = await resize_image_bytes(png, "image/png", ImageResizeOptions(
+            maxWidth=PAGE_IMAGE_MAX_SIDE, maxHeight=PAGE_IMAGE_MAX_SIDE, maxBytes=PAGE_IMAGE_MAX_BYTES))
         note = _get_non_vision_image_note(getattr(ctx, "model", None))
         # The title names the document the way a caption should, but it is the document's own
         # text (a card names its own artifacts, and an EPUB its own dc:title), so it is shown

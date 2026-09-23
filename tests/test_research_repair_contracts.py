@@ -82,7 +82,9 @@ def message(content=()):
         ('{"note":"C:\\q"}', True),
         ('{"note":"hello', False),
         ("not-json", False),
-        ('{"note":"an "unescaped" quote"}', False),
+        # Repaired since 2026-09-23 (a gateway delivered Claude's arguments this way; see
+        # json_parse._escape_stray_quotes): the quotes stay in the text, the call executes.
+        ('{"note":"an "unescaped" quote"}', True),
         ("null", False),
         ("[]", False),
         ('{"note":true}garbage', False),

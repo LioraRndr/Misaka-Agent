@@ -5493,7 +5493,12 @@ class InteractiveMode(Conversation):
                 return
 
             try:
-                await self.session.prompt(user_input)
+                # MISAKA fork: handleInput saw an idle agent and handed the text here, but a
+                # research driver or a notification can start a turn in this window in between
+                # (pi has no such turn starters). Without a behaviour, prompt() then raised
+                # "Agent is already processing" and the typed message was lost; steer is what
+                # Enter would have queued had the turn started a moment earlier. Idle is unchanged.
+                await self.session.prompt(user_input, {"streamingBehavior": "steer"})
             except Exception as error:  # noqa: BLE001
                 self.showError(str(error) if error is not None else "Unknown error occurred")
 

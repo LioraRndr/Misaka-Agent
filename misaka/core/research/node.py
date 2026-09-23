@@ -138,6 +138,8 @@ class PaneRunner:
             row = task_store.get(self.con, tid)
             if row is None:
                 continue
+            if row["next_attempt_at"] is not None and int(row["next_attempt_at"]) > time.time():
+                continue                     # a retry cooldown: the daemon's claim would refuse it anyway
             if row["status"] == "ready":
                 try:
                     await asyncio.to_thread(net.request, "pane.run_card", {

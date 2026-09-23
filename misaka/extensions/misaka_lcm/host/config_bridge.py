@@ -73,6 +73,15 @@ def load_config(*, database=None, home=None, ctx=None) -> LCMConfig:
         # (2026-09-18, B32). The knob is upstream's own; only misaka's default differs.
         config.embedding_query_timeout_s = 30.0
         config.config_sources["embedding_query_timeout_s"] = "misaka.default"
+    if "LCM_RESERVE_TOKENS_FLOOR" not in os.environ:
+        # Upstream arms its overflow recovery (forced compaction that may cut into the fresh
+        # tail, deterministic truncation when the summariser cannot) only when an assembly
+        # cap exists, and the cap exists only with `max_assembly_tokens` or a non-zero
+        # reserve floor; upstream ships both at 0. Without it an overflowed Sister retried the
+        # identical prompt and died (2026-09-23, card t_9f10b6 on a 272k window). pi's own
+        # reserve is 16384 tokens; the knob is upstream's, only misaka's default differs.
+        config.reserve_tokens_floor = 16_384
+        config.config_sources["reserve_tokens_floor"] = "misaka.default"
     config.database_path = str(database) if database is not None else database_path(ctx)
     directory = str(home) if home is not None else os.path.dirname(config.database_path)
     config.large_output_externalization_path = os.path.join(directory, "lcm-large-outputs")

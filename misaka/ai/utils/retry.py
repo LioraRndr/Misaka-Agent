@@ -100,6 +100,13 @@ RETRYABLE_PROVIDER_ERROR_PATTERN = _build_provider_error_pattern(
         "stream ended before message_stop",
         "stream ended before a terminal response event",
         "http2 request did not get a response",
+        # MISAKA fork: a relaying gateway (sub2api) reports its own upstream drop as
+        # `{"type":"stream_read_error","message":"upstream stream disconnected: unexpected
+        # EOF"}`, wording none of pi's entries cover; a Sister on it then sat idle on the
+        # error instead of retrying (2026-09-23, card t_c8b161).
+        "stream.?disconnected",
+        "unexpected EOF",
+        "stream_read_error",
         # Provider-requested retry delay cap failures should flow through the outer
         # retry policy so callers can surface/abort the backoff (#1123).
         "retry delay",

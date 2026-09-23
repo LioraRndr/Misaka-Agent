@@ -49,8 +49,8 @@ Where a plan waits:
 | a fork's | that fork's own tab in the panel |
 | any plan of a shell run | the session the command prints: `misaka chat --attach --session PATH` |
 
-While a plan waits, Last Order can revise it (each revision replaces the last in its plan file)
-or start it. For a follow-up round she can also withdraw the round, so the node
+While a plan waits, Last Order can revise it (a revision replaces the last in its plan file; a
+plan too large for one reply arrives in several appending calls) or start it. For a follow-up round she can also withdraw the round, so the node
 concludes from what it already has. For a fork's first plan she can skip the node if you decide
 it is not worth researching: it closes with no cards and no conclusion, and its objection stays
 on record, with your reason, for the final adjudication. To give up on the whole run, use

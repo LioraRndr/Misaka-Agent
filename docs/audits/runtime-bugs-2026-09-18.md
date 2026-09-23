@@ -419,6 +419,80 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
 - 测试：`tests/test_research_output_limit.py`。
 - 配置侧建议（未改）：`~/.misaka/agent/models.json` 里 sub2api-claude 的 claude-fable-5 `maxTokens` 是 32000，pi 目录为 128000；若代理透传，抬高它。
 
+### B2 · 复发与治本（2026-09-23）
+- 复发：run r_5b1357a9c6 的根规划轮（LO 切到 sub2api-claude/claude-fable-5-1，该条目 `maxTokens` 仍是 32000）：第一次 `misaka_research_assign`
+  的参数本身就超过 31.8k token 被截断（内核给出 "arguments may be truncated" 回执），模型随后在思考里明写"工具整体替换、没法分次提交，
+  把 18 卡压到 17 卡、每卡 450–650 字、书目改简称"——用户看到的"敷衍"计划就是这版压缩件；用户追加粒度要求后，下一轮 39 941 字思考吃满 32k，
+  零文本零调用，TUI 显示 "Response was truncated before completion"。
+- 对照 9-20 那轮（claude-fable-5，128k，实测单次输出 54k/79k token）：上限没卡住时第一版也只有 10 卡，思考里的理由是"考虑到并发和预算限制"
+  "区域细节留给分叉节点"，直到用户说不够才改口"用户要穷尽拆解、不在乎预算"扩到 18 卡。`parallel` 实际只是派发宽度，从不限制卡数。
+- 另注：9-18 写的"规划轮临时压到 high 档"在 b399bf5 里随 `_call(thinking=...)` 参数一起被删了，现在规划轮沿用会话档位（max）；本次不恢复，
+  用户要 max。
+- 已做：
+  1. 配置：`~/.misaka/models.json` sub2api-claude 全部模型 `maxTokens` 抬到目录上限（128000；haiku-4-5 为 64000）。运行中的会话要在 `/model`
+     里重选一次该模型才会装入新上限（`/reload` 不刷新模型目录）。
+  2. `commands.Plan` 加 `append`（`plan_markdown` 改为可空）：追加调用叠加到本轮已记录的计划上（同 `local_id` 覆盖、其余字段给了才换），
+     叠加后整体过 `validate_plan`；阶段工具（`commands.tool(merge=...)`）与等待期的 revise 都支持。大计划分几次交，不再受单次输出上限约束。
+  3. 提示词：ROOT_CONTRACT 去掉 "without expanding beyond the agreed question and limits"，加粒度判据（一卡一 Sister 一会话可完成；问题涉及
+     多个行动者/地区/机构/时期/维度就各一卡；卡数由问题结构决定而非 Sister 数或并发限制；首版计划就是完整设计；`plan_markdown` 含覆盖表）
+     与分次提交说明；RESEARCH_LO_ORCHESTRATION 去掉 "within the existing concurrency and budget limits"；协调者宪章 "prioritize within the
+     agreed limits" 改为 "at the granularity the question needs"；`output_limit_nudge` 对 assign 不再说 "payload compact"，改说分次追加。
+- 测试：`tests/test_research_plan_append.py`。
+
+### B34 · P1 · Sister 自动压缩时进程崩溃 `'Usage' object has no attribute 'get'`（2026-09-23，已修）
+- 现象：run r_5b1357a9c6 派出 53 卡后，t_c69786（10037，openai-codex/gpt-6-astra，272k 窗口）在 72.7% 触发 LCM 自动压缩，
+  进程随即 `misaka exiting due to an uncaught exception: 'Usage' object has no attribute 'get'` 退出；重试续同一会话，一启动就再压缩再崩，
+  三次即 `failed`（FAILURE_LIMIT=3）。t_b9e29c 同样错误 1 次。
+- 根因：`agent_session._calculate_context_tokens` 对 usage 调 `.get`；`getContextUsage` 在最近一次压缩之后遍历投影里的消息，
+  本进程内产生的消息带的是 pydantic `Usage` 模型而非 dict。页脚每帧渲染都调 `getContextUsage`，所以压缩一开始就炸。初始提交起就这么写，
+  只是此前压缩后的投影没出现过模型对象。
+- 修法：`_calculate_context_tokens` 改用 `read_field`（dict 与模型都读）。每张卡都是新进程，源码一改下一次尝试即生效，LO/面板不用重启。
+- 顺带：`PaneRunner.launch_ready` 对处于重试冷却的卡不再每两秒去问 daemon（headless 路径早有同样的跳过），
+  否则 "waiting out a retry backoff for another N s" 因秒数变化逃过去重，每次轮询刷一行。正在跑的 LO 进程仍是旧代码，本 run 里刷屏会持续到 LO 重启。
+- 测试：`tests/test_card_crash_on_compaction.py`。
+- 善后：t_c69786 已 failed，需 `/research resume` 放回。
+
+### B35 · P2 · LO 窗口偶发 "Agent is already processing. Specify streamingBehavior…"，输入被丢（2026-09-23，已修）
+- 现象：用户在 LO 窗口回车，界面报该错误，输入框已清空，消息没发出去。
+- 根因：`handleInput` 检查 `isStreaming` 为假后把文本交给 `_runInputLoop`，循环里 `session.prompt(text)` 不带 streamingBehavior；两步之间研究驱动器
+  （阶段提示、通知 `triggerTurn`）在同一窗口起了一轮，`prompt()` 的 pi 原逻辑遇到正在流式就抛错。pi 里没有第三方起轮的人，所以上游没这个竞态。
+- 修法：`_runInputLoop` 的 `prompt` 带 `{"streamingBehavior": "steer"}`（回车在流式时本来就是 steer），空闲时行为不变；标 `MISAKA fork`。LO 重启后生效。
+- 测试：`tests/test_input_loop_races_driver_turn.py`。
+
+### B36 · P2 · sub2api 中途断流 `stream_read_error: upstream stream disconnected: unexpected EOF` 不重试，Sister 停在错误上（2026-09-23，已修）
+- 现象：t_c8b161（10032，sub2api-claude/claude-opus-5）19:45 一轮以该错误结束，没有 auto_retry，卡仍 running，Sister 空闲等人说"继续"。
+- 根因：这是代理自己的断流文案，pi 0.87.1 的 `RETRYABLE_PROVIDER_ERROR_PATTERN` 没有对应条目（misaka 逐条同步了 pi 的表），于是被当成不可重试错误。
+- 修法：`misaka/ai/utils/retry.py` 加三条 `# MISAKA fork` 条目：`stream.?disconnected`、`unexpected EOF`、`stream_read_error`；配额墙仍走不可重试表。新起的进程生效。
+- 测试：`tests/test_retry_proxy_stream_disconnect.py`。
+
+### B37 · P1 · 压缩围栏逐轮嵌套，上下文无新材料也从 30 万滚到 89 万 token（2026-09-23，已修）
+- 现象：t_9f10b6（10038，gpt-6-astra，目录窗口 272k）从 10:21 起提示词每轮 +3–4 万 token 单调上涨到 894k，然后 `context_length_exceeded`；
+  溢出后的压缩重试两次都是 "LCM sanitized" 空操作，卡以错误结束。快照第 0 行（vendor 的"[Current user objective preserved…]"目标行）
+  从 7 万字符涨到 290 万字符、31 层 `<<<UNTRUSTED-DATA-ESCAPED-ESCAPED-…>>>`。
+- 根因：vendor 用 `startswith(_PRESERVED_OBJECTIVE_CONTEXT_PREFIX)` 认自己的目标行；host 的 `_guarded_summary` 把 `untrusted()` 围栏套在前缀
+  **外面**，vendor 认不出→当成新目标再保存一份（前缀 + 整行）→host 再套一层→每轮多一层、多一份。
+- 修法（host，不碰 vendor）：`_guarded_summary` 幂等（已是本会话围栏的原样返回），目标行的前缀留在围栏外面。测试 `tests/test_lcm_guarded_summary_idempotent.py`。
+
+### B38 · P1 · 有过一次真压缩的会话，之后每轮都落一条全量快照（2026-09-23，已修）
+- 现象：t_998052 62 条、t_9f10b6 70 条 compaction 记录，各 ~14 MB（原样嵌着页面 PNG），会话文件 175 MB / 557 MB，机器负载 20。
+- 根因（用真实 transcript 离线回放 `compact()` 定位）：`compact()` 在加围栏**之前**拿引擎输出与 replay 比：(a) 引擎每轮原样重吐没有 source 序号、
+  没有围栏的摘要行，与上次快照里带序号带围栏的那行永远不等；(b) 只有思考/工具调用的 assistant 行，replay 写 `[]`、vendor sanitize 写 `""`。
+  两者都不是变化，但每轮都触发 `CompactionResult`。
+- 修法（host）：`Replay.same_view()` 在还原成原始消息之后逐行比对（空内容/空 tool_calls 的两种拼法视为相同），`compact()` 在无 replay 变化、
+  无新 native 压缩标记、还原视图与原始一致时返回 None；`restore()` 对空字段两种拼法保留原行。测试 `tests/test_lcm_checkpoint_only_on_change.py`。
+- 同批：`config_bridge` 给 `reserve_tokens_floor` misaka 默认 16384（上游 0 ⇒ 装配上限为 None ⇒ 上游自己的溢出恢复从不启动）；
+  `.env` 分层：根 `.env` LCM_LEAF_CHUNK_TOKENS=40000 / LCM_FRESH_TAIL_COUNT=32，`profiles/last_order/.env` 保留 120000/64；
+  `doc_page_image` scale 上限 2.0、字节上限 768 KB（文字页落到 JPEG）；`json_parse` 加字符串内未转义直引号的兜底修复（`MISAKA fork`，
+  sub2api 通道 ~1% 工具调用）。
+- 扩展（非 bug）：纯文本 / Markdown 的目录树。`documents/text_outline.py`（misaka 自有，不在 vendored `pageindex/flash/` 内）从文本自己的
+  标题读结构——`CHAPTER XII.` / `LIVRE III` / `TOME PREMIER` / 大写标题续行 / Markdown `#`——输出与 PageIndex 同形的 `tree.json`；
+  `index.ingest` 对 `.txt/.md/.markdown` ≥20 页走它，回填沿用 `tree_attempted_version`（txt 从未记过标记，重跑 `misaka doc add` 即补）。
+  规则刻意保守：有编号结构时零散大写行一律不算节点（OCR 扉页的 "DU COMTE / LE BARON" 曾造成 229 个顶层节点）、反复出现的大写行与裸罗马数字
+  按页眉丢弃、单字母编号只认大写且关键词与编号间必须有分隔符（诗行 "Vols ces bois" 曾被读成 VOL S）。exam 工作台 94 份 ≥20 页的文本干跑
+  82 份得树（Roederer vA：AVERTISSEMENT / TOME PREMIER p3-121 / LIVRE PREMIER…）。测试 `tests/test_text_outline.py`。
+- 查而未改：pi-ai 0.87.1 目录把 openai-codex 的 gpt-6-astra 写成 272k（同时给出 "inputTokensAbove 272000" 的长上下文价格档），其他渠道同模型 1M；
+  Codex 实测收到 894k 才拒。上游数据，未在本地分叉；要改走 models.json 覆盖。
+
 ### B13 · 已修（2026-09-18 11:4x，方案 A）
 - `misaka/core/research/workflow.py:_drive_tasks_inner`：卡片 generation 变化不再 raise，记一条进度 "Card X moved to attempt N; the run follows it" 并跟随新一代。
   `_halt_scope` 的连坐逻辑未动（stop/budget/驱动器自身异常仍停整个 scope）。

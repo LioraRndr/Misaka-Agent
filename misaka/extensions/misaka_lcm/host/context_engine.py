@@ -20,10 +20,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from weakref import WeakValueDictionary
 
-from misaka.core.platform.prompt_guard import untrusted
+from misaka.core.platform.prompt_guard import MARKER, untrusted
 from misaka.utils.values import read_field, signal_aborted
 
 from ..vendor import aux_session
+from ..vendor.reconcile import _PRESERVED_OBJECTIVE_CONTEXT_PREFIX
 from . import config_bridge, execution, fence, ingest, llm, rollups, storage
 
 logger = logging.getLogger(__name__)
@@ -433,12 +434,34 @@ def _guarded_summary(built, summary: str) -> str:
     Upstream recognises its own scaffold with a `re.search` over the content, so both
     substrings it looks for survive inside the wrapper and the fenced entry is still
     skipped on re-ingest rather than stored as a fresh message.
+
+    Two rules keep the wrapper from compounding (2026-09-23, card t_9f10b6: one row grew
+    from 70 KB to 2.9 MB over 31 rounds and pushed a 272k-window Sister into overflow):
+
+    * the preserved-objective scaffold is recognised by upstream with ``startswith`` on its
+      prefix (engine ``_PRESERVED_OBJECTIVE_CONTEXT_PREFIX``), not ``re.search``; a fence
+      put in front of the prefix made every round preserve the row again, wrapped, one
+      layer deeper. The prefix stays in front and the fence goes around what follows it.
+    * a summary this session already fenced is handed back as it is: the same row comes
+      through here on every round, and wrapping a wrapper defangs the inner fence and
+      grows the row each time.
     """
     node_ids = [int(node) for _, node in _SUMMARY_BLOCK.findall(summary)]
     if not fence.is_tainted(built, node_ids=node_ids):
         return summary
+    label = f"lcm:compaction:{built.current_session_id}"
+    opener = f'<<<{MARKER} name="{label}">>>'
+    body = summary.lstrip()
+    if body.startswith(opener):
+        return summary
+    if body.startswith(_PRESERVED_OBJECTIVE_CONTEXT_PREFIX):
+        rest = body[len(_PRESERVED_OBJECTIVE_CONTEXT_PREFIX):].lstrip("\n")
+        if rest.startswith(opener):
+            return summary
+        logger.info("LCM preserved objective covers fenced material; fencing it behind its prefix.")
+        return _PRESERVED_OBJECTIVE_CONTEXT_PREFIX + "\n" + untrusted(label, rest)
     logger.info("LCM compaction summary covers fenced material; handing it back as data.")
-    return untrusted(f"lcm:compaction:{built.current_session_id}", summary)
+    return untrusted(label, summary)
 
 
 def _lineage(session_id: str) -> dict | None:
@@ -726,6 +749,15 @@ def compact(prepared):
                         message['content'] = untrusted('lcm:proactive-recall', content)
             guarded.append(message)
         messages = prepared.replay.restore(guarded, prepared.model)
+        flags_before = [{key: row[key] for key in ingest.NATIVE_METADATA if key in row} for row in prepared.replay.messages]
+        flags_after = [{key: row[key] for key in ingest.NATIVE_METADATA if key in row} for row in guarded]
+        if not prepared.replay_changed and flags_after == flags_before and prepared.replay.same_view(messages):
+            # The engine re-emitted the context it was given (a scaffold without its source
+            # ordinal, an empty assistant row spelled differently): the previous checkpoint
+            # already says all of this, and writing it again every round is what turned a
+            # card's transcript into hundreds of megabytes (2026-09-23). A new native
+            # compression flag is a change the checkpoint must carry, so it still writes.
+            return None
         details = {'lcm': {'nodes': records, 'scaffolds': scaffolds}}
         if native_metadata:
             details['lcm']['nativeMetadata'] = native_metadata

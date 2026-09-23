@@ -16,8 +16,9 @@ question explicit. Give every major or minor question included in the plan a tar
 her expertise, with clear evidence needs, deliverables and acceptance criteria, rather than a generic request to
 collect material.
 
-The same Sister may take multiple distinct tasks, each in its own independent session. Independent tasks may run
-concurrently within the existing concurrency and budget limits; dependent tasks run after their prerequisites.
+The same Sister may take multiple distinct tasks, each in its own independent session. Independent tasks run
+concurrently and dependent tasks after their prerequisites; the concurrency limit only paces dispatch and never
+caps how many cards a plan holds.
 Continually revise the research orchestration in light of returned evidence and unresolved questions, while respecting
 the agreed research scope and execution limits.
 

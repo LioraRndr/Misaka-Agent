@@ -17,7 +17,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
 
-from misaka.core.documents import htmltext
+from misaka.core.documents import htmltext, text_outline
 from misaka.core.documents.pageindex import PageIndexUnavailable
 from misaka.utils import atomic
 
@@ -1038,6 +1038,41 @@ def _warn_no_pageindex(p):
           file=sys.stderr)
 
 
+# Formats whose outline is read from the text itself (documents/text_outline) rather than from a
+# PDF's layout: transcribed books and saved pages, the long ones of which had no tree at all.
+TEXT_TREE_SUFFIXES = frozenset({".txt", ".md", ".markdown"})
+
+
+def _text_tree(pages, ext, reason):
+    """The text outline as JSON, or None. A miss is settled (``none_found``): the reader is
+    deterministic over the stored pages, so asking again would only repeat the answer."""
+    nodes = text_outline.build_text_tree(pages, markdown=ext in {".md", ".markdown"})
+    if nodes:
+        return json.dumps(nodes, ensure_ascii=False)
+    _note(reason, "tree", "none_found")
+    return None
+
+
+def _stored_pages(ddir, count):
+    """The page texts a document was indexed with, in order -- the numbers an outline must use."""
+    pages = []
+    for number in range(1, int(count) + 1):
+        try:
+            with open(_page_path(ddir, number), encoding="utf-8", errors="replace") as f:
+                pages.append(f.read())
+        except OSError:
+            pages.append("")
+    return pages
+
+
+def _outline_for(p, ext, pages, reason):
+    """One outline call for either family: the text reader over the stored pages, or PageIndex
+    over the PDF. ``pages`` is only consulted for the text family."""
+    if ext in TEXT_TREE_SUFFIXES:
+        return _text_tree(pages, ext, reason)
+    return _build_tree_with_reason(p, reason)
+
+
 def _build_tree_with_reason(p, reason):
     """`build_tree(p, reason=...)`, tolerating a stand-in that predates the keyword.
 
@@ -1254,7 +1289,8 @@ def ingest(p, title=None, with_tree=True, task_id=None, workspace=None):
                 and not _real_file(os.path.join(existing, "tree.json"), existing)
                 and meta.get("tree_attempted_version") != TREE_ATTEMPT_VERSION):
             why = {}
-            tree = _build_tree_with_reason(p, why)
+            ext = os.path.splitext(p)[1].lower()
+            tree = _outline_for(p, ext, _stored_pages(existing, count) if ext in TEXT_TREE_SUFFIXES else None, why)
             if tree:
                 atomic.write_text(os.path.join(existing, "tree.json"), tree)
             elif why.get("tree") == "none_found":
@@ -1275,7 +1311,7 @@ def ingest(p, title=None, with_tree=True, task_id=None, workspace=None):
         raise _no_text_error(p, pages, extracted.pop("ocr_error", None))
     tree_wanted = with_tree and len(pages) >= TREE_MIN_PAGES
     tree_reason = {}
-    tree = _build_tree_with_reason(p, tree_reason) if tree_wanted else None
+    tree = _outline_for(p, os.path.splitext(p)[1].lower(), pages, tree_reason) if tree_wanted else None
     # Build the document beside its final place and move it in with one rename: the corpus holds
     # a complete document or none, never a half-written directory that reads as "already indexed".
     _sweep_stale_stages(corpus_root(workspace))      # whatever a killed ingest left behind, before adding ours

@@ -4164,15 +4164,17 @@ async def _sleep_with_abort(delay_ms: int, signal: Any) -> bool:
         return True
 
 
-def _calculate_context_tokens(usage: dict[str, Any]) -> int:
-    total_tokens = int(usage.get("totalTokens", 0) or 0)
+def _calculate_context_tokens(usage: Any) -> int:
+    # A replayed message carries its usage as a dict; one produced in this process (after a
+    # compaction, say) carries a `Usage` model. Both reach here through the footer's render.
+    total_tokens = int(read_field(usage, "totalTokens", 0) or 0)
     if total_tokens:
         return total_tokens
     return (
-        int(usage.get("input", 0) or 0)
-        + int(usage.get("output", 0) or 0)
-        + int(usage.get("cacheRead", 0) or 0)
-        + int(usage.get("cacheWrite", 0) or 0)
+        int(read_field(usage, "input", 0) or 0)
+        + int(read_field(usage, "output", 0) or 0)
+        + int(read_field(usage, "cacheRead", 0) or 0)
+        + int(read_field(usage, "cacheWrite", 0) or 0)
     )
 
 

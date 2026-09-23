@@ -24,7 +24,10 @@ files such as JSON and logs.
 
 - **Outlines.** With the `pageindex` extra installed, long PDFs get an outline (chapters and
   sections with their page ranges), so an agent can read a chapter instead of guessing at page
-  numbers. Without it, documents are navigated by page. `--no-tree` skips the outline.
+  numbers. Long plain-text and Markdown documents get theirs from their own headings
+  (`CHAPTER XII`, `LIVRE III`, a title set in capitals, `#` in Markdown) with no extra needed;
+  re-running `misaka doc add` on a document indexed earlier fills its outline in. Everything
+  else is navigated by page. `--no-tree` skips the outline.
 - **Scanned PDFs.** A PDF with no text layer is read by OCR when `ocrmypdf` is on your PATH
   (`brew install ocrmypdf` or your package manager). `documents.ocr_langs` in `settings.json`
   sets the languages (default `eng+chi_sim+jpn`).

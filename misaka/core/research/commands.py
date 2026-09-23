@@ -38,7 +38,9 @@ class RedTeam(Params):
 
 class Plan(Params):
     status: Literal["ready", "clarify"]
-    plan_markdown: str = Field(min_length=1)
+    plan_markdown: str = Field("", description=(
+        "The research design. Required on a plan's first call; an append call may leave it empty to "
+        "keep the recorded one."))
     reframed_question: str = Field("", description=(
         "Only when the question itself should change: the question as it should now read. It takes "
         "effect once the user agrees to this plan; until then it is a proposal in plan_markdown."))
@@ -47,6 +49,30 @@ class Plan(Params):
     clarifying_questions: list[str] = Field(default_factory=list)
     methods: list[dict[str, Any]] = Field(default_factory=list)
     extensions: dict[str, Any] = Field(default_factory=dict)
+    append: bool = Field(False, strict=True, description=(
+        "Add to the plan already recorded for this round instead of replacing it: recorded tasks stay, "
+        "a task with the same local_id is replaced, and plan_markdown, red_team and the other fields "
+        "change only when given. Submit a plan too large for one reply in several calls this way; "
+        "never shrink it to fit one call."))
+
+
+def merge_plan(recorded, incoming):
+    """An append call folded onto the plan recorded for its round: recorded tasks stay in order, an
+    incoming task replaces the recorded one with its local_id, new ones follow, and every other field
+    keeps its recorded value unless the call gives one. The result is validated as one whole plan, so
+    dependencies across the two halves are checked together."""
+    merged = dict(recorded)
+    tasks = {task["local_id"]: task for task in recorded.get("tasks") or []}
+    for task in incoming.get("tasks") or []:
+        tasks[task["local_id"]] = task      # a replacement keeps its recorded position
+    merged["tasks"] = list(tasks.values())
+    merged["status"] = incoming["status"]
+    for key in ("plan_markdown", "reframed_question", "clarifying_questions", "methods", "extensions"):
+        if incoming.get(key):
+            merged[key] = incoming[key]
+    if incoming.get("red_team") is not None:
+        merged["red_team"] = incoming["red_team"]
+    return merged
 
 
 class Start(Params):
@@ -79,11 +105,18 @@ class Investigations(Params):
 
 
 def tool(con, run, node, *, key, name, description, model, validate, session_dir, session_file=None,
-         supersede=False):
+         supersede=False, merge=None):
     """Only the owning LO session can record this phase's command; no side effects on construction.
-    With ``supersede`` a later call replaces the earlier record instead of being refused."""
+    With ``supersede`` a later call replaces the earlier record instead of being refused. With
+    ``merge`` (the plan phase) a call marked ``append`` is folded onto the record already accepted
+    for ``key`` before validation, and replaces it."""
     async def execute(call_id, raw, _signal, _on_update, ctx):
         payload = model.model_validate(raw).model_dump()
+        prior = None
+        if payload.pop("append", False) and merge is not None:
+            prior = runs.action(con, run["id"], node["id"], key)
+            if prior:
+                payload = merge(prior["payload"], payload)
         payload = validate(payload)
         manager = getattr(ctx, "sessionManager", None)
         path = getattr(manager, "sessionFile", None)
@@ -91,7 +124,7 @@ def tool(con, run, node, *, key, name, description, model, validate, session_dir
             raise ValueError("Research command must come from this phase's Last Order session.")
         if session_file and os.path.realpath(path) != os.path.realpath(session_file):
             raise ValueError("Research command must come from the owning Last Order conversation.")
-        record = runs.replace_action if supersede else runs.record_action
+        record = runs.replace_action if supersede or prior else runs.record_action
         accepted = record(con, run, node, key, payload, session_file=path, tool_call_id=call_id)
         return {"content": [{"type": "text", "text": f"Accepted {name}. The recorded command is queued for execution."}],
                 "details": {"run_id": run["id"], "node_id": node["id"], "action_key": key,
@@ -122,14 +155,19 @@ def review_tools(con, run, node, *, validate, session_file, round=1):
 
 
     async def revise(call_id, raw, _signal, _on_update, ctx):
-        payload = validate(Plan.model_validate(raw).model_dump())
+        payload = Plan.model_validate(raw).model_dump()
+        append = payload.pop("append", False)
         with owner(ctx) as path:
+            recorded = runs.action(con, run["id"], node["id"], runs.plan_key(round)) if append else None
+            if recorded:
+                payload = merge_plan(recorded["payload"], payload)
+            payload = validate(payload)
             runs.replace_action(con, run, node, runs.plan_key(round), payload, session_file=path, tool_call_id=call_id)
             runs.delete_action(con, run["id"], node["id"], runs.start_key(round))
-        return {"content": [{"type": "text", "text": (
-            "Revised plan recorded; it replaces the earlier one and the run keeps waiting. "
-            "Call misaka_research_start once the user has agreed to it.")}],
-            "details": {"run_id": run["id"], "node_id": node["id"], "action_key": runs.plan_key(round)}}
+        text = (f"Appended to the recorded plan; it now holds {len(payload['tasks'])} task(s) and the run keeps waiting. "
+                if recorded else "Revised plan recorded; it replaces the earlier one and the run keeps waiting. ")
+        return {"content": [{"type": "text", "text": text + "Call misaka_research_start once the user has agreed to it."}],
+                "details": {"run_id": run["id"], "node_id": node["id"], "action_key": runs.plan_key(round)}}
 
     async def start(call_id, raw, _signal, _on_update, ctx):
         payload = Start.model_validate(raw).model_dump()
@@ -167,7 +205,7 @@ def review_tools(con, run, node, *, validate, session_file, round=1):
                         "its issue stays parked for final adjudication with the reason on record. Never fake a "
                         "completion or write one into project files instead.")
     revise_description = ("Revise the research plan that is waiting for the user's go-ahead. Replaces the recorded "
-                          "plan; the run keeps waiting until misaka_research_start.")
+                          "plan, or adds to it with append=true; the run keeps waiting until misaka_research_start.")
     start_description = ("Start the research from the recorded plan. Call it once the user has agreed, in "
                          "conversation, that the plan should go ahead; until then the plan only waits.")
     return [

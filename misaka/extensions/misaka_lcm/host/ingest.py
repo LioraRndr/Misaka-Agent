@@ -256,6 +256,23 @@ def preserve_sources(before, after):
     return result
 
 
+def _same_content(a, b):
+    """Content equality that treats every spelling of "no content" alike."""
+    empty = ('', [], None)
+    return (a in empty and b in empty) or a == b
+
+
+def _plain(message):
+    """One message as a comparable dict, receipt time left out."""
+    if hasattr(message, 'model_dump'):
+        data = message.model_dump(mode='json', exclude_none=True)
+    elif dataclasses.is_dataclass(message):
+        data = dataclasses.asdict(message)
+    else:
+        data = dict(message)
+    return {key: value for key, value in data.items() if key != 'timestamp'}
+
+
 class Replay:
     """Lossless native join for the engine's whole-context replacement.
 
@@ -289,6 +306,20 @@ class Replay:
             == {key: value for key, value in before.items() if key != 'timestamp'}
             for before, after in zip(self.messages, messages))
 
+    def same_view(self, restored):
+        """Whether a restored context is the native context it came from, row for row.
+
+        ``unchanged`` compares upstream-shaped rows before the host's own post-processing,
+        and two deterministic re-emissions defeated it every round (2026-09-23, cards
+        t_998052 / t_9f10b6, 62 and 70 checkpoints of 14 MB each): a summary scaffold the
+        engine re-emits without a source ordinal and before the host's fence, and an
+        assistant row whose empty content it spells ``""`` where the replay spells ``[]``.
+        Restoring resolves both; comparing the result with the originals asks the question
+        that decides whether a checkpoint carries anything new.
+        """
+        return len(restored) == len(self.originals) and all(
+            _plain(after) == _plain(before) for before, after in zip(self.originals, restored))
+
     def restore(self, messages, model=None):
         import copy
 
@@ -304,7 +335,10 @@ class Replay:
                 seen.add(source)
                 if replay.get('role') != before['role']:
                     raise ValueError('LCM changed the role of a source message')
-                if all(replay.get(key) == before.get(key) for key in
+                # Empty fields have two spellings on this seam (upstream's sanitize writes
+                # ``""`` and omits ``tool_calls``, to_upstream writes ``[]``); neither is a
+                # change to the source row.
+                if all(_same_content(replay.get(key), before.get(key)) for key in
                        ('role', 'content', 'tool_calls', 'tool_call_id', 'tool_name')):
                     restored.append(copy.deepcopy(self.originals[source]))
                     continue

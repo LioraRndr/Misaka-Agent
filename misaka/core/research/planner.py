@@ -25,9 +25,9 @@ Do not assume that textbooks, mass media, the mainstream view, or the contrarian
 
 Start by working out what the user is actually asking, what else the question could mean, and which of its
 premises are untested. Identify the relevant objects, processes, interactions, prior knowledge, time horizons
-and disciplines without expanding beyond the agreed question and limits. Specify evidence needs, deliverables,
-dependencies and acceptance criteria. Offer suitable methods, theories and source strategies with their blind
-spots and competing approaches; Sisters choose and refine the specialist implementation.
+and disciplines; stay inside the agreed question, and inside it decompose completely. Specify evidence needs,
+deliverables, dependencies and acceptance criteria. Offer suitable methods, theories and source strategies with their
+blind spots and competing approaches; Sisters choose and refine the specialist implementation.
 Use relevant available method Skills as a menu, not a mandatory template. Specify `method`, `source_strategy`
 and `falsifiers` where useful; assign conceptual analysis or explanation testing as well as material gathering.
 Check for important missing dimensions. Consult available coverage maps or `coverage_scan` when they would improve
@@ -37,7 +37,18 @@ investigation to Sisters instead of doing their assignments during planning.
 Choose Sisters by fit from the system catalog and explain each choice. End `plan_markdown` with "Coverage maps used":
 record what informed the coverage check (or why no scan was needed or available), useful dimensions and remaining gaps.
 
-Call `misaka_research_assign` with your plan and assignments.
+Granularity: a card is one assignment that one Sister can carry through in one session. When the question turns
+on how several actors, regions, institutions, periods or dimensions behave, each gets its own card, not a share
+of one; a card that bundles several such units is under-decomposed and comes back shallow. The number of cards
+follows the question's structure, not the number of Sisters (one Sister holds many cards, each in its own session)
+and not the run's concurrency limit, which only paces dispatch. The first plan is the whole design: forks are for
+red-team issues and follow-up rounds for gaps the evidence reveals, not for breadth already visible now.
+`plan_markdown` includes a coverage table -- every sub-question and every actor or dimension the question names,
+against the cards that serve it -- so that an empty cell is a declared gap rather than an oversight.
+
+Call `misaka_research_assign` with your plan and assignments. A plan too large for one reply is submitted in
+several calls: the first with `plan_markdown` and the first tasks, the rest with `append: true`; never shrink a
+plan to fit one call.
 This tool records your dispatch command; research cards are created only from an accepted call, never from
 JSON in your final answer or a submission file.
 After the tool accepts your command, end with a short plain-text summary.
@@ -336,8 +347,8 @@ PLAN_WAITS = """
 An accepted plan is not executed until the user agrees to it -- this plan, here, whether it is the root's, a
 fork's, or a follow-up round's. An ancestor's approval does not carry over, and the driver never starts a node on
 its own: it waits for your `misaka_research_start`. After the tool accepts your command, present the
-plan to the user in plain language and talk it over with them. Revise it with `misaka_research_assign` (each call
-replaces the recorded plan). Once the user has said the plan should go ahead, call `misaka_research_start`; it
+plan to the user in plain language and talk it over with them. Revise it with `misaka_research_assign` (a call
+replaces the recorded plan; with `append: true` it adds to it). Once the user has said the plan should go ahead, call `misaka_research_start`; it
 is available from the next turn on, so this turn ends with your summary. While a follow-up round waits,
 `misaka_research_withdraw` drops it if the user would rather have the conclusion from what there is. If the user
 would rather not research a fork node at all, `misaka_research_skip` (a fork's first plan only) closes it
@@ -406,20 +417,20 @@ Read the live workspace view before planning.
         con, run, cfg, worker, node, prompt, key="plan", name="misaka_research_assign",
         description="Last Order: assign the research plan and choose its red-team Sister",
         model=commands.Plan, validate=lambda value: validate_plan(value, roster),
-        session_dir=session_dir, tools=RESEARCH_TOOLS, sister_catalog=roster,
+        session_dir=session_dir, tools=RESEARCH_TOOLS, sister_catalog=roster, merge=commands.merge_plan,
     )
     return action["payload"], raw, action["session_file"]
 
 
 def _command(con, run, cfg, worker, node, prompt, *, key, name, description, model, validate,
-             session_dir, tools=RESEARCH_TOOLS, sister_catalog=None):
+             session_dir, tools=RESEARCH_TOOLS, sister_catalog=None, merge=None):
     previous = runs.action(con, run["id"], node["id"], key)
     if previous:
         return previous, ""
     session_file = run["root_session"] if node["parent_id"] is None else node["session_file"]
     command = commands.tool(con, run, node, key=key, name=name, description=description,
                             model=model, validate=validate, session_dir=session_dir,
-                            session_file=session_file)
+                            session_file=session_file, merge=merge)
     _obj, text, err = _call(
         worker, cfg, prompt, cwd=run["workspace"], session_dir=session_dir,
         tools=tools, extra_tools=(command,), raw=True, sister_catalog=sister_catalog,
@@ -444,10 +455,14 @@ def _command(con, run, cfg, worker, node, prompt, *, key, name, description, mod
 
 
 def output_limit_nudge(name):
-    """The follow-up prompt after a reply that hit the output cap without calling ``name``."""
+    """The follow-up prompt after a reply that hit the output cap without calling ``name``. A plan
+    is never told to shrink: it can be submitted in several appending calls instead."""
+    size = (" A plan too large for one reply goes in several calls: the first with `plan_markdown` and "
+            "the first tasks, the rest with `append: true`; do not shrink it to fit one call."
+            if name == "misaka_research_assign" else " Keep the payload compact.")
     return (f"Your previous reply reached the model's output token limit before it called `{name}`; "
-            f"nothing was recorded. Call `{name}` now. Keep any reasoning brief and the payload "
-            "compact: the work you already did is in this conversation, so do not redo it.")
+            f"nothing was recorded. Call `{name}` now. Keep any reasoning brief: the work you already "
+            "did is in this conversation, so do not redo it." + size)
 
 
 def task_sources(con, run, rows):

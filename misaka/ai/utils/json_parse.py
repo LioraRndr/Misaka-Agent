@@ -81,13 +81,63 @@ def repair_json(json_string: str) -> str:
     return "".join(repaired)
 
 
+def _escape_stray_quotes(json_string: str) -> str:
+    """MISAKA fork: escape a double quote that sits inside a string value.
+
+    A relaying gateway delivered Claude tool arguments whose string values held literal
+    ``"`` where the wire needs ``\\"`` while every ``\\n`` in them was intact (2026-09-23,
+    six `edit`/`office` calls through sub2api, all Chinese prose quoting a term). pi's repair
+    covers escapes and control characters, not this. Inside a string, a quote that is not
+    followed -- after optional whitespace -- by ``,`` ``:`` ``}`` ``]`` or the end of the text
+    cannot be the closing quote, so it is escaped; everything else is left exactly as it was.
+    Only reached after the strict parse and pi's repair have both failed.
+    """
+    out: list[str] = []
+    in_string = False
+    index = 0
+    length = len(json_string)
+    while index < length:
+        char = json_string[index]
+        if not in_string:
+            if char == '"':
+                in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            out.append(json_string[index:index + 2])
+            index += 2
+            continue
+        if char == '"':
+            after = index + 1
+            while after < length and json_string[after] in " \t\r\n":
+                after += 1
+            if after >= length or json_string[after] in ",:}]":
+                in_string = False
+                out.append(char)
+            else:
+                out.append('\\"')
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def parse_json_with_repair(json_string: str) -> TJson:
     try:
         return json.loads(json_string)
     except json.JSONDecodeError:
         repaired_json = repair_json(json_string)
         if repaired_json != json_string:
-            return json.loads(repaired_json)
+            try:
+                return json.loads(repaired_json)
+            except json.JSONDecodeError:
+                pass
+        # MISAKA fork: see _escape_stray_quotes.
+        requoted = _escape_stray_quotes(repaired_json)
+        if requoted != repaired_json:
+            return json.loads(requoted)
         raise
 
 

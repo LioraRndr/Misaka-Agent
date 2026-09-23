@@ -87,6 +87,20 @@ def test_misaka_gives_lcm_grep_thirty_seconds_unless_the_env_says_otherwise(tmp_
     assert conf.config_sources.get("embedding_query_timeout_s") != "misaka.default"
 
 
+def test_misaka_arms_upstream_overflow_recovery_with_a_reserve_floor(tmp_path, monkeypatch):
+    """2026-09-23: upstream's forced overflow compaction needs an assembly cap, which needs a
+    non-zero reserve floor; upstream ships 0, so an overflowed 272k-window Sister retried the same
+    prompt until it died. pi reserves 16384 tokens; the knob stays upstream's, the default is ours."""
+    monkeypatch.delenv("LCM_RESERVE_TOKENS_FLOOR", raising=False)
+    conf = config_bridge.load_config(ctx=session(tmp_path / "project"))
+    assert conf.reserve_tokens_floor == 16_384
+    assert conf.config_sources["reserve_tokens_floor"] == "misaka.default"
+    monkeypatch.setenv("LCM_RESERVE_TOKENS_FLOOR", "30000")
+    conf = config_bridge.load_config(ctx=session(tmp_path / "project"))
+    assert conf.reserve_tokens_floor == 30000
+    assert conf.config_sources.get("reserve_tokens_floor") != "misaka.default"
+
+
 def test_project_isolation_shared_roles_and_session_switch(tmp_path):
     a, sister, b = session(tmp_path / "a"), session(tmp_path / "a"), session(tmp_path / "b")
     say(a, "ALPHA_CANARY")
