@@ -600,6 +600,18 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
   `triggerTurn: True` 可能先起回合。pi 的启动没有别的起回合者，所以上游不需要。
 - 修法：抽成 `_promptInitialMessages`，两处 `prompt()` 带 `followUp`（`# MISAKA fork`）。测试 `tests/test_initial_message_during_turn.py`。
 
+### B51 · P1 · `misaka_research_view(view="workspace")` 无体积上限，一次 1.85 MB 把 Sister 推到 119 万 token（2026-09-24，已修）
+- 现象：t_c98c24（gpt-6-sol，272k）01:10:41 调 workspace 视图，返回 1,846,062 字符、25,023 行（整个工作台索引，nodes 树 2.67 MB；`limit` 只管 findings 分页）。
+  阈值压缩随即启动跑了五分钟，期间用户在该面板换了三次模型加一次 thinking，pi 的 `_check_compaction_source` 判 branch/entries/model 变了，整次作废，
+  报 "Session, branch, model or settings changed during compaction (branch, entries, model)"；用户敲「继续」，1,190,510 > claude-fable-5 的 1,000,000，400，
+  pi 0.87 的溢出恢复 context_edit 掉错误行后起 overflow 压缩。LCM 的大输出外置默认关闭（`large_output_externalization_enabled=False`），拦不住。
+- 守卫作废压缩是 pi 原样行为且正确；溢出恢复正常。根子只有工具无上限这一条。
+- 修法：`research/tools.py` workspace 视图过 `truncate_head`，上限 `WORKSPACE_VIEW_MAX_BYTES` = 200 KB（最小窗口 272k 的一小部分），截断时附"缩小范围"提示
+  （doc_list / doc_find 找材料，find / grep 进卡目录），`details` 带 `truncated` 与 `total_lines`。测试 `tests/test_research_view_workspace_cap.py`。
+- 顺手看过的其他视图：web 工具有 100k 字符上限，doc_read 按节/页，doc_find 与 card_comments 有 limit，sister_output/peek/view 有 lines 参数；
+  `doc_outline` 是整份文档的标题树，理论上无上限但受标题数约束，暂不动。
+- 事故处置：压缩期间不要碰 `/model` 与 thinking；停卡重开会重放那条 1.8 MB 结果再溢出一次；最后手段是手工把 transcript 里那条结果换成占位。
+
 ### 搁置：B46（打不开的会话在启动失败前已被追加 system message，pi 内核顺序，B39 去掉了触发条件）、B47（驱动器崩后残留的 Sister 面板与
 `dm --wait-message` 孤儿，尚未读代码）、B50（LCM 的每回合维护只认用户输入和标了 TURN 的 custom message，研究窗口五小时靠 DM 起回合没跑过一次维护；用户要求 LCM 不动）。
 
