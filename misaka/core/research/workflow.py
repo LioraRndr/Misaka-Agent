@@ -1429,6 +1429,14 @@ async def run(con, cfg, spawner, *, run_id, poll_seconds=POLL_SECONDS, progress=
 
     def partial(reason, *, status="stopped"):
         check_active(allow_stop=True)
+        # Every halt lands here, the cancel and interrupt paths included: what the Sisters
+        # finished is registered, ingested and bundled before the partial report is written,
+        # so the report and a later resume see it (2026-09-23: a driver crash left 39 done
+        # cards unregistered for five hours). A settle failure must not cost the report.
+        try:
+            settle_done_tasks(con, run_id=run_id)
+        except Exception:  # noqa: BLE001 - the partial report is what a halt owes the user
+            _LOG.exception("Research %s: settling finished cards before the partial report failed", run_id)
         return _partial_result(con, run, reason, status=status, driver_lock=driver_lock)
 
     try:
@@ -1509,12 +1517,10 @@ async def run(con, cfg, spawner, *, run_id, poll_seconds=POLL_SECONDS, progress=
                     result["run"] = runs.summary(con, run_id)
                 return result
             if result in halts:
-                settle_done_tasks(con, run_id=run_id)
                 return partial(halts[result])
         check_active()
         unfinished = _unfinished_reason(con, run_id)
         if unfinished:
-            settle_done_tasks(con, run_id=run_id)
             await _progress(progress, "unfinished", f"The run cannot be adjudicated: {unfinished}", run)
             return partial(unfinished, status="failed")
         runs.set_state(con, run_id, phase="finalizing", driver_lock=driver_lock)

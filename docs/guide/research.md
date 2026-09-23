@@ -133,6 +133,7 @@ window only detaches.
 | see a run's state | `/research status [RUN_ID]` | `misaka board` |
 | stop a run | `/research stop [RUN_ID]` | Ctrl+C in the running command |
 | resume a run | `/research resume [RUN_ID] [ANSWER]` | `misaka research --resume RUN_ID` |
+| resume in another window | `/research resume RUN_ID --here` | |
 
 A resumed run needs the Sisters its cards were assigned to; recreate any you removed. While a
 run is paused, the Last Order of that conversation will talk about it but will not carry on the
@@ -175,5 +176,12 @@ They are derived: never registered, indexed or committed, and anything edited by
 gone at the next rebuild. Each file in `sources/` is a hard link to where it already lives in the
 project, or a copy where a link is impossible. Cite the original files, not the bundle.
 
+`/research resume` in the window belongs to the run's own Last Order conversation; another window is
+refused and told which session to open, and `--here` adopts it on purpose (that Last Order will not
+remember the run's earlier turns). The CLI form reopens the saved conversation itself.
+
 If the project is a git repository, MISAKA commits when a node closes, when a run stops and when
-it finishes. Conversations are kept under `~/.misaka/state/sessions/research/<run>--<scope>/`.
+it finishes: the nodes' plans and conclusions, every card's contract and output folder (without
+its derived bundle), and `PROJECT.md`. `misaka init` writes a `.gitignore` for the caches, the
+download folder and the bundles. Conversations are kept under
+`~/.misaka/state/sessions/research/<run>--<scope>/`.

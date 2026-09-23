@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
+import socket
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -21,6 +23,8 @@ from pathlib import Path
 from misaka.config import home
 from misaka.core.platform import tasks as task_store
 from misaka.utils import atomic
+
+_LOG = logging.getLogger(__name__)
 
 REVIEW_KINDS = {"red_team", "final_review"}
 
@@ -246,12 +250,33 @@ def init(con):
             _execute_script(con, INDEXES)
 
 
+def _lease_holder_is_dead(lock):
+    """Whether a driver lock (``driver:<host>:<pid>:<nonce>``) names a process on this host
+    that no longer exists. A reused pid reads as alive and leaves the TTL to decide, which
+    is the safe side; a foreign host is never judged from here."""
+    parts = str(lock or "").split(":")
+    if len(parts) != 4 or parts[0] != "driver" or parts[1] != socket.gethostname():
+        return False
+    try:
+        pid = int(parts[2])
+    except ValueError:
+        return False
+    import psutil
+    return pid > 0 and not psutil.pid_exists(pid)
+
+
 def acquire_driver(con, run_id, lock, ttl_seconds=DRIVER_TTL_SECONDS):
     """Take the run's driver lease: one process advances a run at a time. False when another
     live lease holds it."""
     now = int(time.time())
     with task_store.write_txn(con):
         previous = get(con, run_id)
+        if previous["driver_lock"] and previous["driver_lock"] != lock and _lease_holder_is_dead(previous["driver_lock"]):
+            # A driver that died hard (a crashed pane, SIGKILL) neither renews nor releases;
+            # waiting its TTL out only holds the run (2026-09-23: three refusals, cleared by
+            # hand). Its lease expires here, inside the takeover transaction.
+            con.execute("UPDATE research_runs SET driver_expires=0 WHERE id=? AND driver_lock=?",
+                        (run_id, previous["driver_lock"]))
         cur = con.execute(
             "UPDATE research_runs SET driver_lock=?, driver_expires=? WHERE id=? "
             "AND (driver_lock IS NULL OR driver_expires IS NULL OR driver_expires < ? OR driver_lock=?)",
@@ -469,16 +494,36 @@ def _atomic_write(path, content):
     atomic.write_text(path, content)
 
 
+def _output_pathspec(workspace, row):
+    """A card's output folder for git, minus the derived bundle rebuilt at every settle
+    (``SOURCES.md`` and the hard-linked ``sources/``): the originals it points at are what
+    the commit records."""
+    output_dir = row["output_dir"] if "output_dir" in row.keys() else None  # noqa: SIM118 - sqlite3.Row has no key membership
+    if not output_dir:
+        return []
+    real = os.path.realpath(output_dir)
+    if not real.startswith(workspace + os.sep):
+        return []
+    rel = os.path.relpath(real, workspace)
+    return [rel, *(f":(exclude){os.path.join(rel, name)}" for name in ("sources", "SOURCES.md"))]
+
+
 def _commit(con, run, message):
     """Commit project-local artifacts; Git is history, not a delivery mechanism.
 
     Research cards are not committed one by one at acceptance, so the node and run commits carry
-    each card's contract (``cards/<id>.md``) and attachment folder along with the artifacts."""
+    each card's contract (``cards/<id>.md``), attachment folder and output folder along with the
+    artifacts. Under the by-node layout the output folder is ``nodes/<node>/cards/<id>``; the
+    project-flat ``cards/<id>`` entry was the only one until 2026-09-24, and a whole run's
+    Sister work stayed outside git."""
     from misaka.core.platform import repo
-    paths = [os.path.relpath(a["path"], run["workspace"]) for a in artifacts(con, run["id"])]
+    workspace = os.path.realpath(run["workspace"])
+    paths = [os.path.relpath(a["path"], workspace) for a in artifacts(con, run["id"])]
     for row in tasks(con, run["id"]):
         paths += [os.path.join("cards", f"{row['id']}.md"), os.path.join("cards", str(row["id"]))]
-    repo.commit(run["workspace"], [*paths, "PROJECT.md"], message)
+        paths += _output_pathspec(workspace, row)
+    if not repo.commit(workspace, [*paths, "PROJECT.md"], message) and repo.enabled(workspace):
+        _LOG.warning("Research %s: git recorded nothing for %r (%d path(s))", run["id"], message, len(paths))
 
 
 def _artifact_name(name):

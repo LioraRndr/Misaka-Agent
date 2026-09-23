@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 
+from misaka.config import home
 from misaka.core.platform import repo, tasks
 from misaka.utils import atomic
 from misaka.utils.frontmatter import parse_frontmatter
@@ -613,6 +614,22 @@ def rebuild(con, workspace):
     return sum(tasks.get(con, tid) is not None for tid in missing)
 
 
+GITIGNORE_TEMPLATE = """# MISAKA: derived and cache material. The originals these point at are what git records.
+{config_dir}/
+.pageindex/
+.office-cache/
+.office-intent/
+downloads/
+.DS_Store
+# research source bundles: rebuilt at every settle, hard links of files kept elsewhere
+nodes/**/SOURCES.md
+nodes/**/sources/
+nodes/**/.SOURCES-*.part
+final/*-SOURCES.md
+final/*-sources/
+final/.SOURCES-*.part
+"""
+
 PROJECT_TEMPLATE = """# {name}
 
 > 项目简报（PROJECT.md）——所有 agent 开工前读这份；计划、范围、已知缺口变了就改这里。
@@ -671,6 +688,13 @@ def init_project(folder, *, draft_brief=True):
     if draft_brief and not os.path.exists(project_md):
         _write_file(project_md, PROJECT_TEMPLATE.format(name=os.path.basename(folder) or folder))
         actions.append("PROJECT.md written")
+    ignore = os.path.join(folder, ".gitignore")
+    config_dir = home.project_dir(folder)
+    if not os.path.exists(ignore) and config_dir is not None:
+        # Derived and cache material only. The research bundle patterns are anchored to the
+        # research layout, so a person's own ``sources/`` elsewhere stays theirs to commit.
+        atomic.write_text(ignore, GITIGNORE_TEMPLATE.format(config_dir=config_dir.name))
+        actions.append(".gitignore written")
     con = tasks.connect(os.path.expanduser(_cfg_db()))
     try:
         restored = rebuild(con, folder)
@@ -684,7 +708,7 @@ def init_project(folder, *, draft_brief=True):
         # the first commit is the one place nobody reviews: run in a home directory,
         # `add -A` quietly commits ssh keys, .env files and whatever is in Downloads.
         # Existing repositories are not committed to at all, so this is the only path.
-        skeleton = [name for name in ("PROJECT.md", "cards")
+        skeleton = [name for name in ("PROJECT.md", "cards", ".gitignore")
                     if os.path.exists(os.path.join(folder, name))]
         if skeleton:
             _git(folder, "add", "--", *skeleton)

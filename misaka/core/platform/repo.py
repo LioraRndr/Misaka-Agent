@@ -58,19 +58,24 @@ def _commit(workspace, paths, message):
     """Commit with the repository mutation lock already held."""
     if not enabled(workspace):
         return False
+    # A ``:(exclude)...`` entry is pathspec magic, not a path: it narrows the paths beside it
+    # (a card's output folder without its derived bundle) and is never checked for existence.
+    magic = [p for p in paths if p.startswith(":(")]
     paths = [p for p in paths
-             if os.path.lexists(os.path.join(workspace, p))
-             or _git(workspace, "ls-files", "--", p).stdout.strip()]
+             if not p.startswith(":(")
+             and (os.path.lexists(os.path.join(workspace, p))
+                  or _git(workspace, "ls-files", "--", p).stdout.strip())]
     if not paths:
         return False
-    if _git(workspace, "add", "-A", "--", *paths).returncode != 0:
+    spec = [*paths, *magic]
+    if _git(workspace, "add", "-A", "--", *spec).returncode != 0:
         return False                                   # nothing staged: an empty diff below would lie
-    staged = _git(workspace, "diff", "--cached", "--quiet", "--", *paths).returncode
+    staged = _git(workspace, "diff", "--cached", "--quiet", "--", *spec).returncode
     if staged == 0:
         return True                                    # already committed: nothing to do is not a failure
     if staged != 1:
         return False                                   # git itself failed (lock, corrupt index)
-    return _git(workspace, "commit", "-q", "-m", message, "--", *paths).returncode == 0
+    return _git(workspace, "commit", "-q", "-m", message, "--", *spec).returncode == 0
 
 
 def commit_card(workspace, task_id, submission, message):

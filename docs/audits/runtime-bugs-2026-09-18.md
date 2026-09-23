@@ -552,6 +552,61 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
   `{"from": 旧, "to": 新, "source": "card file"}`。行为不变（文件仍是契约、仍会覆盖手改）。没有给 LO 加 resume 工具（用户定：`/research resume` 只能人跑）。
 - 测试：`tests/test_card_reconcile_event.py`。
 
+### B39 · P1 · 移植前的会话打不开：`toolResult.addedToolNames` 被 `extra="forbid"` 拒绝（2026-09-24，已修）
+- 现象：面板每次启动重开 9 月 20 日那份 LO 会话（r_b55f2c1cf5，51 MB）都在 `buildSessionContext` 崩，23:26 十秒内三次；
+  栈：`_copy_context_messages → convert_to_llm → validate_message`，`toolResult.addedToolNames: Extra inputs are not permitted`。
+- 根因：5fb0fe8（pi 0.86–0.87 移植）从 `ToolResultMessage` 删了 `addedToolNames`；pi 是 TS、无运行时校验，旧 JSON 多一个键无所谓，
+  misaka 的 pydantic 模型 forbid。该文件里 345 处。
+- 修法：`agent/harness/messages.py::convert_to_llm` 对 dict 形态的 toolResult 校验前只剥这一个键（`# MISAKA fork`），别的未知键照旧报错；
+  快照本身不改。测试 `tests/test_session_legacy_tool_result_fields.py`。
+
+### B40 · P1 · 崩溃/取消路径不 settle：done 卡不登记、不入账、不打包、partial 报告看不见它们（2026-09-24，已修）
+- 现象：r_5b1357a9c6 的 LO 23:16 崩溃后，39 张 done 卡在 `research_artifacts` 里 0 条 task_output，`research_v2_settled` 事件 0 条，
+  stopped 提交里连声明过的交付物都没有；23:41 再停一次同样。
+- 根因：`workflow.run()` 只有 `result in halts` 分支先 `settle_done_tasks` 再 `partial`，CancelledError 与 InterruptedError 分支直接 `partial`。
+- 修法：settle 挪进 `partial()` 闭包，包 try 记 `_LOG.exception`，settle 失败不影响 partial 报告；原来两处手写调用删掉。
+  没做逐卡 settle：硬杀时任何 Python 都不跑，下次 resume 的 `_expand` 本来就会补，逐卡只是让登记提前。
+  测试 `tests/test_research_halt_settles_done_cards.py`。
+
+### B41 · P1 · Sister 的工作目录永远不进 git（2026-09-24，已修）
+- 现象：exam 项目跑了五小时，`nodes/r_5b1357a9c6/cards/` 531 个文件 20 MB 全部 untracked；20 次提交里 18 次是状态转换。
+- 根因：`runs._commit` 加的是平铺时代的 `cards/<id>` 附件目录，by-node 布局的输出目录在 `nodes/<node>/cards/<id>/`，不在列表里；
+  `repo.commit` 的返回值也没人看。
+- 修法：`_output_pathspec` 把 `output_dir` 相对路径加进提交，并用 `:(exclude)` 排除 `sources/` 与 `SOURCES.md`（文档写明 derived、never committed）；
+  `repo._commit` 认 `:(` 开头的 pathspec magic，不当路径检查存在性；提交没落地时记 warning。测试 `tests/test_research_commit_paths.py`。
+
+### B42 · P2 · `misaka init` 不写 `.gitignore`，`git status` 永远 38 条噪音（2026-09-24，已修）
+- 修法：缺则写 `GITIGNORE_TEMPLATE`（`.misaka/ .pageindex/ .office-cache/ .office-intent/ downloads/ .DS_Store` 加锚定在研究布局下的
+  bundle 模式 `nodes/**/SOURCES.md nodes/**/sources/ final/*-SOURCES.md final/*-sources/`），故意不写裸的 `sources/`，人文项目自己的史料目录不能被忽略；
+  新仓库并入骨架提交，已有仓库只写文件不提交，已有 `.gitignore` 不碰。`final/.report-edit/` 来源不明，没列。测试 `tests/test_init_project_gitignore.py`。
+
+### B43 · P1 · 在别的窗口 `/research resume`，`root_session` 与根节点 `session_file` 被静默改写（2026-09-24，已修）
+- 现象：23:27 在新建的空会话里 resume，run 的 `root_session` 和根节点 `session_file` 指向新会话，开车的 LO 对前五小时一无所知，
+  红队的 deliberation 来源也随之换掉。
+- 修法：TUI 路径当前 `sessionFile` 与 `root_session` 两边 realpath 不等就拒绝并打印该开哪份；`/research resume RUN --here` 显式接管。
+  CLI 的 `--resume` 本来就带 `--session run["root_session"]` 重开，不动。测试 `tests/test_research_resume_session_guard.py`。
+
+### B44 · 撤回：stopped 卡重开的 Sister 并不从零开始（2026-09-24）
+- 先前判断"`reopen_task` 清空 `session_file`，Sister 回来是全新对话"是错的：每张卡一个会话目录，`card_shell.continue_flags` 取目录里最新的 jsonl，
+  非 resume 启动也先接旧会话再重发合同。t_02f417 一个文件从 22:43 写到第 3 代，21 MB。`session_file` 列只是备用指针。不改。
+
+### B45 · P2 · 驱动器死后租约挡 resume 五分钟（2026-09-24，已修）
+- 现象：23:41 LO 面板被关，`release_driver` 没跑到，`/research resume` 三次被拒 "already being driven by another process (lease driver:Mac-mini.local:95972:…)"，手动清库。
+- 修法：`acquire_driver` 里锁串主机名等于本机且 pid 不存在，同一事务内把 `driver_expires` 置 0 再接管；pid 复用只会继续等 TTL，外机永不判断。
+  测试 `tests/test_research_driver_lease_dead_pid.py`。
+
+### B49 · P2 · 面板启动时的 initialMessage 撞上收件箱起的回合，报 "Agent is already processing"（2026-09-24，已修）
+- 根因：`card-shell --resume --say <note>` 把 note 当 `initialMessage`，`run()` 里的 `prompt()` 不带 streamingBehavior；network 绑定时 flush 的收件箱投递
+  `triggerTurn: True` 可能先起回合。pi 的启动没有别的起回合者，所以上游不需要。
+- 修法：抽成 `_promptInitialMessages`，两处 `prompt()` 带 `followUp`（`# MISAKA fork`）。测试 `tests/test_initial_message_during_turn.py`。
+
+### 搁置：B46（打不开的会话在启动失败前已被追加 system message，pi 内核顺序，B39 去掉了触发条件）、B47（驱动器崩后残留的 Sister 面板与
+`dm --wait-message` 孤儿，尚未读代码）、B50（LCM 的每回合维护只认用户输入和标了 TURN 的 custom message，研究窗口五小时靠 DM 起回合没跑过一次维护；用户要求 LCM 不动）。
+
+### 压缩不是 bug 的记录（2026-09-23）
+- LO 实际模型是 `sub2api-claude / claude-fable-5-1`，models.json 里窗口 1,000,000；`lcm.context_threshold` 0.7，触发点 700k，实际压缩 tokensBefore 701,524。
+  页脚 "105.4%/272k" 是拿 `auxiliary.compression`（openai-codex/gpt-6-astra，272k）的窗口在算，显示错位。
+
 ## P2 第一批修复（2026-09-18 下午）
 
 ### B29 / B14 / B18 / B19 / B22 · 已修（一张卡一个窗格一个写入者）

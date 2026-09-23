@@ -5502,6 +5502,30 @@ class InteractiveMode(Conversation):
             except Exception as error:  # noqa: BLE001
                 self.showError(str(error) if error is not None else "Unknown error occurred")
 
+    async def _promptInitialMessages(self) -> None:
+        # MISAKA fork: pi sends these bare (interactive-mode.ts run()), and nothing else
+        # starts a turn during its startup. Here the network wiring flushes inbox deliveries
+        # with triggerTurn at bind, so a `card-shell --resume --say` note could arrive
+        # mid-turn; prompt() then refused it ("Agent is already processing") and the note
+        # was lost. followUp queues it behind that turn; an idle session is unchanged.
+        if self.options.initialMessage:
+            try:
+                await self.session.prompt(
+                    self.options.initialMessage,
+                    {"images": list(self.options.initialImages or []), "streamingBehavior": "followUp"},
+                )
+            except Exception as error:  # noqa: BLE001
+                self.showError(str(error) if error is not None else "Unknown error occurred")
+            else:
+                self.renderCurrentSessionState()
+        for message in list(self.options.initialMessages or []):
+            try:
+                await self.session.prompt(message, {"streamingBehavior": "followUp"})
+            except Exception as error:  # noqa: BLE001
+                self.showError(str(error) if error is not None else "Unknown error occurred")
+            else:
+                self.renderCurrentSessionState()
+
     async def run(self) -> int:
         await self.init()
         self._shutdownFuture = asyncio.get_running_loop().create_future()
@@ -5522,23 +5546,7 @@ class InteractiveMode(Conversation):
 
         self._schedule_task(self.maybeWarnAboutAnthropicSubscriptionAuth())
 
-        if self.options.initialMessage:
-            try:
-                await self.session.prompt(
-                    self.options.initialMessage,
-                    {"images": list(self.options.initialImages or [])},
-                )
-            except Exception as error:  # noqa: BLE001
-                self.showError(str(error) if error is not None else "Unknown error occurred")
-            else:
-                self.renderCurrentSessionState()
-        for message in list(self.options.initialMessages or []):
-            try:
-                await self.session.prompt(message)
-            except Exception as error:  # noqa: BLE001
-                self.showError(str(error) if error is not None else "Unknown error occurred")
-            else:
-                self.renderCurrentSessionState()
+        await self._promptInitialMessages()
 
         self._schedule_task(self._runInputLoop())
 

@@ -37,7 +37,8 @@ USAGE = (
     "       before it concludes (0-6). Talking a plan over with you is never counted.\n"
     "       /research status [RUN_ID]          show the latest run of this folder, or the run you name\n"
     "       /research stop [RUN_ID]            ask the latest active run (or RUN_ID) to stop\n"
-    "       /research resume [RUN_ID] [ANSWER] resume a paused run, optionally answering its clarification questions"
+    "       /research resume [RUN_ID] [ANSWER] resume a paused run, optionally answering its clarification questions\n"
+    "       /research resume RUN_ID --here     adopt this window as the run's Last Order (it will not remember earlier turns)"
 )
 
 
@@ -59,11 +60,14 @@ def parse_command(raw):
     head = line.split(None, 1)[0] if line else ""
     tokens: list[str] = []
     if head == "resume":
-        # `resume [RUN_ID] [ANSWER...]`: the answer is free text, taken from the raw line.
+        # `resume [RUN_ID] [--here] [ANSWER...]`: the answer is free text, taken from the raw line.
         words = line.split(None, 2)
         run_id = words[1] if len(words) > 1 and words[1].startswith("r_") else None
-        rest = (words[2] if len(words) > 2 else "") if run_id else line[len("resume"):]
-        return {"action": "resume", "run_id": run_id, "clarification": rest.strip()}
+        rest = ((words[2] if len(words) > 2 else "") if run_id else line[len("resume"):]).strip()
+        here = rest == "--here" or rest.startswith("--here ")
+        if here:
+            rest = rest[len("--here"):].strip()
+        return {"action": "resume", "run_id": run_id, "clarification": rest, "here": here}
     if head in {"help", "-h", "--help", "status", "stop"}:
         try:
             tokens = shlex.split(line)
@@ -354,6 +358,16 @@ class ResearchPart:
                         raise ValueError("No research run to resume.")
                     if run["status"] == "done":
                         raise ValueError(f"Research run {run['id']} is done; start a new run.")
+                    saved = run["root_session"]
+                    here = getattr(getattr(ctx, "sessionManager", None), "sessionFile", None)
+                    if saved and here and not spec.get("here") and os.path.realpath(saved) != os.path.realpath(here):
+                        # The run's Last Order is a conversation. Driving it from another window
+                        # silently rebound root_session to a Last Order that remembered none of
+                        # the run's turns (2026-09-23); the CLI path already reopens the saved one.
+                        raise ValueError(
+                            f"Research run {run['id']} belongs to the Last Order conversation {saved}; open that "
+                            f"session and resume there. `/research resume {run['id']} --here` adopts this window "
+                            "instead, and its Last Order will not remember the run's earlier turns.")
                     if not launch(run["id"], ctx, resume=True, clarification=spec["clarification"]):
                         ctx.ui.notify(f"Research run {run['id']} is already running in this session.", "info")
                     else:
