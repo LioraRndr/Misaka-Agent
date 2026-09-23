@@ -40,7 +40,13 @@ def test_only_anomalous_verdicts_are_logged_and_only_once(caplog):
 def test_self_drift_is_reported_once(caplog, monkeypatch):
     processes._REPORTED.clear()
     processes._SELF_IDENTITY = "host:1:1.000000"
+    # A second's drift is psutil's boot-time correction (B56), explained and tolerated; a
+    # reading an hour off is a real drift and is said once.
     monkeypatch.setattr(processes, "identity", lambda pid: "host:1:2.000000")
+    with caplog.at_level(logging.WARNING, logger="misaka.core.platform.processes"):
+        processes._self_check()
+    assert not [r for r in caplog.records if "drifted" in r.getMessage()]
+    monkeypatch.setattr(processes, "identity", lambda pid: "host:1:3601.000000")
     with caplog.at_level(logging.WARNING, logger="misaka.core.platform.processes"):
         processes._self_check()
         processes._self_check()
