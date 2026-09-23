@@ -15,6 +15,16 @@ import psutil
 
 _LOG = logging.getLogger(__name__)
 _REPORTED: set[tuple] = set()      # liveness anomalies already logged by this process (one line each)
+
+# psutil's create_time() on macOS is corrected by the difference between the boot time it read
+# when the process imported psutil and the boot time now (_psosx.adjust_proc_create_time), and
+# `kern.boottime` moves by whole seconds under NTP. Two processes therefore disagree about a
+# third one's start time by exactly that drift once it reaches a second: a daemon or Last
+# Order hours old judged every session dead and every fresh node "superseded" (2026-09-18
+# B20/B33; pinned 2026-09-24 on eight fork nodes, row `…154.054516` against the child's own
+# `…153.054516`). A start time is compared within this tolerance; a reused PID starts hours
+# later, so the defence against it is untouched.
+IDENTITY_TOLERANCE_SECONDS = 5.0
 _SELF_IDENTITY: str | None = None  # what this process computed for itself the first time it checked
 
 
@@ -48,6 +58,34 @@ def identity(pid: int | None) -> str | None:
     return f"{host}:{int(pid)}:{started}" if started else None
 
 
+def _identity_parts(value: str | None) -> tuple[str, str, float | None] | None:
+    """``(host, pid, start)`` of an identity string; ``start`` is None when it is not a number
+    (the ``ps lstart`` fallback), in which case only exact equality counts."""
+    if not value:
+        return None
+    host, sep, rest = value.partition(":")
+    pid, sep2, started = rest.partition(":")
+    if not sep or not sep2:
+        return None
+    try:
+        return host, pid, float(started)
+    except ValueError:
+        return host, pid, None
+
+
+def same_identity(a: str | None, b: str | None, tolerance: float = IDENTITY_TOLERANCE_SECONDS) -> bool:
+    """Whether two identity strings name the same process: equal, or the same host and PID with
+    start times within ``tolerance`` (see IDENTITY_TOLERANCE_SECONDS)."""
+    if a == b:
+        return a is not None
+    left, right = _identity_parts(a), _identity_parts(b)
+    if left is None or right is None or left[:2] != right[:2]:
+        return False
+    if left[2] is None or right[2] is None:
+        return False
+    return abs(left[2] - right[2]) <= tolerance
+
+
 def explain_liveness(pid: int | None, expected: str | None) -> tuple[bool, str]:
     """``identity_is_alive`` with its reason: what the check saw, in words a log can carry.
 
@@ -67,7 +105,7 @@ def explain_liveness(pid: int | None, expected: str | None) -> tuple[bool, str]:
         except ValueError:
             return False, f"pid {pid!r} is not a number"
         return exists, ("identity unreadable, pid exists" if exists else "pid gone")
-    if current != expected:
+    if not same_identity(current, expected):
         return False, f"identity mismatch: recorded {expected!r}, now {current!r}"
     try:
         status = psutil.Process(int(pid)).status()
@@ -87,7 +125,7 @@ def _self_check() -> None:
     if _SELF_IDENTITY is None:
         _SELF_IDENTITY = current
         return
-    if current != _SELF_IDENTITY and ("self-drift",) not in _REPORTED:
+    if not same_identity(current, _SELF_IDENTITY) and ("self-drift",) not in _REPORTED:
         _REPORTED.add(("self-drift",))
         _LOG.warning("process identity drifted inside this process: first %r, now %r "
                      "(every liveness verdict it makes is suspect; see runtime-bugs-2026-09-18 B20/B33)",
@@ -192,7 +230,7 @@ def _resolve(tokens: list[ProcessToken]) -> list[psutil.Process]:
     for item in tokens:
         try:
             process = psutil.Process(item.pid)
-            if abs(process.create_time() - item.created) < 0.001:
+            if abs(process.create_time() - item.created) <= IDENTITY_TOLERANCE_SECONDS:
                 result.append(process)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -256,9 +294,11 @@ def terminate(
 
 
 __all__ = [
+    "IDENTITY_TOLERANCE_SECONDS",
     "ProcessToken",
     "identity",
     "identity_is_alive",
+    "same_identity",
     "snapshot",
     "terminate",
     "terminate_orphaned_group",

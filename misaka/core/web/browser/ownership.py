@@ -45,7 +45,8 @@ def alive(identity):
     if not valid_identity(identity):
         return True  # Unknown ownership is not proof that it is safe to reap.
     try:
-        return psutil.Process(identity[0]).create_time() == identity[1]
+        from misaka.core.platform.processes import IDENTITY_TOLERANCE_SECONDS
+        return abs(psutil.Process(identity[0]).create_time() - identity[1]) <= IDENTITY_TOLERANCE_SECONDS
     except psutil.NoSuchProcess:
         return False
 

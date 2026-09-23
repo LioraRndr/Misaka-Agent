@@ -1335,10 +1335,19 @@ def _record_runner(con, table, row_id, handle, *, key=None):
         return
     from misaka.core.platform import processes
     identity = processes.identity(int(pid))
-    if identity is not None:
-        con.execute(f'UPDATE "{table}" SET runner_pid=?, runner_identity=? WHERE id=? AND runner_key IS ? '
-                    'AND (runner_pid IS NULL OR (runner_pid=? AND runner_identity=?))',
-                    (int(pid), identity, row_id, key, int(pid), identity))
+    if identity is None:
+        return
+    row = con.execute(f'SELECT runner_pid, runner_identity FROM "{table}" WHERE id=? AND runner_key IS ?',
+                      (row_id, key)).fetchone()
+    if row is None:
+        return
+    if row["runner_pid"] is not None and not (
+            int(row["runner_pid"]) == int(pid) and processes.same_identity(row["runner_identity"], identity)):
+        return
+    if row["runner_pid"] is not None:
+        return                                   # the child's own reading stands (claim_runner)
+    con.execute(f'UPDATE "{table}" SET runner_pid=?, runner_identity=? WHERE id=? AND runner_key IS ? '
+                'AND runner_pid IS NULL', (int(pid), identity, row_id, key))
 
 
 def _clear_runner(con, table, row_id, *, key=None):

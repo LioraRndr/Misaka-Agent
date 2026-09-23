@@ -647,6 +647,17 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
   settle 端 `_settled_current` 比较 `research_v2_settled.submitted_event` 与最新 `submitted` 事件 id，新申报会再登记一次；`runs._drift_after_declaration`
   只在漂移事件晚于最新申报时才在 resume 重开。测试 `tests/test_card_redeclares_after_completion.py`（三条）、drift 文件再加两条。
 
+### B56 · P1 · 进程身份漂移：B20/B33 的机制找到了（2026-09-24，已修）
+- 现象：02:5x 根节点 closing 后派 8 个 fork 节点，全部 `claim refused: runner identity mismatch: row holds pid 23962 'Mac-mini.local:23962:1790193154.054516',
+  this process is pid 23962 '…:1790193153.054516'`，同一 pid、启动时间差整 1.000000 秒、小数一致。run failed。
+- 根因：psutil 在 macOS 上的 `create_time()` 经 `_psosx.adjust_proc_create_time` 修正：用"本进程 import psutil 时读到的 boot time"减"现在的 boot time"，
+  差值 ≥1 秒就加到每个进程的启动时间上。`kern.boottime` 在 NTP 下会整秒移动，于是活了几小时的进程（daemon、LO）算出的任何 pid 的启动时间
+  与新进程算的差正好那几秒。9 月 18 日"三小时的 daemon 判所有会话死了""fork 节点一起 superseded"（B20/B33）就是这个，当时没抓到签名。
+- 修法：`processes.same_identity` 容忍同主机同 pid 的启动时间相差 ≤5 秒（`IDENTITY_TOLERANCE_SECONDS`；pid 复用的进程启动时间差几小时，防线不变），
+  用在 `explain_liveness`、`_self_check`、`_resolve`；`runs.claim_runner` 与 `workflow._record_runner` 改为先读行再在 Python 里比较，子进程自己的读数写回行；
+  `web/browser/ownership.alive` 同样容忍。测试 `tests/test_process_identity_drift.py`。
+- 事故处置：LO 重启后 `/research resume r_5b1357a9c6`，`_reap_orphan_runner` 见旧 pid 已死会清掉那 8 行的 runner 记录再派。
+
 ### 关闭：B47 不是 bug（2026-09-24）
 - `dm --wait-message` 有界：`WAKE_ATTEMPTS` 5 次接触回合、退避上限 30 s、`LIVE_WAIT_SECONDS` 600 s，LO 死后由 headless 接触回合接手 DM 是设计；
   当晚的等待进程次日全部自然退出。做完的卡面板留着给人看也是设计（一卡一面板，daemon 在面板里换程序）。

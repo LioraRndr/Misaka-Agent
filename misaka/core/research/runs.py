@@ -391,9 +391,19 @@ def claim_runner(con, table, row_id, key):
     identity = processes.identity(pid)
     if identity is None:
         raise RuntimeError("Research runner process identity is unreadable")
+    # The parent recorded this process's identity from its own psutil, whose start times can
+    # sit a whole second from what this process reads (processes.IDENTITY_TOLERANCE_SECONDS),
+    # so the fence compares in Python and the row then carries this process's own reading.
+    row = con.execute(f'SELECT runner_pid, runner_identity FROM "{table}" WHERE id=? AND runner_key=?',
+                      (row_id, key)).fetchone()
+    if row is None:
+        return False
+    if row["runner_pid"] is not None and not (
+            int(row["runner_pid"]) == pid and processes.same_identity(row["runner_identity"], identity)):
+        return False
     return con.execute(f'UPDATE "{table}" SET runner_pid=?, runner_identity=? WHERE id=? AND runner_key=? '
-                       'AND (runner_pid IS NULL OR (runner_pid=? AND runner_identity=?))',
-                       (pid, identity, row_id, key, pid, identity)).rowcount == 1
+                       'AND (runner_pid IS NULL OR runner_pid=?)',
+                       (pid, identity, row_id, key, pid)).rowcount == 1
 
 
 def note_claim_failure(con, table, row_id, key):
@@ -417,7 +427,8 @@ def note_claim_failure(con, table, row_id, key):
     elif row["runner_key"] != key:
         reason = (f"runner key mismatch: row holds {(row['runner_key'] or '')[:8] or 'NULL'!r}, "
                   f"this process holds {key[:8]!r}")
-    elif row["runner_pid"] is not None and (row["runner_pid"] != pid or row["runner_identity"] != identity):
+    elif row["runner_pid"] is not None and (row["runner_pid"] != pid
+                                            or not processes.same_identity(row["runner_identity"], identity)):
         reason = (f"runner identity mismatch: row holds pid {row['runner_pid']} {row['runner_identity']!r}, "
                   f"this process is pid {pid} {identity!r}")
     else:
