@@ -5774,7 +5774,19 @@ class InteractiveMode(Conversation):
     def getStartupExpansionState(self) -> bool:
         return bool(self.options.verbose or self.toolOutputExpanded)
 
+    def _refuse_switch_during_compaction(self, what: str) -> bool:
+        # MISAKA fork: pi lets the model or thinking level change while a compaction runs, and
+        # `_check_compaction_source` then discards the result when it lands. With LCM a
+        # compaction can take minutes (2026-09-24: a 1.19M-token Sister lost a five-minute
+        # one to three switches and overflowed). The switch waits, as `/reload` already does.
+        if bool(getattr(self.session, "isCompacting", False)):
+            self.showWarning(f"Wait for compaction to finish before changing the {what}.")
+            return True
+        return False
+
     async def _cycle_model(self, direction: str) -> None:
+        if self._refuse_switch_during_compaction("model"):
+            return
         try:
             result = await self.session.cycleModel(direction)
             if result is None:
@@ -5830,6 +5842,8 @@ class InteractiveMode(Conversation):
     def handleThinkingCommand(self, argument: str = "") -> None:
         """``/thinking [--default] [level]`` (pi 496185f6): no argument opens the selector, a level
         switches directly; ``--default`` also saves it as the startup default."""
+        if self._refuse_switch_during_compaction("thinking level"):
+            return
         parsed = parse_default_flag_args("thinking", argument)
         if parsed.error:
             self.showError(parsed.error)
@@ -5874,6 +5888,8 @@ class InteractiveMode(Conversation):
         )
 
     async def handleModelCommand(self, searchTerm: str | None = None) -> None:
+        if self._refuse_switch_during_compaction("model"):
+            return
         if not searchTerm:
             self.showModelSelector()
             return

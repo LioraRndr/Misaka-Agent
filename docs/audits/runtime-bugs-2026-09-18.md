@@ -615,8 +615,30 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
   `doc_outline` 是整份文档的标题树，理论上无上限但受标题数约束，暂不动。
 - 事故处置：压缩期间不要碰 `/model` 与 thinking；停卡重开会重放那条 1.8 MB 结果再溢出一次；最后手段是手工把 transcript 里那条结果换成占位。
 
-### 搁置：B46（打不开的会话在启动失败前已被追加 system message，pi 内核顺序，B39 去掉了触发条件）、B47（驱动器崩后残留的 Sister 面板与
-`dm --wait-message` 孤儿，尚未读代码）、B50（LCM 的每回合维护只认用户输入和标了 TURN 的 custom message，研究窗口五小时靠 DM 起回合没跑过一次维护；用户要求 LCM 不动）。
+### B52 · P3 · 压缩进行中允许切模型和 thinking，压缩落地时被守卫整次作废（2026-09-24，已修）
+- 现象：B51 那张卡五分钟的阈值压缩，被期间三次 `/model` 加一次 thinking 切换作废，随后溢出。pi 允许切换，`_check_compaction_source` 事后作废，两边都是 pi 原样。
+- 修法：`interactive_mode._refuse_switch_during_compaction`，`handleModelCommand`、`_cycle_model`（快捷键循环）、`handleThinkingCommand` 三个入口在 `isCompacting` 时
+  `showWarning` 并返回，和 `/reload` 已有的拦截同款（`# MISAKA fork`）。测试 `tests/test_tui_blocks_model_switch_during_compaction.py`。
+
+### B54 · P3 · `doc_outline` 无体积上限（2026-09-24，已修）
+- 修法：`documents.OUTLINE_MAX_BYTES` = 200 KB 过 `truncate_head`，截断时提示按 node / pages 读节、`doc_find` 找截断之外的标题；普通大纲原样。
+  测试 `tests/test_doc_outline_cap.py`。
+
+### B40 补测（2026-09-24）
+- `tests/test_research_halt_registers_real_submission.py`：用 `dispatch.accept_state` 做一次真实提交（带摘要），驱动器 InterruptedError，
+  真实 `settle_done_tasks` 跑通，`research_artifacts` 里出现 task_output、sha 一致、partial 报告列出该文件。此前只有 recorder 级别的测试。
+
+### 关闭：B47 不是 bug（2026-09-24）
+- `dm --wait-message` 有界：`WAKE_ATTEMPTS` 5 次接触回合、退避上限 30 s、`LIVE_WAIT_SECONDS` 600 s，LO 死后由 headless 接触回合接手 DM 是设计；
+  当晚的等待进程次日全部自然退出。做完的卡面板留着给人看也是设计（一卡一面板，daemon 在面板里换程序）。
+
+### 搁置：B46（打不开的会话在启动失败前已被追加 system message，pi 内核顺序，追加点一轮没定位到，B39 已去掉触发条件，复发再查）、
+B53（页脚在 LO 崩溃前显示 "105.4%/272k · gpt-6-a…" 而 transcript 说模型是 claude-fable-5-1，根因未定，纯显示）、
+B50（LCM 的每回合维护只认用户输入和标了 TURN 的 custom message，研究窗口五小时靠 DM 起回合没跑过一次维护；用户要求 LCM 不动）。
+
+### 复查 32720d1（2026-09-24）
+- 通读了非 LCM 源码 diff：Plan.append 合并（空 `plan_markdown` 首次调用仍被 `validate` 拒）、散引号修复的字符串边界、三条重试模式、`_calculate_context_tokens`、
+  `doc_page_image` 上限、text_outline 的正则与阈值。没有发现缺陷。LCM host 的三处只读了，不动。
 
 ### 压缩不是 bug 的记录（2026-09-23）
 - LO 实际模型是 `sub2api-claude / claude-fable-5-1`，models.json 里窗口 1,000,000；`lcm.context_threshold` 0.7，触发点 700k，实际压缩 tokensBefore 701,524。

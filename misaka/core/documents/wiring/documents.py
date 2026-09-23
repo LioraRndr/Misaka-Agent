@@ -22,6 +22,7 @@ from misaka.core.platform.toolkit import register_tool as _register
 # The read tool already answers "this model cannot see images" for every attachment MISAKA sends;
 # one wording for the whole product beats a second one that drifts. It has no public alias.
 from misaka.core.tools.read import _get_non_vision_image_note
+from misaka.core.tools.truncate import TruncationOptions, format_size, truncate_head
 from misaka.utils.image_resize import (
     ImageResizeOptions,
     format_dimension_note,
@@ -140,6 +141,7 @@ def _source(doc_id, ctx):
 # One rendered page: what the model needs to read a scan, not a print master. The byte cap
 # sits under the PNG size of a text page at 2000 px, so the resize's candidate list falls
 # through to JPEG (quality 80 first) for those and keeps PNG for small line art.
+OUTLINE_MAX_BYTES = 200 * 1024
 PAGE_IMAGE_MAX_SCALE = 2.0
 PAGE_IMAGE_MAX_SIDE = 2000
 PAGE_IMAGE_MAX_BYTES = 768 * 1024
@@ -207,8 +209,14 @@ def register(harn):
         # The fidelity note is ours, so it stays outside the fence the document's headings go in.
         note = _ocr_note(await _off_loop(_row, params.doc_id, workspace))
         if o:
-            return _text(note + untrusted(params.doc_id, o)
-                         + "Use doc_read(doc_id, node=<node-id>) to read a section.\n")
+            # One tool result is one prompt turn: a heading tree has no natural bound, so it gets
+            # the same kind of cap as the workspace index (misaka_research_view) and find/grep.
+            cut = truncate_head(o, TruncationOptions(maxLines=2**31 - 1, maxBytes=OUTLINE_MAX_BYTES))
+            tail = ("Use doc_read(doc_id, node=<node-id>) to read a section.\n" if not cut.truncated else
+                    f"[{format_size(OUTLINE_MAX_BYTES)} limit reached: {cut.outputLines} of {cut.totalLines} outline "
+                    "lines shown. Read sections with doc_read(doc_id, node=<node-id>) or pages=<range>; "
+                    "doc_find locates headings beyond the cut.]\n")
+            return _text(note + untrusted(params.doc_id, cut.content) + tail)
         st = await _off_loop(corpus.structure, params.doc_id, workspace=workspace)
         if not st:
             return _text("Document not found. Use doc_list to find its document ID.")
