@@ -824,7 +824,19 @@ def validate_user_content(value: Any) -> UserContentValue:
     return USER_CONTENT_ADAPTER.validate_python(value)
 
 
+# MISAKA fork: pi 0.86 dropped ToolResultMessage.addedToolNames and, having no runtime
+# validation, reads older transcripts unchanged. The strict model here refused whole sessions
+# written before that port (2026-09-23), at every validator entry: session load, agent state,
+# the LLM wire, the LCM's snapshot restore. The one retired key is dropped from a copy of the
+# payload; any other unknown key still fails, so real shape bugs stay visible.
+_RETIRED_MESSAGE_KEYS: dict[str, tuple[str, ...]] = {"toolResult": ("addedToolNames",)}
+
+
 def validate_message(value: Any) -> MessageValue:
+    if isinstance(value, dict):
+        retired = _RETIRED_MESSAGE_KEYS.get(value.get("role"))
+        if retired and any(key in value for key in retired):
+            value = {key: item for key, item in value.items() if key not in retired}
     return MESSAGE_ADAPTER.validate_python(value)
 
 

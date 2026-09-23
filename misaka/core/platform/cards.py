@@ -621,6 +621,8 @@ GITIGNORE_TEMPLATE = """# MISAKA: derived and cache material. The originals thes
 .office-intent/
 downloads/
 .DS_Store
+__pycache__/
+*.pyc
 # research source bundles: rebuilt at every settle, hard links of files kept elsewhere
 nodes/**/SOURCES.md
 nodes/**/sources/

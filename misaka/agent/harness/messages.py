@@ -170,14 +170,7 @@ def convert_to_llm(messages: list[AgentMessage]) -> list[MessageValue]:
             )
             continue
         if role in {"system", "user", "assistant", "toolResult"}:
-            payload = _message_dump(message)
-            # MISAKA fork: pi 0.86 dropped ToolResultMessage.addedToolNames and, having no
-            # runtime validation, reads older transcripts unchanged. The strict model here
-            # refused whole sessions written before that port (2026-09-23), so the one
-            # retired key is dropped from the wire copy; any other unknown key still fails.
-            if role == "toolResult" and isinstance(payload, dict):
-                payload.pop("addedToolNames", None)
-            converted.append(validate_message(payload))
+            converted.append(validate_message(_message_dump(message)))
     return converted
 
 

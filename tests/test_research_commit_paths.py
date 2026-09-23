@@ -40,6 +40,11 @@ def test_node_commit_carries_card_output_files_but_never_the_bundle(project):
     (out / "SOURCES.md").write_text("derived\n")
     (out / "sources").mkdir()
     (out / "sources" / "a.md").write_text("link\n")
+    (out / "tools" / "__pycache__").mkdir()
+    (out / "tools" / "__pycache__" / "fetch.cpython-313.pyc").write_bytes(b"\x00")
+    (out / "stray.pyc").write_bytes(b"\x00")
+    (out / ".DS_Store").write_bytes(b"\x00")
+    (out / "tools" / ".DS_Store").write_bytes(b"\x00")
 
     runs._commit(con, run, "fixture commit")
 
@@ -47,6 +52,7 @@ def test_node_commit_carries_card_output_files_but_never_the_bundle(project):
     rel = out.relative_to(workspace).as_posix()
     assert {f"{rel}/notes.md", f"{rel}/tools/fetch.py", f"cards/{tid}.md"} <= tracked
     assert not [path for path in tracked if path.startswith(f"{rel}/sources/") or path.endswith("SOURCES.md")]
+    assert not [path for path in tracked if "__pycache__" in path or path.endswith((".pyc", ".DS_Store"))]
     assert _git(workspace, "log", "--format=%s").split("\n")[0] == "fixture commit"
 
 

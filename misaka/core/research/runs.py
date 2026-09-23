@@ -505,7 +505,10 @@ def _output_pathspec(workspace, row):
     if not real.startswith(workspace + os.sep):
         return []
     rel = os.path.relpath(real, workspace)
-    return [rel, *(f":(exclude){os.path.join(rel, name)}" for name in ("sources", "SOURCES.md"))]
+    bundle = [f":(exclude){os.path.join(rel, name)}" for name in ("sources", "SOURCES.md")]
+    # Sisters run scripts in their folders and Finder visits them; neither leaves history.
+    junk = [f":(exclude,glob){rel}/**/{pattern}" for pattern in ("__pycache__/**", "*.pyc", ".DS_Store")]
+    return [rel, *bundle, *junk]
 
 
 def _commit(con, run, message):

@@ -24,7 +24,7 @@ def test_a_fresh_project_commits_the_ignore_file_with_the_skeleton(tmp_path, hom
     folder.mkdir()
     actions = cards.init_project(str(folder))
     text = (folder / ".gitignore").read_text()
-    for line in (".misaka/", ".pageindex/", "downloads/", "nodes/**/sources/", "final/*-SOURCES.md"):
+    for line in (".misaka/", ".pageindex/", "downloads/", "__pycache__/", "*.pyc", "nodes/**/sources/", "final/*-SOURCES.md"):
         assert line in text.split("\n")
     assert "sources/" not in text.split("\n")          # a person's own sources folder stays theirs
     assert ".gitignore written" in actions

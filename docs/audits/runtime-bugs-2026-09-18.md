@@ -557,8 +557,10 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
   栈：`_copy_context_messages → convert_to_llm → validate_message`，`toolResult.addedToolNames: Extra inputs are not permitted`。
 - 根因：5fb0fe8（pi 0.86–0.87 移植）从 `ToolResultMessage` 删了 `addedToolNames`；pi 是 TS、无运行时校验，旧 JSON 多一个键无所谓，
   misaka 的 pydantic 模型 forbid。该文件里 345 处。
-- 修法：`agent/harness/messages.py::convert_to_llm` 对 dict 形态的 toolResult 校验前只剥这一个键（`# MISAKA fork`），别的未知键照旧报错；
-  快照本身不改。测试 `tests/test_session_legacy_tool_result_fields.py`。
+- 修法：`ai/types.py::validate_message` 对 dict 形态的 toolResult 从副本里只剥这一个键（`# MISAKA fork`），别的未知键、别的角色照旧报错。
+  第一版只堵了 `convert_to_llm` 一个口，复查发现 `validate_message` 还有六处直接调用（agent 状态的 `_normalize_standard_message`、sdk 的图片过滤、
+  `agent_loop` 请求前校验、LCM 的快照还原 `ingest.py`），于是挪到汇合点，harness 改回 pi 原样。离线验证 9 月 20 日那份 51 MB 会话：加载加上线成功。
+  测试 `tests/test_session_legacy_tool_result_fields.py`。
 
 ### B40 · P1 · 崩溃/取消路径不 settle：done 卡不登记、不入账、不打包、partial 报告看不见它们（2026-09-24，已修）
 - 现象：r_5b1357a9c6 的 LO 23:16 崩溃后，39 张 done 卡在 `research_artifacts` 里 0 条 task_output，`research_v2_settled` 事件 0 条，
@@ -572,7 +574,8 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
 - 现象：exam 项目跑了五小时，`nodes/r_5b1357a9c6/cards/` 531 个文件 20 MB 全部 untracked；20 次提交里 18 次是状态转换。
 - 根因：`runs._commit` 加的是平铺时代的 `cards/<id>` 附件目录，by-node 布局的输出目录在 `nodes/<node>/cards/<id>/`，不在列表里；
   `repo.commit` 的返回值也没人看。
-- 修法：`_output_pathspec` 把 `output_dir` 相对路径加进提交，并用 `:(exclude)` 排除 `sources/` 与 `SOURCES.md`（文档写明 derived、never committed）；
+- 修法：`_output_pathspec` 把 `output_dir` 相对路径加进提交，并用 `:(exclude)` 排除 `sources/` 与 `SOURCES.md`（文档写明 derived、never committed），
+  复查后又加 `:(exclude,glob)` 排除 `__pycache__/`、`*.pyc`、`.DS_Store`（exam 的卡目录里已有 6 个 .pyc）；`.gitignore` 模板同步加前两项；
   `repo._commit` 认 `:(` 开头的 pathspec magic，不当路径检查存在性；提交没落地时记 warning。测试 `tests/test_research_commit_paths.py`。
 
 ### B42 · P2 · `misaka init` 不写 `.gitignore`，`git status` 永远 38 条噪音（2026-09-24，已修）
