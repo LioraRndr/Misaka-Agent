@@ -639,6 +639,13 @@ T0（t_5394a7）08:53:48 给 LO 发 DM（messages.db #14）："…正在复核�
   只记事件，`runs._resume` 把带此事件的 done 卡视为 unusable 重开。移到 workspace 之外和没有摘要的提交仍然硬错。
 - 测试：`tests/test_research_artifact_drift.py`（四条），`test_research_sweep_repairs.py` 两条按新语义改。
 - 事故处置：LO 进程仍是旧代码，须重开 07-37-53 会话窗口后 `/research resume r_5b1357a9c6`；新代码会重开 5 张漂移卡、跳过 bundle 与共享账本。
+- **病根（同日追加）**：完卡并不结束 Sister 的会话。LO 的 steer 正好撞上完卡（t_0e763d 19:28:04 done，19:28:09 收到 LO 的 DM），其他 Sister 的 DM 也照送，
+  她照做、照改文件；但运行时只在 `running` 状态接受申报（`_owned_row` 要求 running 加 claim），done 状态下改的东西没人再申报，settle 的检查发现的是真实分歧。
+  上面的"退回重申报"是兜底，每张卡要再跑一个模型回合（02:45 退回 4 张，t_9f10b6 的会话 560 MB，重新加载就贵，用户对此非常不满）。
+  根治：`todo.TodoPart._redeclare_if_done` —— done 卡的会话每结束一个干净回合，用 `worker.build_submission` 从输出目录重建提交、`prepare_submission` 重算摘要，
+  与上一条 `submitted` 不同就记新的 `submitted` 加 `redeclared` 事件并重新索引，不花模型回合；只认同一代、同一会话文件（reader 面板与被作废的旧代不算）。
+  settle 端 `_settled_current` 比较 `research_v2_settled.submitted_event` 与最新 `submitted` 事件 id，新申报会再登记一次；`runs._drift_after_declaration`
+  只在漂移事件晚于最新申报时才在 resume 重开。测试 `tests/test_card_redeclares_after_completion.py`（三条）、drift 文件再加两条。
 
 ### 关闭：B47 不是 bug（2026-09-24）
 - `dm --wait-message` 有界：`WAKE_ATTEMPTS` 5 次接触回合、退避上限 30 s、`LIVE_WAIT_SECONDS` 600 s，LO 死后由 headless 接触回合接手 DM 是设计；

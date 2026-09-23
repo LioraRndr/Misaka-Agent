@@ -687,7 +687,7 @@ def _resume(con, run_id, *, driver_lock, clarification):
     for row in tasks(con, run_id):
         unusable = row["status"] == "done" and (
             task_store.latest_payload(con, row["id"], "research_review_missing", generation=row["generation"])
-            or task_store.latest_payload(con, row["id"], "research_artifact_drift", generation=row["generation"]))
+            or _drift_after_declaration(con, row["id"], int(row["generation"])))
         if row["status"] not in ("stopped", "failed") and not unusable:
             continue
         target = "todo" if task_store.parent_ids(con, row["id"]) else "ready"
@@ -710,6 +710,16 @@ def _resume(con, run_id, *, driver_lock, clarification):
         "updated_at=? WHERE id=?", (int(time.time()), run_id),
     )
     return get(con, run_id)
+
+
+def _drift_after_declaration(con, task_id, generation):
+    """A settle found this generation's files changed after its latest declaration. A card that
+    declared again since (todo._redeclare_if_done) is not reopened for the older finding."""
+    drift = con.execute("SELECT max(id) FROM events WHERE task_id=? AND kind='research_artifact_drift' "
+                        "AND generation=?", (task_id, generation)).fetchone()[0]
+    declared = con.execute("SELECT max(id) FROM events WHERE task_id=? AND kind='submitted' AND generation=?",
+                           (task_id, generation)).fetchone()[0]
+    return drift is not None and (declared is None or drift > declared)
 
 
 def stop_requested(con, run_id):

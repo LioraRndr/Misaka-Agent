@@ -1,5 +1,6 @@
 """Per-card tools: nested, durable to-do items, and a line in the card's log."""
 import asyncio
+import json
 import os
 import secrets
 import time
@@ -396,6 +397,61 @@ class TodoPart:
             return None
         return row
 
+    def _completed_row(self):
+        """The card this session completed and still sits in: done, at this attempt's
+        generation, its recorded session this one. Completion released the claim, so the
+        generation and the session file are the ownership here."""
+        generation, _ = self._ownership()
+        row = self._bdb.get(self.con(), self.task_id)
+        if generation is None or row is None or row["status"] != "done" or int(row["generation"]) != generation:
+            return None
+        mine = getattr(getattr(self.session, "sessionManager", None), "sessionFile", None)
+        recorded = row["session_file"]
+        if mine and recorded and os.path.realpath(mine) != os.path.realpath(recorded):
+            return None
+        return row
+
+    async def _redeclare_if_done(self):
+        """A finished card whose session went on working declares its outputs again.
+
+        Completion does not end the session: a note from Last Order that crossed the
+        completion, or a Sister's DM, starts more turns in it, and the deliverables they
+        change stayed declared under the old digests. The run's settle then saw bytes that
+        did not match the declaration and, until 2026-09-24, failed the whole run (18 changed
+        paths on 6 cards). The declaration follows the work instead: the same submission the
+        completion built, rebuilt from the output folder, recorded as a newer ``submitted``
+        row for this generation, and indexed again. No model turn is spent on it."""
+        row = self._completed_row()
+        if row is None:
+            return False
+        from misaka.core.network import dispatch, worker
+        con = self.con()
+        generation = int(row["generation"])
+        try:
+            last = json.loads(self._bdb.latest_payload(con, self.task_id, "submitted", generation=generation) or "{}")
+        except (TypeError, ValueError):
+            last = {}
+        if not isinstance(last, dict):
+            last = {}
+        try:
+            submission = worker.build_submission(con, row, str(last.get("summary") or ""))
+            prepared = await asyncio.to_thread(dispatch.prepare_submission, row, submission)
+        except Exception as error:  # noqa: BLE001 - a declaration that cannot be rebuilt is noted, not fatal
+            self._bdb.add_event(con, self.task_id, "redeclare_failed", {"reason": str(error)[:200]},
+                                generation=generation)
+            return False
+        payload = prepared.payload
+        if (payload.get("artifact_digests") == last.get("artifact_digests")
+                and payload.get("artifacts") == last.get("artifacts")):
+            return False
+        with self._bdb.write_txn(con):
+            self._bdb.add_event(con, self.task_id, "submitted", payload, generation=generation)
+            self._bdb.add_event(con, self.task_id, "redeclared",
+                                {"artifacts": len(payload.get("artifacts") or [])}, generation=generation)
+        await asyncio.to_thread(dispatch.accept_side_effects, con, row, submission,
+                                generation=generation, workspace=row["workspace"])
+        return True
+
     def get_permission_settings(self):
         """Delegate only this live card's output writes, never a workspace-wide grant."""
         generation, claim_lock = self._ownership()
@@ -442,6 +498,7 @@ class TodoPart:
         if summary is None or token is None:
             if self._turn_clean and self._completion is None:
                 self._hold_if_running()
+                await self._redeclare_if_done()
             return
         from misaka.core.subagent import extension as subagent
 

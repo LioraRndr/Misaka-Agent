@@ -97,6 +97,42 @@ def test_a_halt_records_the_drift_and_resume_reopens_the_card(state):
     assert row["status"] in {"ready", "todo"} and int(row["generation"]) == 2
 
 
+def test_a_newer_declaration_is_settled_again_and_not_treated_as_drift(state):
+    con, run, root = state
+    tid, paths = _accept(con, run, root, "redeclared", {"f.md": "first\n"})
+    workflow.settle_done_tasks(con, run_id=run["id"])
+    first = runs.artifacts(con, run["id"], task_id=tid)[0]["sha256"]
+
+    path = next(iter(paths.values()))
+    path.write_text("revised, then declared again by the Sister's own session\n")
+    rel = str(path.relative_to(run["workspace"]))
+    prepared = dispatch.prepare_submission(tasks.get(con, tid), {"summary": "fixture", "artifacts": [rel]})
+    tasks.add_event(con, tid, "submitted", prepared.payload, generation=1)
+
+    workflow.settle_done_tasks(con, run_id=run["id"])
+    registered = runs.artifacts(con, run["id"], task_id=tid)
+    assert len(registered) == 1 and registered[0]["sha256"] != first
+    assert registered[0]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert int(tasks.get(con, tid)["generation"]) == 1
+    assert tasks.latest_payload(con, tid, "research_artifact_drift", generation=1) is None
+
+
+def test_resume_ignores_a_drift_older_than_the_latest_declaration(state):
+    con, run, root = state
+    tid, paths = _accept(con, run, root, "stale-drift", {"g.md": "first\n"})
+    path = next(iter(paths.values()))
+    path.write_text("changed\n")
+    workflow.settle_done_tasks(con, run_id=run["id"], reopen_drift=False)
+    assert tasks.latest_payload(con, tid, "research_artifact_drift", generation=1)
+    rel = str(path.relative_to(run["workspace"]))
+    prepared = dispatch.prepare_submission(tasks.get(con, tid), {"summary": "fixture", "artifacts": [rel]})
+    tasks.add_event(con, tid, "submitted", prepared.payload, generation=1)
+
+    runs.set_state(con, run["id"], status="stopped")
+    runs.resume(con, run["id"])
+    assert tasks.get(con, tid)["status"] == "done" and int(tasks.get(con, tid)["generation"]) == 1
+
+
 def test_a_missing_deliverable_is_drift_too(state):
     con, run, root = state
     tid, paths = _accept(con, run, root, "gone", {"e.md": "first\n"})

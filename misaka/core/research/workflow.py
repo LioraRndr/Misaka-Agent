@@ -608,6 +608,26 @@ def _clear_task_outputs(con, run_id, task_id):
     )
 
 
+def _submitted_event_id(con, task_id, generation):
+    row = con.execute("SELECT id FROM events WHERE task_id=? AND kind='submitted' AND generation=? "
+                      "ORDER BY id DESC LIMIT 1", (task_id, generation)).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _settled_current(con, task_id, generation):
+    """Whether this generation's latest settle covered its latest submission. A finished card
+    declares again when its session keeps working after completion (todo._redeclare_if_done),
+    and that newer declaration is registered like the first."""
+    payload = task_store.latest_payload(con, task_id, "research_v2_settled", generation=generation)
+    if not payload:
+        return False
+    try:
+        seen = json.loads(payload).get("submitted_event")
+    except (AttributeError, TypeError, ValueError):
+        seen = None
+    return seen == _submitted_event_id(con, task_id, generation)
+
+
 def settle_done_tasks(con, *, run_id, reopen_drift=True):
     """Register accepted artifacts and ingest the Sisters' findings, once per task generation.
 
@@ -619,7 +639,7 @@ def settle_done_tasks(con, *, run_id, reopen_drift=True):
         if task["status"] != "done":
             continue
         generation = int(task["generation"])
-        if task_store.latest_payload(con, task["id"], "research_v2_settled", generation=generation):
+        if _settled_current(con, task["id"], generation):
             continue
         settled = False
         with task_store.write_txn(con):
@@ -628,7 +648,7 @@ def settle_done_tasks(con, *, run_id, reopen_drift=True):
             current = task_store.get(con, task["id"])
             if current is None or current["generation"] != generation or current["status"] != "done":
                 continue
-            if task_store.latest_payload(con, task["id"], "research_v2_settled", generation=generation):
+            if _settled_current(con, task["id"], generation):
                 continue
             submitted = _submitted_payload(con, current)
             _clear_task_outputs(con, run["id"], task["id"])
@@ -644,6 +664,7 @@ def settle_done_tasks(con, *, run_id, reopen_drift=True):
             result = {"kind": task["research_kind"]}
             if task["research_kind"] not in runs.REVIEW_KINDS:
                 result = ledger.ingest_report(con, run, task, submitted)
+            result = {**result, "submitted_event": _submitted_event_id(con, task["id"], generation)}
             task_store.add_event(
                 con, task["id"], "research_v2_settled", result, generation=generation
             )
