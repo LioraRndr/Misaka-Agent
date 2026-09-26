@@ -10,8 +10,8 @@ import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 from io import StringIO
-from pathlib import Path
 
+from misaka.core.tools._common import regular_file, whole_file_bytes
 from misaka.core.tools.path_utils import resolve_to_cwd
 
 
@@ -565,20 +565,15 @@ def _format_access_error(error: BaseException) -> str:
     return str(error)
 
 
-def _check_readable_file(absolute_path: str) -> None:
-    with open(absolute_path, "rb"):
-        return
-
-
 async def compute_edits_diff(path: str, edits: list[Edit | dict[str, str]], cwd: str) -> EditDiffResult | EditDiffError:
     absolute_path = resolve_to_cwd(path, cwd)
     try:
         try:
-            await asyncio.to_thread(_check_readable_file, absolute_path)
+            await asyncio.to_thread(regular_file, absolute_path)
         except BaseException as error:  # noqa: BLE001 - any access failure becomes the user-facing edit error
             return EditDiffError(error=f"Could not edit file: {path}. {_format_access_error(error)}.")
 
-        raw_content = await asyncio.to_thread(Path(absolute_path).read_text, encoding="utf-8")
+        raw_content = (await asyncio.to_thread(whole_file_bytes, absolute_path, "edit")).decode("utf-8")
         _bom, content = strip_bom(raw_content)
         normalized_content = normalize_to_lf(content)
         applied = apply_edits_to_normalized_content(normalized_content, edits, path)

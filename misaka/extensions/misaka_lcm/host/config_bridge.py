@@ -62,10 +62,28 @@ def database_path(ctx=None) -> str:
     return str(storage.directory(storage.project(ctx)) / "lcm.db")
 
 
+def _session_host_config(ctx) -> dict:
+    """The host config this session reads: settings.json, with the session's own compaction
+    threshold (``misaka.core.session_overrides``, a research run's choice) as its
+    ``lcm.context_threshold`` -- the same channel, so upstream's precedence and its explicit-choice
+    rules (no Codex autoraise over it) treat it exactly as the global setting."""
+    config = load_auxiliary_config()
+    if ctx is None:
+        return config
+    from misaka.core import session_overrides
+
+    from . import ingest
+    threshold = session_overrides.value(ingest.session_id(ctx), "context_threshold")
+    if threshold is None:
+        return config
+    lcm = config.get("lcm") if isinstance(config.get("lcm"), dict) else {}
+    return {**config, "lcm": {**lcm, "context_threshold": float(threshold)}}
+
+
 def load_config(*, database=None, home=None, ctx=None) -> LCMConfig:
     """Keep upstream algorithm settings; the host owns all content paths."""
     from . import settings
-    config = settings.apply(LCMConfig.from_env(host_config=load_auxiliary_config()))
+    config = settings.apply(LCMConfig.from_env(host_config=_session_host_config(ctx)))
     if "LCM_EMBEDDING_QUERY_TIMEOUT_S" not in os.environ:
         # Upstream's 3 s deadline also bounds lcm_grep's full-text arm (it interrupts the
         # SQLite query through a progress handler), and a research project's lcm.db runs to

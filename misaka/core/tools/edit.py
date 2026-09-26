@@ -8,7 +8,6 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +19,8 @@ from misaka.core.tools._common import (
     _drain_worker,
     _string_arg,
     abort_race,
+    regular_file,
+    whole_file_bytes,
     write_file_text,
 )
 from misaka.core.tools.edit_diff import (
@@ -131,19 +132,13 @@ def _ensure_edit_call_render_component(component: Box) -> _EditCallRenderCompone
 @dataclass(slots=True)
 class _DefaultEditOperations:
     async def readFile(self, absolute_path: str) -> bytes:
-        return await asyncio.to_thread(Path(absolute_path).read_bytes)
+        return await asyncio.to_thread(whole_file_bytes, absolute_path, "edit")
 
     async def writeFile(self, absolute_path: str, content: str) -> None:
         await asyncio.to_thread(write_file_text, absolute_path, content)   # follows symlinks; keeps the file's mode
 
     async def access(self, absolute_path: str) -> None:
-        def _check() -> None:
-            with open(absolute_path, "rb"):
-                pass
-            with open(absolute_path, "r+b"):
-                pass
-
-        await asyncio.to_thread(_check)
+        await asyncio.to_thread(regular_file, absolute_path, writable=True)
 
 
 def _coerce_options(options: EditToolOptions | Mapping[str, Any] | None) -> EditToolOptions:

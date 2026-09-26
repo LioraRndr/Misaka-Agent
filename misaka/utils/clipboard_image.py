@@ -285,7 +285,10 @@ def read_clipboard_image_via_xclip(*, env: dict[str, str] | None = None) -> Clip
 
 async def read_clipboard_image_via_native_clipboard() -> ClipboardImage | None:
     clipboard = _get_native_clipboard()
-    if clipboard is None or not clipboard.has_image():
+    # MISAKA fork: pi asks the native clipboard for its types before reading. Pillow has no
+    # cheap probe -- ``has_image`` grabs the whole image, synchronously on the event loop --
+    # so read once off the loop; ``get_image_binary`` answers None when there is no image.
+    if clipboard is None:
         return None
 
     image_data = await clipboard.get_image_binary()

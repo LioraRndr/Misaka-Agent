@@ -243,7 +243,7 @@ async def node_session(con, cfg, run, node):
 
     flags, assembly, env = role_session_setup(
         os.path.join(cfg["roles_root"], "last_order"), run["workspace"],
-        research_context=True)
+        research_context=True, overrides=runs.session_overrides(run))
     flags += ["--session-dir", directory]
     if session_file:
         flags += ["--session", session_file]

@@ -117,7 +117,7 @@ async def test_chat_saves_and_displays_sister_limit(board, tmp_path, monkeypatch
                                          "plan_approval": True}
         assert "LO parallelism 1 | Sister cards per LO 8" in research._status(board, driven[0]["id"], str(tmp_path))
         if entry == "picker":
-            assert len(questions) == 5
+            assert len(questions) == 7
             question = next(q for q in questions if q["question"] == research._SISTER_PARALLEL_QUESTION)
             assert [o["label"] for o in question["options"]] == ["4", "1", "8"]
     finally:
@@ -239,3 +239,17 @@ async def test_sister_width_keeps_global_admission_and_dependencies(board, tmp_p
                                          scope={*ids, dependent}, captured={}, poll_seconds=0)
     assert len(admitted) == expected
     assert tasks.get(board, dependent)["status"] == "todo"
+
+
+@pytest.mark.parametrize("text,depth,question", [
+    ("1968 student movements in Japan", research.runs.DEFAULT_LIMITS["max_depth"], "1968 student movements in Japan"),
+    ("3 main causes of the Meiji Restoration", research.runs.DEFAULT_LIMITS["max_depth"],
+     "3 main causes of the Meiji Restoration"),
+    ("2", 2, ""),
+    ("4 --parallel 2 Why did it fail?", 4, "Why did it fail?"),
+    ("--depth 4 1968 student movements", 4, "1968 student movements"),
+    ("--parallel 2 3 main causes", research.runs.DEFAULT_LIMITS["max_depth"], "3 main causes"),
+])
+def test_a_question_may_start_with_a_number(text, depth, question):
+    spec = research.parse_command(text)
+    assert (spec["depth"], spec["question"]) == (depth, question)

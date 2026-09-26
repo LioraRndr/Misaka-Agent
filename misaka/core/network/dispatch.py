@@ -277,7 +277,7 @@ def run_task(con, t, cfg):
         with db.write_txn(con):
             settle = db.mark_failed if isinstance(error, Exception) else db.back_to_ready
             reason = f"{type(error).__name__}: {error}"[:2000]
-            details = {"reason": reason} if isinstance(error, Exception) else {}
+            details = {"reason": reason, "failure_kind": "crash"} if isinstance(error, Exception) else {}
             if settle(con, t["id"], generation=generation, claim_lock=lock, **details):
                 db.add_event(con, t["id"], "dispatch_error",
                              {"reason": reason},

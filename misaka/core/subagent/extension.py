@@ -566,8 +566,9 @@ class SubagentPart:
             self._catalog_diagnostics = diagnostics
         get_tools = getattr(self.session, "getAllTools", None)
         tools = get_tools() if get_tools is not None else []
-        available_servers = [tool.name.split("__", 2)[1] for tool in tools
-                             if tool.name.startswith("mcp__") and tool.name.count("__") >= 2]
+        from misaka.core import mcp
+
+        available_servers = [server for tool in tools if (server := mcp.server_of(tool.name))]
         from misaka.core.subagent.configuration import denied_agent_types
 
         denied_agents = denied_agent_types(self.session, cwd=cwd, include_project=trusted)

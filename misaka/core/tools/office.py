@@ -262,11 +262,11 @@ def create_office_tool_definition(
     def render_call(args: Any, theme_obj: Any, context: Any) -> Text:
         text = context.lastComponent if isinstance(context.lastComponent, Text) else Text("", 0, 0)
         raw_path = str_value(read_field(args, "path")) or ""
-        shown = render_tool_path(raw_path, context.cwd) if raw_path else ""
+        shown = render_tool_path(raw_path, theme_obj, context.cwd) if raw_path else ""
         raw_ops = read_field(args, "ops")
         count = len(raw_ops) if isinstance(raw_ops, list) else 0
-        suffix = f" ({count} ops)" if count else ""
-        text.setText(theme_obj.fg("secondary", f"office {shown}{suffix}"))
+        suffix = theme_obj.fg("muted", f" ({count} ops)") if count else ""
+        text.setText(f"{theme_obj.fg('toolTitle', theme_obj.bold('office'))} {shown}{suffix}")
         return text
 
     def render_result(result: Any, _options: Any, theme_obj: Any, context: Any) -> Text:
@@ -274,7 +274,7 @@ def create_office_tool_definition(
         content = read_field(result, "content", [])
         body = "\n".join((read_field(block, "text") or "") for block in content
                          if read_field(block, "type") == "text") if isinstance(content, list) else ""
-        colour = "error" if read_field(result, "isError") else "secondary"
+        colour = "error" if read_field(result, "isError") else "toolOutput"
         text.setText(theme_obj.fg(colour, body))
         return text
 

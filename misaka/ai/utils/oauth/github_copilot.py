@@ -29,6 +29,9 @@ COPILOT_HEADERS = {
     "Editor-Plugin-Version": "copilot-chat/0.35.0",
     "Copilot-Integration-Id": "vscode-chat",
 }
+# MISAKA fork: pi's fetch inherits undici's own ceiling; httpx with ``timeout=None`` waits
+# forever. Same bound as the other OAuth flows here (xai, kimi, meta, radius).
+REQUEST_TIMEOUT_MS = 30 * 1000
 
 
 def normalize_domain(input_text: str) -> str | None:
@@ -89,7 +92,7 @@ def get_github_copilot_base_url(token: str | None = None, enterprise_domain: str
 
 
 async def _fetch_json(url: str, **kwargs: Any) -> Any:
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_MS / 1000) as client:
         response = await client.request(kwargs.pop("method", "GET"), url, **kwargs)
     if response.status_code >= 400:
         raise RuntimeError(f"{response.status_code} {response.reason_phrase}: {response.text}")
@@ -203,7 +206,8 @@ async def _enable_github_copilot_model(token: str, model_id: str, enterprise_dom
     base_url = get_github_copilot_base_url(token, enterprise_domain)
     url = f"{base_url}/models/{model_id}/policy"
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        # pi bounds this request at 5 s (``AbortSignal.timeout(5000)`` in fetchWithRateLimitRetry).
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 url,
                 headers={

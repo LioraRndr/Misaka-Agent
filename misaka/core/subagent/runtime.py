@@ -2119,6 +2119,9 @@ class SubagentManager:
             env["MISAKA_PROFILE_DIR"] = self.role_context.profile_dir
         else:
             env.pop("MISAKA_PROFILE_DIR", None)
+        # A session's own settings are named for one child (a Sister card's), never inherited.
+        from misaka.core.session_overrides import ENV as SESSION_OVERRIDES_ENV
+        env.pop(SESSION_OVERRIDES_ENV, None)
         env.update(self.child_env_extra(task))
         if task.forked:
             env["MISAKA_FORK_CHILD"] = "1"

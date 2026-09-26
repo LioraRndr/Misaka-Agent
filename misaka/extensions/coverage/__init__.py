@@ -1,10 +1,19 @@
-"""coverage_scan: where does a question actually live in the literature? OpenAlex, grouped by
-subfield and topic, so a plan is checked against the field's real distribution rather than
-the planner's memory. Every role, including the resident headless sessions used by Research."""
+"""The coverage check for research designs: the ``coverage-maps`` skill (maps of fields,
+facets, kinds of question and traditions, read on demand) and ``coverage_scan`` (where a
+question actually lives in the literature: OpenAlex, grouped by subfield and topic), so a plan
+is checked against more than the planner's memory. Every role, including the resident headless
+sessions used by Research.
+
+The maps ship here rather than as a skill to install: the scan is step 0 of the maps'
+procedure, and a separately installed copy could go missing while the scan stayed loaded,
+leaving half a check. A field's own maps are a skill of their own in the project's
+``skills/``; a ``coverage-maps`` copy left in a skill layer by an older install is listed
+beside this one and answers to the unprefixed name."""
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import urllib.parse
 import urllib.request
 
@@ -13,6 +22,7 @@ from misaka.ai.utils.user_agent import get_misaka_user_agent
 SESSION_KINDS = {"foreground", "dm", "card", "bare"}
 API = "https://api.openalex.org"
 LIMIT = 12
+SKILLS = os.path.join(os.path.dirname(__file__), "skills")
 
 
 def _get(path, **params):
@@ -86,6 +96,11 @@ def register(harn):
         promptGuidelines=[("Use coverage_scan when checking a research design for overlooked fields. Rephrase weak "
                           "queries when useful. Counts are discovery signals, not measures of relevance, quality, "
                           "or completeness; sparse coverage or a failed scan does not establish a research gap.")]))
+
+    async def discover_resources(event, ctx):
+        return {"skillPaths": [SKILLS]}
+
+    harn.on("resources_discover", discover_resources)
 
 
 def activate(spec):

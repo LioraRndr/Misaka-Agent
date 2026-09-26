@@ -143,3 +143,39 @@ async def test_both_live_view_and_saved_index_preserve_binary_paths_without_payl
         assert runs.artifact(con, aid)['kind'] == 'workspace_index'
     finally:
         con.close()
+
+
+FENCED = ('# Real heading\n'
+          '```python\n# a comment in code\n```\n'
+          '~~~\n## shell prompt\n~~~\n'
+          '#hashtag is prose\n'
+          '   ## Indented heading ##\n'
+          '    # four spaces is code\n')
+
+
+def test_code_and_hashtags_are_not_artifact_headings(tmp_path):
+    node = workspace._artifact_node(artifact(tmp_path, content=FENCED.encode()))
+    assert [(h['node_id'], h['title']) for h in node['nodes']] == [
+        ('artifact:a_fixture#L1', 'Real heading'), ('artifact:a_fixture#L9', 'Indented heading')]
+
+
+def test_project_brief_outline_reads_headings_like_artifacts(tmp_path):
+    (tmp_path / 'PROJECT.md').write_text(FENCED)
+    node = workspace._project_file(str(tmp_path))
+    assert [(h['node_id'], h['title']) for h in node['nodes']] == [
+        ('project#L1', 'Real heading'), ('project#L9', 'Indented heading')]
+    assert node['summary'] == 'Project brief'
+
+
+def test_project_brief_outline_is_bounded(tmp_path):
+    (tmp_path / 'PROJECT.md').write_text(''.join(f'# {n} ' + 'x' * 1000 + '\n' for n in range(130)))
+    node = workspace._project_file(str(tmp_path))
+    assert len(node['nodes']) == 120
+    assert max(len(h['title']) for h in node['nodes']) <= 200
+    assert 'truncated' in node['summary']
+
+
+def test_conclusion_nesting_moves_indented_headings_and_leaves_code_alone():
+    text = '## Finding\n```\n# not a heading\n```\n  ### Detail\n'
+    assert workflow._nested(text, 3).splitlines() == [
+        '#### Finding', '```', '# not a heading', '```', '##### Detail']

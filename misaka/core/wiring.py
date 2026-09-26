@@ -66,6 +66,9 @@ class SessionSpec:
     # Optional one-call catalog snapshot shared with Research's assignment validator.
     sister_catalog: tuple[dict[str, Any], ...] | None = None
     research_context: bool = False
+    # Settings this session runs with instead of the global ones, as ``(key, value)`` pairs
+    # (``misaka.core.session_overrides``): a research run's compaction threshold and output limit.
+    overrides: tuple[tuple[str, Any], ...] = ()
 
 
 # Shared entries by name, then Last Order's, then the Sisters': the folder scan's order.
@@ -122,6 +125,7 @@ PART_MODULES: tuple[str, ...] = (
     "misaka.core.research.wiring.research",
     "misaka.core.research.wiring.node",
     "misaka.core.subagent",
+    "misaka.core.session_overrides",
 )
 
 
@@ -246,8 +250,14 @@ class Assembly:
         return bool(self.spec and self.spec.kind == "child")
 
 
+def spec_overrides(overrides) -> tuple[tuple[str, Any], ...]:
+    """``SessionSpec.overrides`` from a mapping (None or empty: the global settings)."""
+    from misaka.core.session_overrides import clean
+    return tuple(sorted(clean(overrides).items()))
+
+
 def role_session_setup(profile_dir, workspace, *, model=None,
-                       receive_messages=False, research_context=False, startup_skills=()):
+                       receive_messages=False, research_context=False, startup_skills=(), overrides=None):
     """One role session entry, independent of terminal, root/fork and lifetime.
 
     Callers add only their transport/session-selection flags. Research changes the
@@ -266,7 +276,8 @@ def role_session_setup(profile_dir, workspace, *, model=None,
     assembly = assemble(SessionSpec(
         profile_dir=profile_dir, role=role, workspace=workspace, kind="foreground",
         sender=sender, mcp_role=sender, receive_messages=receive_messages,
-        research_context=research_context, startup_skills=tuple(startup_skills)))
+        research_context=research_context, startup_skills=tuple(startup_skills),
+        overrides=spec_overrides(overrides)))
     from misaka.config import env as env_file
 
     # The role's own .env first (its vendor keys, its plugin knobs), then the hand-off names.

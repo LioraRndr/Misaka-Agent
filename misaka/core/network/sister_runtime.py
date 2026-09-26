@@ -246,6 +246,7 @@ class _SisterManager(SubagentManager):
         self.records_usage = True
         self.beast = False
         self.research = dict(row).get("_research")
+        self.session_overrides = dict(row).get("_session_overrides") or {}
         from misaka.core.model_resolver import findExactModelReferenceMatch
         from misaka.core.subagent.model import (
             normalize_model_for_api,
@@ -373,8 +374,12 @@ class _SisterManager(SubagentManager):
 
     def child_env_extra(self, _task: AgentTask) -> dict[str, str]:
         # The child indexes the read-only copies this manager made, never the live trees.
+        from misaka.core import session_overrides
+
         return {"MISAKA_SKILL_SANDBOX": self.skill_root,
-                "MISAKA_RESEARCH_CONTEXT": "1" if self.research else "0"}
+                "MISAKA_RESEARCH_CONTEXT": "1" if self.research else "0",
+                # The run's compaction threshold and output limit, for this Sister's session only.
+                **session_overrides.to_env(getattr(self, "session_overrides", None))}
 
     def _child_tool_vocabulary(self) -> list[str] | None:
         """A Sister card is a root of her own, not a worker inside Last Order's pool.
@@ -689,6 +694,7 @@ class SisterRuntime:
                             raise RuntimeError("The Sister session is incomplete.")
                         manager.beast = bool(prepared.get("beast"))
                         manager.research = prepared.get("_research")
+                        manager.session_overrides = prepared.get("_session_overrides") or {}
                         await manager.send_message(
                             agent.id,
                             prompt,
@@ -1164,6 +1170,7 @@ class SisterRuntime:
                     handle.board_id,
                     generation=handle.generation,
                     claim_lock=handle.claim_lock,
+                    failure_kind="crash",
                 ) and not self._closing:
                     await self._notify(handle, token)
         finally:

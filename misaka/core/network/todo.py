@@ -559,7 +559,7 @@ class TodoPart:
                 )
                 self._bdb.mark_failed(
                     self.con(), self.task_id, generation=row["generation"],
-                    claim_lock=row["claim_lock"], reason=f"finalizer: {error}",
+                    claim_lock=row["claim_lock"], failure_kind="crash", reason=f"finalizer: {error}",
                 )
         if self._summary_token is token and (accepted or self._owned_row() is None):
             self._summary = self._summary_token = None

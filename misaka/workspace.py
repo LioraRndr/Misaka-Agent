@@ -5,10 +5,11 @@ import re
 
 from misaka.core.documents import index as corpus
 from misaka.core.platform import cards
+from misaka.utils.markdown import atx_headings
 
-_ARTIFACT_SCAN_CHARS = 256 * 1024
-_ARTIFACT_MAX_HEADINGS = 120
-_ARTIFACT_MAX_TITLE_CHARS = 200
+_OUTLINE_SCAN_CHARS = 256 * 1024
+_OUTLINE_MAX_HEADINGS = 120
+_OUTLINE_MAX_TITLE_CHARS = 200
 
 
 def _doc_node(m, workspace=None):
@@ -41,28 +42,34 @@ def _artifact_node(row):
         return node
     try:
         with open(row["path"], encoding="utf-8") as f:
-            text = f.read(_ARTIFACT_SCAN_CHARS + 1)
+            text = f.read(_OUTLINE_SCAN_CHARS + 1)
     except (OSError, UnicodeError):
         return node
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", text):
         return node  # A misleading .md suffix must not turn binary controls into prose.
-    truncated = len(text) > _ARTIFACT_SCAN_CHARS
-    if truncated:
-        text = text[:_ARTIFACT_SCAN_CHARS].rpartition("\n")[0]  # Only complete physical lines.
-    for lineno, line in enumerate(text.split("\n"), 1):
-        stripped = line.lstrip()
-        if stripped.startswith("#") and (title := stripped.lstrip("#").strip()):
-            if len(node["nodes"]) == _ARTIFACT_MAX_HEADINGS:
-                truncated = True
-                break
-            preview = (title if len(title) <= _ARTIFACT_MAX_TITLE_CHARS
-                       else title[:_ARTIFACT_MAX_TITLE_CHARS - 1] + "…")
-            truncated |= preview != title
-            node["nodes"].append({"node_id": f"artifact:{row['id']}#L{lineno}",
-                                  "title": preview, "summary": f"Line {lineno}"})
+    node["nodes"], truncated = _heading_nodes(text, f"artifact:{row['id']}")
     if truncated:
         node["summary"] += " · heading preview truncated; read the file for more"
     return node
+
+
+def _heading_nodes(text, node_id):
+    """Outline nodes for the Markdown headings in the first ``_OUTLINE_SCAN_CHARS`` of ``text``,
+    bounded in count and title length, and whether anything was left out or cut short."""
+    truncated = len(text) > _OUTLINE_SCAN_CHARS
+    if truncated:
+        text = text[:_OUTLINE_SCAN_CHARS].rpartition("\n")[0]  # Only complete physical lines.
+    nodes = []
+    for index, _level, title in atx_headings(text.split("\n")):
+        if not title:
+            continue
+        if len(nodes) == _OUTLINE_MAX_HEADINGS:
+            return nodes, True
+        preview = (title if len(title) <= _OUTLINE_MAX_TITLE_CHARS
+                   else title[:_OUTLINE_MAX_TITLE_CHARS - 1] + "…")
+        truncated |= preview != title
+        nodes.append({"node_id": f"{node_id}#L{index + 1}", "title": preview, "summary": f"Line {index + 1}"})
+    return nodes, truncated
 
 
 def _project_file(workspace):
@@ -72,19 +79,14 @@ def _project_file(workspace):
     path = os.path.join(workspace, "PROJECT.md")
     if not os.path.isfile(path):
         return None
-    children = []
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            for lineno, line in enumerate(f, 1):
-                stripped = line.lstrip()
-                if stripped.startswith("#"):
-                    children.append({"node_id": f"project#L{lineno}",
-                                     "title": stripped.lstrip("#").strip(),
-                                     "summary": f"Line {lineno}"})
+            text = f.read(_OUTLINE_SCAN_CHARS + 1)
     except OSError:
         return None
-    return {"node_id": "project", "title": "PROJECT.md", "summary": "Project brief", "path": path,
-            "nodes": children}
+    children, truncated = _heading_nodes(text, "project")
+    summary = "Project brief" + (" · heading preview truncated; read the file for more" if truncated else "")
+    return {"node_id": "project", "title": "PROJECT.md", "summary": summary, "path": path, "nodes": children}
 
 
 def _session_node(node_id, title, path):

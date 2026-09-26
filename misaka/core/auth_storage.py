@@ -131,20 +131,28 @@ class FileAuthStorageBackend(AuthStorageBackend):
             return
         parent_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
+    def _target(self) -> str:
+        """The file the credentials live in. ``auth.json`` may be a symlink (a dotfiles repo),
+        followed once here; every open and write then works on the file it names, so a write
+        replaces that file and leaves the link in place. A second hard link is allowed too, but
+        the atomic replace gives the target a new inode, which detaches the other name."""
+        return os.path.realpath(self.authPath)
+
     @staticmethod
     def _validate_file_stat(value: os.stat_result) -> None:
         if not stat.S_ISREG(value.st_mode):
             raise RuntimeError("Auth storage must be a regular file")
-        if value.st_nlink != 1:
-            raise RuntimeError("Auth storage must not be hard-linked")
+        if hasattr(os, "getuid") and value.st_uid != os.getuid():
+            raise RuntimeError("Auth storage must be owned by the current user")
         if value.st_size == 0:
             raise RuntimeError("Auth storage is empty; restore or remove it before retrying")
 
     def _open_existing(self) -> int:
-        before = os.lstat(self.authPath)
+        target = self._target()
+        before = os.lstat(target)
         self._validate_file_stat(before)
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(self.authPath, flags)
+        fd = os.open(target, flags)
         try:
             opened = os.fstat(fd)
             self._validate_file_stat(opened)
@@ -171,9 +179,10 @@ class FileAuthStorageBackend(AuthStorageBackend):
                 os.close(fd)
             return
 
+        target = self._target()
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         try:
-            fd = os.open(self.authPath, flags, 0o600)
+            fd = os.open(target, flags, 0o600)
         except FileExistsError:                            # another creator won; trust it only after validation
             fd = self._open_existing()
             try:
@@ -201,9 +210,9 @@ class FileAuthStorageBackend(AuthStorageBackend):
             except OSError:
                 pass
             try:
-                current = os.lstat(self.authPath)
+                current = os.lstat(target)
                 if created is not None and (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
-                    os.unlink(self.authPath)
+                    os.unlink(target)
             except OSError:
                 pass
             raise
@@ -299,7 +308,7 @@ class FileAuthStorageBackend(AuthStorageBackend):
             current, self._current_revision = self._read_file()
             outcome = fn(current)
             if outcome.next is not None:
-                atomic.write_text(self.authPath, outcome.next, mode=0o600)
+                atomic.write_text(self._target(), outcome.next, mode=0o600)
             if outcome.publish is not None:
                 outcome.publish()
             return outcome.result
@@ -328,7 +337,7 @@ class FileAuthStorageBackend(AuthStorageBackend):
             self._assert_lock_uncompromised(expected_signature)
             _throw_if_aborted(options)
             if outcome.next is not None:
-                atomic.write_text(self.authPath, outcome.next, mode=0o600)
+                atomic.write_text(self._target(), outcome.next, mode=0o600)
             self._assert_lock_uncompromised(expected_signature)
             if outcome.publish is not None:
                 outcome.publish()

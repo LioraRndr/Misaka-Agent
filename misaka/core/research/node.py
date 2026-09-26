@@ -410,7 +410,8 @@ def run_interactive(run_id, node_id, *, runner_key):
     profile = os.path.join(cfg["roles_root"], "last_order")
     from misaka.core.wiring import role_session_setup
 
-    flags, assembly, env = role_session_setup(profile, run["workspace"], research_context=True)
+    flags, assembly, env = role_session_setup(profile, run["workspace"], research_context=True,
+                                              overrides=runs.session_overrides(run))
     flags += ["--session-dir", planner._lo_session(run, node)]
     if node["session_file"] and os.path.exists(node["session_file"]):
         flags += ["--session", node["session_file"]]    # a resumed node goes on in its own conversation

@@ -2670,6 +2670,13 @@ class InteractiveMode(Conversation):
         return renderer
 
     def _rememberUserMessage(self, message: Any, options: dict[str, Any] | None) -> None:
+        # MISAKA fork: pi's editor history lives in memory, so every render of a session refills it
+        # from the transcript. Here it is a file that already holds what was typed; refilling it
+        # appended the whole session again on every open, resume and reload (one role's history
+        # ended up as the same four prompts twenty times over, and a compaction replay that was
+        # never typed at all), so a history that persists is left to what the user submits.
+        if getattr(self.editor, "historyFile", None):
+            return
         if _message_role(message) == "user" and read_field(options, "populateHistory", False):
             add_history = _callable_attr(self.editor, "addToHistory")
             text = user_text(message)

@@ -13,11 +13,19 @@ Research runs in a project folder and needs at least one Sister (`misaka create 
 - `/research` on its own opens a picker, then takes your next message as the question. It asks
   for the depth (2 for a quick pass, 5 for standard deep research, 10 for an exhaustive and costly
   one), how many Last Order nodes may run at once (4, 1 or 8), how many Sister cards each node may
-  run at once (4, 1 or 8), how many extra rounds a node may take (2, 0 or 4), and whether plans
-  wait for your approval. Choose "Chat about this" to talk the options over with Last Order first.
-- `/research [DEPTH] [--parallel N] [--sister-parallel N] [--followups N] QUESTION` starts at once.
+  run at once (4, 1 or 8), how many extra rounds a node may take (2, 0 or 4), whether plans
+  wait for your approval, when this run's sessions compact their context (your global
+  `lcm.context_threshold`, 0.5 or 0.85 of the window) and how long each reply may be (each model's
+  own maximum, 64k or 32k tokens). The last two apply only to this run -- the window you started it
+  in while the run works there, its fork nodes and its Sisters' cards -- and never change your
+  settings; an output limit above a model's own maximum stays at that maximum. "Other" takes your
+  own value (`0.6` or `60%`; `48k`). Choose "Chat about this" to talk the options over with Last Order first.
+- `/research [--depth N] [--parallel N] [--sister-parallel N] [--followups N] QUESTION` starts at once.
   Unset options take the defaults: depth 3, 4 nodes at once, 4 Sister cards per node, 2 extra
   rounds, and plan approval as `research.plan_approval` in `settings.json` says (on by default).
+  A question may start with a number (`/research 1968 student movements in Japan`). A bare number
+  is read as the depth only when nothing but options follows it: `/research 3` sets the depth and
+  takes your next message as the question, and `/research 3 --parallel 2 QUESTION` works as before.
 
 **From the shell**, in the project folder:
 

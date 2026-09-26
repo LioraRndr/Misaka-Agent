@@ -434,7 +434,8 @@ async def amain() -> int:
     mcp_role = os.environ.get("MISAKA_MCP_ROLE") or role
     card = os.environ.get("MISAKA_SISTER_OWNER_TASK_ID")    # set only on the child that is a card's own session
     sandbox = os.environ.get("MISAKA_SKILL_SANDBOX")         # a Sister card: the parent's read-only skill copies
-    from misaka.core.wiring import SessionSpec, assemble
+    from misaka.core import session_overrides
+    from misaka.core.wiring import SessionSpec, assemble, spec_overrides
     runtime, session, error = await engine_session.open_session(
         flags,
         workspace,
@@ -449,6 +450,7 @@ async def amain() -> int:
             task_id=card,
             research_context=bool(card) and os.environ.get("MISAKA_RESEARCH_CONTEXT") == "1",
             skill_roots=(("sandbox", sandbox),) if sandbox else None,
+            overrides=spec_overrides(session_overrides.from_env()) if card else (),
         )),
     )
     if error:
@@ -935,15 +937,16 @@ async def amain() -> int:
             }
         )
 
+    from misaka.core import mcp
+
     def mcp_server_names() -> list[str]:
         try:
             registered = session.getAllTools()
             return list(
                 dict.fromkeys(
-                    name.split("__", 2)[1]
+                    server
                     for tool in registered
-                    if (name := str(read_field(tool, "name", "")))
-                    if name.startswith("mcp__") and name.count("__") >= 2
+                    if (server := mcp.server_of(read_field(tool, "name", "")))
                 )
             )
         except (AttributeError, RuntimeError):
@@ -957,8 +960,7 @@ async def amain() -> int:
         required_mcp = []
     if fork_snapshot is not None:
         required_mcp.extend(
-            item["name"].split("__", 2)[1] for item in fork_snapshot["tools"]
-            if str(item.get("name", "")).startswith("mcp__") and item["name"].count("__") >= 2
+            server for item in fork_snapshot["tools"] if (server := mcp.server_of(item.get("name")))
         )
     from misaka.config.product import setting
 
@@ -966,7 +968,7 @@ async def amain() -> int:
     while required_mcp:
         active_mcp_servers = mcp_server_names()
         if all(
-            any(pattern.casefold() in name.casefold() for name in active_mcp_servers)
+            any(mcp.server_matches(pattern, name) for name in active_mcp_servers)
             for pattern in required_mcp
         ):
             break

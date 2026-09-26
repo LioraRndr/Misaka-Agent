@@ -112,9 +112,11 @@ async def test_chat_mode_survives_pending_and_startup_retry(chat, board, tmp_pat
     if entry not in {"pending", "direct"}:
         assert [q["question"] for q in chat.questions] == [
             research._DEPTH_QUESTION, research._PARALLEL_QUESTION,
-            research._SISTER_PARALLEL_QUESTION, research._ROUNDS_QUESTION, research._APPROVAL_QUESTION]
+            research._SISTER_PARALLEL_QUESTION, research._ROUNDS_QUESTION, research._APPROVAL_QUESTION,
+            research._THRESHOLD_QUESTION, research._OUTPUT_QUESTION]
         expected_labels = ["Require approval", "Automatic"] if default else ["Automatic", "Require approval"]
-        assert [option["label"] for option in chat.questions[-1]["options"]] == expected_labels
+        approval = next(q for q in chat.questions if q["question"] == research._APPROVAL_QUESTION)
+        assert [option["label"] for option in approval["options"]] == expected_labels
     # Selecting a mode is a per-run snapshot, not a write to the global setting.
     assert chat.cfg["research_plan_approval"] is default
     chat.cfg["research_plan_approval"] = not expected

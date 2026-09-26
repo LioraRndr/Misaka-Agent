@@ -44,6 +44,10 @@ DEVICE_VERIFICATION_URI = f"{AUTH_BASE_URL}/codex/device"
 # loopback one the browser flow uses, so the exchange has to name that redirect instead.
 DEVICE_REDIRECT_URI = f"{AUTH_BASE_URL}/deviceauth/callback"
 DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60
+# MISAKA fork: pi's fetch inherits undici's own ceiling; httpx with ``timeout=None`` waits
+# forever, which leaves a refresh (and every request queued behind its lock) hanging on a
+# stalled token endpoint. Same bound as the other OAuth flows here (xai, kimi, meta, radius).
+REQUEST_TIMEOUT_MS = 30 * 1000
 LOGIN_METHOD_BROWSER = "browser"
 LOGIN_METHOD_DEVICE_CODE = "device_code"
 SCOPE = "openid profile email offline_access"
@@ -117,7 +121,7 @@ def _decode_jwt(token: str) -> dict[str, Any] | None:
 
 
 async def _exchange_authorization_code(code: str, verifier: str, redirect_uri: str = REDIRECT_URI) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_MS / 1000) as client:
         response = await client.post(
             TOKEN_URL,
             data={
@@ -150,7 +154,7 @@ async def _exchange_authorization_code(code: str, verifier: str, redirect_uri: s
 
 async def _refresh_access_token(refresh_token: str) -> dict[str, Any]:
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_MS / 1000) as client:
             response = await client.post(
                 TOKEN_URL,
                 data={
@@ -183,7 +187,7 @@ async def _refresh_access_token(refresh_token: str) -> dict[str, Any]:
 async def _start_device_auth(signal: Any = None) -> dict[str, Any]:
     """Ask OpenAI for a user code the person types on another device."""
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_MS / 1000) as client:
             response = await client.post(DEVICE_USER_CODE_URL, json={"client_id": CLIENT_ID})
     except Exception as error:
         if signal_aborted(signal):
@@ -241,7 +245,7 @@ async def _poll_device_auth(device: dict[str, Any], signal: Any = None) -> dict[
 
     async def poll() -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_MS / 1000) as client:
                 response = await client.post(
                     DEVICE_TOKEN_URL,
                     json={"device_auth_id": device["deviceAuthId"], "user_code": device["userCode"]},

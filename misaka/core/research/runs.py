@@ -149,6 +149,9 @@ ACTIVE = ("active", "waiting_input", "stopping")
 NODE_TERMINAL = ("closed", "failed", "parked")
 # closing = own research complete, waiting for child nodes; no filesystem merge
 DEFAULT_LIMITS = {"max_depth": 3, "parallel": 4, "sister_parallel": 4, "max_followups": 2}
+# A run's own compaction threshold, as a share of the context window: below a tenth a session would
+# compact on nearly every turn, above 0.95 there is no room left to compact into.
+MIN_CONTEXT_THRESHOLD, MAX_CONTEXT_THRESHOLD = 0.1, 0.95
 RESEARCH_SCHEMA_VERSION = 16   # task planning stays in the card session; no separate plan-artifact link
 DRIVER_TTL_SECONDS = 300
 RESEARCH_TABLES = (
@@ -370,7 +373,26 @@ def normalize_limits(raw=None):
         if not isinstance(raw["plan_approval"], bool):
             raise ValueError("plan_approval must be a boolean")
         result["plan_approval"] = raw["plan_approval"]
+    # The run's own session settings; absent, its sessions follow the global ones.
+    if raw.get("context_threshold") is not None:
+        threshold = raw["context_threshold"]
+        if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+                or not MIN_CONTEXT_THRESHOLD <= threshold <= MAX_CONTEXT_THRESHOLD):
+            raise ValueError(f"context_threshold must be a fraction between {MIN_CONTEXT_THRESHOLD} and {MAX_CONTEXT_THRESHOLD}")
+        result["context_threshold"] = float(threshold)
+    if raw.get("max_output_tokens") is not None:
+        cap = raw["max_output_tokens"]
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1024:
+            raise ValueError("max_output_tokens must be an integer of at least 1024")
+        result["max_output_tokens"] = cap
     return result
+
+
+def session_overrides(run):
+    """What the run's sessions -- its Last Order windows and its Sisters' cards -- run with instead
+    of the global settings: its compaction threshold and output limit, when it chose them."""
+    chosen = limits(run) if run is not None else {}
+    return {key: chosen[key] for key in ("context_threshold", "max_output_tokens") if key in chosen}
 
 
 def prepare_runner(con, table, row_id):

@@ -8,17 +8,24 @@ and from usage already reported by earlier requests.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import copy
 import inspect
+import io
 import json
+import math
 import os
 import secrets
+from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
 from misaka.utils.values import read_field
 
 CONTEXT_FRAMING_TOKENS = 4096
+# Providers that bill a flat amount per image, whatever its size, stay under this.
+IMAGE_TOKEN_FLOOR = 2560
 
 
 def usage_tokens(usage: Any) -> int:
@@ -43,13 +50,73 @@ def usage_tokens(usage: Any) -> int:
     )
 
 
+def image_token_upper_bound(width: int, height: int) -> int:
+    """Most tokens a supported provider charges for one image of this size.
+
+    Each term is one provider family's published accounting, taken on the unscaled size
+    (providers only ever scale down): Anthropic's w*h/750, OpenAI's 32 px patches at the
+    largest per-model multiplier (2.46), OpenAI's 512 px tiles at 170 each plus 85, and
+    Gemini's 768 px tiles at 258 each.
+    """
+    return max(
+        math.ceil(width * height / 750),
+        math.ceil(math.ceil(width / 32) * math.ceil(height / 32) * 2.46),
+        math.ceil(width / 512) * math.ceil(height / 512) * 170 + 85,
+        math.ceil(width / 768) * math.ceil(height / 768) * 258,
+        IMAGE_TOKEN_FLOOR,
+    )
+
+
+# Keyed by (length, hash), never by the base64 itself: every request re-measures the same images,
+# and a cache holding the strings would keep megabytes of image data alive after the context
+# that carried them has been compacted away.
+_IMAGE_SIZES: OrderedDict[tuple[int, int], tuple[int, int] | None] = OrderedDict()
+_IMAGE_SIZES_KEPT = 256
+
+
+def _image_size(data: str) -> tuple[int, int] | None:
+    """Pixel size of a base64 image, read from its header; None when it cannot be read."""
+    key = (len(data), hash(data))
+    if key in _IMAGE_SIZES:
+        _IMAGE_SIZES.move_to_end(key)
+        return _IMAGE_SIZES[key]
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(base64.b64decode(data, validate=False))) as image:
+            size = image.size
+    except (binascii.Error, ValueError, OSError, UnidentifiedImageError):
+        size = None
+    _IMAGE_SIZES[key] = size
+    if len(_IMAGE_SIZES) > _IMAGE_SIZES_KEPT:
+        _IMAGE_SIZES.popitem(last=False)
+    return size
+
+
 def context_token_upper_bound(context: Any) -> int:
     """Conservatively bound tokenized input, including tools.
 
     Supported provider tokenizers cannot produce more ordinary text tokens
     than the number of UTF-8 bytes.  The fixed allowance covers provider
     message/tool framing that is not represented in ``Context`` itself.
+    An image is not text: its base64 is replaced by the bound for its pixel
+    size (a 400 KB screenshot is a few thousand tokens, not 530,000). One the
+    header cannot be read from is counted as text, as before.
     """
+
+    image_tokens = 0
+
+    def without_images(value: Any) -> Any:
+        nonlocal image_tokens
+        if isinstance(value, dict):
+            data = value.get("data")
+            if value.get("type") == "image" and isinstance(data, str) and (size := _image_size(data)):
+                image_tokens += image_token_upper_bound(*size)
+                return {**value, "data": ""}
+            return {key: without_images(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [without_images(item) for item in value]
+        return value
 
     def jsonable(value: Any) -> Any:
         if hasattr(value, "model_dump"):
@@ -76,7 +143,7 @@ def context_token_upper_bound(context: Any) -> int:
         )
     payload = {
         "systemPrompt": read_field(context, "systemPrompt"),
-        "messages": jsonable(read_field(context, "messages", []) or []),
+        "messages": without_images(jsonable(read_field(context, "messages", []) or [])),
         "tools": tools,
     }
     encoded = json.dumps(
@@ -85,7 +152,7 @@ def context_token_upper_bound(context: Any) -> int:
         separators=(",", ":"),
         default=str,
     ).encode("utf-8")
-    return len(encoded) + CONTEXT_FRAMING_TOKENS
+    return len(encoded) + image_tokens + CONTEXT_FRAMING_TOKENS
 
 
 def _limited_options(options: Any, maximum: int) -> Any:
@@ -150,9 +217,9 @@ class TurnBudgetLimiter:
 
         return self.used + sum(self.in_flight.values())
 
-    def allowance(self, context: Any) -> int:
+    def allowance(self, context: Any, *, bound: int | None = None) -> int:
         remaining = self.limit - self.used - sum(self.in_flight.values())
-        maximum = remaining - context_token_upper_bound(context)
+        maximum = remaining - (context_token_upper_bound(context) if bound is None else bound)
         if maximum <= 0:
             raise RuntimeError(
                 "Shared token budget is too small for the next model request"
@@ -160,7 +227,8 @@ class TurnBudgetLimiter:
         return maximum
 
     def reserve(self, context: Any, configured: Any = None) -> tuple[str, int]:
-        maximum = self.allowance(context)
+        bound = context_token_upper_bound(context)
+        maximum = self.allowance(context, bound=bound)
         try:
             configured_int = int(configured) if configured is not None else 0
         except (TypeError, ValueError, OverflowError):
@@ -168,7 +236,7 @@ class TurnBudgetLimiter:
         if configured_int > 0:
             maximum = min(maximum, configured_int)
         token = secrets.token_hex(8)
-        self.in_flight[token] = context_token_upper_bound(context) + maximum
+        self.in_flight[token] = bound + maximum
         return token, maximum
 
     def settle(self, token: str, message: Any = None, *, failed: bool = False) -> None:
@@ -260,6 +328,7 @@ __all__ = [
     "CONTEXT_FRAMING_TOKENS",
     "TurnBudgetLimiter",
     "context_token_upper_bound",
+    "image_token_upper_bound",
     "install_turn_budget",
     "usage_tokens",
 ]

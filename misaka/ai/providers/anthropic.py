@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
@@ -1004,11 +1005,14 @@ async def _iter_response_lines(source: Any, signal: Any = None) -> AsyncIterator
     if body is None:
         raise RuntimeError("Attempted to iterate over an Anthropic response with no body")
 
+    # pi decodes the body with ``TextDecoder.decode(value, {stream: true})``, which holds back a
+    # multi-byte character split across chunks and replaces invalid bytes instead of throwing.
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     buffer = ""
     if hasattr(body, "__aiter__"):
         async for chunk in _iterate_async_iterable(body, signal, on_abort=lambda: _close_stream(source)):
             if isinstance(chunk, bytes):
-                buffer += chunk.decode("utf-8")
+                buffer += decoder.decode(chunk)
             else:
                 buffer += str(chunk)
 
@@ -1022,7 +1026,7 @@ async def _iter_response_lines(source: Any, signal: Any = None) -> AsyncIterator
             if signal_aborted(signal):
                 raise RuntimeError("Request was aborted")
             if isinstance(chunk, bytes):
-                buffer += chunk.decode("utf-8")
+                buffer += decoder.decode(chunk)
             else:
                 buffer += str(chunk)
 
@@ -1032,6 +1036,7 @@ async def _iter_response_lines(source: Any, signal: Any = None) -> AsyncIterator
                 yield line
                 consumed = _consume_line(buffer)
 
+    buffer += decoder.decode(b"", final=True)
     if buffer:
         consumed = _consume_line(buffer)
         while consumed is not None:

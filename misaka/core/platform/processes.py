@@ -175,7 +175,7 @@ def terminate_orphaned_group(pgid: int, leader_identity: str) -> bool:
     if pgid == os.getpgrp():
         return False
     current = identity(pgid)
-    if current is not None and current != leader_identity:
+    if current is not None and not same_identity(current, leader_identity):
         # PID reuse implies the prior PID/PGID namespace entry was released;
         # this is an unrelated new process and the old group is already empty.
         return True

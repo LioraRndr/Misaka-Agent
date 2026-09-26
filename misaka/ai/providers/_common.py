@@ -149,11 +149,11 @@ def resolve_cache_retention(
     """The explicit retention, else the request-scoped ``env``, else the process env.
 
     ``env`` is the caller's ``options.env`` (auth resolution env merged with the request's
-    own), which is where a per-provider ``MISAKA_CACHE_RETENTION`` override lives.
+    own), which is where a per-provider ``PI_CACHE_RETENTION`` override lives.
     """
     if cache_retention:
         return cache_retention
-    return "long" if get_provider_env_value("MISAKA_CACHE_RETENTION", env) == "long" else "short"
+    return "long" if get_provider_env_value("PI_CACHE_RETENTION", env) == "long" else "short"
 
 
 def safe_json_stringify(value: Any) -> str:

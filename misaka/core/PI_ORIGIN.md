@@ -92,7 +92,7 @@ pi 把全局文件放在 `~/.pi/agent/`，这一层的真实作用是让全局�
 pi 意义上的**捆绑扩展**——自包含、只靠扩展 API、拔了无残留——按 misaka 原有的三层放：
 
 ```
-extensions/<module>             每个角色：llama/（pi 自带的 provider）、misaka_lcm/（LCM 上下文引擎：vendor/ 是 hermes-lcm 上游原样，host/ 是对 pi 事件的适配；拔掉它 pi 原生压缩照常）、coverage（coverage_scan 工具）
+extensions/<module>             每个角色：llama/（pi 自带的 provider）、misaka_lcm/（LCM 上下文引擎：vendor/ 是 hermes-lcm 上游原样，host/ 是对 pi 事件的适配；拔掉它 pi 原生压缩照常）、coverage/（coverage_scan 工具，并经 resources_discover 自带 coverage-maps 技能）
 extensions/last_order/<module>  只有 Last Order 的槽位（现在是空的）
 extensions/sisters/             其他角色的槽位（subagent 是 C 类，在 core/subagent，仅对 Sisters 暴露）
 ```

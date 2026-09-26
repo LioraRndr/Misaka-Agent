@@ -719,13 +719,14 @@ COMMANDS = {
 def main(argv=None):
     """The CLI entry point: one handler per sub-command (``COMMANDS``), each opening the board only
     if it uses it; ``argv`` defaults to the process arguments so tests can drive it directly."""
-    bootstrap.install()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # setup, update and uninstall must still run on a settings.json that stops everything else.
+    bootstrap.install(check_settings=argv[:1] not in (["setup"], ["update"], ["uninstall"]))
     from misaka.config import env as env_file
     from misaka.config.engine import configure_logging
     home.ensure()
     configure_logging()      # warnings go to the log file, never to a TUI's screen (B6)
     env_file.load()          # the home's .env: environment for code that is not MISAKA
-    argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["lcm"]:
         # Read-only/dry-run operators must not bootstrap user directories or open
         # a board/engine before their original parser decides what to do.

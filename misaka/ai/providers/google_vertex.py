@@ -40,6 +40,7 @@ from misaka.ai.providers.google_shared import (
     resolve_google_function_calling_mode,
     resolve_google_thinking_level,
     retain_thought_signature,
+    retry_google_request,
     supports_google_strict_tool_sampling,
     to_google_sdk_thinking_level,
     to_google_thinking_level,
@@ -68,6 +69,7 @@ from misaka.ai.types import (
     Usage,
     UsageCost,
 )
+from misaka.ai.utils.abort import race_with_abort_signal
 from misaka.ai.utils.event_stream import AssistantMessageEventStream, spawn_stream_task
 from misaka.ai.utils.headers import provider_headers_to_record
 from misaka.ai.utils.sanitize_unicode import sanitize_surrogates
@@ -155,8 +157,13 @@ def stream_google_vertex(
                 if next_params is not None:
                     params = next_params
 
-            google_stream = await client.aio.models.generate_content_stream(
-                **_prepare_sdk_params(params))
+            # MISAKA fork: pi hands the SDK the abort signal as ``config.abortSignal``; the
+            # Python SDK takes none (``_prepare_sdk_params`` drops it), so the wait for the
+            # stream races the signal instead.
+            google_stream = await race_with_abort_signal(retry_google_request(
+                lambda: client.aio.models.generate_content_stream(**_prepare_sdk_params(params)),
+                options,
+            ), signal)
             stream.push(StartEvent(partial=output))
 
             current_block: TextContent | ThinkingContent | None = None

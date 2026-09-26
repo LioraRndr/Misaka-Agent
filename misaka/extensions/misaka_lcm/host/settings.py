@@ -56,6 +56,14 @@ def refresh(built, ctx):
         setattr(built._config, name, getattr(current, name))
         built._config.config_sources[name] = (
             "env" if spec.env_key in os.environ else current.config_sources.get(name, "default"))
+    # The compaction threshold can change while the session runs: a research run started in this
+    # window brings its own (``misaka.core.session_overrides``) and takes it away when it leaves.
+    # Upstream derives the trigger from it only when the model changes, so recompute it here.
+    threshold = (current.context_threshold, current.config_sources.get("context_threshold"))
+    if threshold != (built._config.context_threshold, built._config.config_sources.get("context_threshold")):
+        built._config.context_threshold, built._config.config_sources["context_threshold"] = threshold
+        if built.raw_context_length:
+            built._set_context_length(built.raw_context_length, source=built._context_length_source)
 
 
 def check(config) -> int:

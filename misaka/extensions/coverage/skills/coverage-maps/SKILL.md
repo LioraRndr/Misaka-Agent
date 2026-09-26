@@ -50,6 +50,6 @@ map is evidence. Use several, and say which ones you used.
 
 ## Extending
 
-Put a `coverage.md` (or a `skills/coverage-maps/` override) in the project folder with the
-maps of your own field: a society's section list, a bibliography's classification, a
-period scheme. Project-level maps shadow these.
+Maps of your own field (a society's section list, a bibliography's classification, a
+period scheme) go in a skill of their own in the project's `skills/` folder, for example
+`skills/field-maps/SKILL.md`. It is listed beside this one; scan both.

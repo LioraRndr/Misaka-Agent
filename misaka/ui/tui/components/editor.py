@@ -304,13 +304,7 @@ class Editor:
         # MISAKA: input history persists across sessions (as in Claude Code). Enabled only when MISAKA_INPUT_HISTORY is set.
         self.historyFile = os.environ.get("MISAKA_INPUT_HISTORY") or None
         if self.historyFile:
-            try:
-                with open(self.historyFile, encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, list):
-                    self.history = [x for x in loaded if isinstance(x, str)][:100]
-            except (OSError, ValueError):
-                pass
+            self.history = self._readHistoryFile() or []
         self.killRing = KillRing()
         self.lastAction: str | None = None
         self.jumpMode: str | None = None
@@ -363,10 +357,24 @@ class Editor:
         self.cancelAutocomplete()
         self.autocompleteProvider = provider
 
+    def _readHistoryFile(self) -> list[str] | None:
+        """The persisted history, newest first; None when there is none to read."""
+        try:
+            with open(self.historyFile, encoding="utf-8") as f:
+                loaded = json.load(f)
+        except (OSError, ValueError, TypeError):
+            return None
+        return [x for x in loaded if isinstance(x, str)][:100] if isinstance(loaded, list) else None
+
     def addToHistory(self, text: str) -> None:
         trimmed = text.strip()
         if not trimmed:
             return
+        if self.historyFile and (latest := self._readHistoryFile()) is not None and self.historyIndex == -1:
+            # Several windows share one role's history file (a root Last Order and her fork nodes):
+            # start from what is on disk, or this window's copy from its own start overwrites what
+            # the others have added since.
+            self.history = latest
         if self.history and self.history[0] == trimmed:
             return
         self.history.insert(0, trimmed)

@@ -1239,15 +1239,24 @@ def _terminal_transition(
 # Ordered: the first kind whose pattern matches wins. Quota and billing markers go before the
 # rate-limit check because a provider reports an exhausted quota with the same 429 status.
 # Every marker is a word or phrase; a bare status code is only trusted where nothing else uses
-# that number, since the reason is often the tail of a crashed process's stderr.
+# that number, since the reason is often the tail of a crashed process's stderr. Failures whose
+# origin the caller knows -- supervisor, finalizer and dispatch faults -- name their kind instead
+# of coming through here, which is where "KeyError: 'api_key'" used to read as a dead credential.
 _FAILURE_KINDS = (
     # Quota means an exhausted allowance, not a rate limit that mentions one: Gemini's 429
-    # reads "Resource has been exhausted (e.g. check quota)" and must stay retryable.
+    # reads "Resource has been exhausted (e.g. check quota)" and must stay retryable. The last
+    # line holds the words pi's own retry refuses to retry (ai/utils/retry.py
+    # NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN, casefolded; a test keeps the two in step --
+    # importing it here would load the provider layer into every board process). Permission is
+    # only the providers' error codes: a filesystem "Permission denied" is not a credential.
     ("auth_or_quota", re.compile(
-        r"authentication|unauthori[sz]ed|permission[ _]error|permissiondeniederror"
-        r"|\b403 forbidden\b|invalid[ _-]?(?:api[ _-]?key|token)|api[ _-]?key"
-        r"|insufficient[ _-]?quota|quota exceeded|exceeded your (?:current )?quota"
-        r"|billing|payment required|credit balance|insufficient[ _-]?credit")),
+        r"authentication|unauthori[sz]ed|unauthenticated|permission[ _]error|permission_denied"
+        r"|permissiondeniederror|\b40[13] (?:forbidden|unauthorized)|invalid[ _-]?(?:x-)?(?:api[ _-]?key|token)"
+        r"|api[ _-]?key|incorrect api key|no configured authentication"
+        r"|(?:error code|status(?: code)?)[: ]+40[13]\b|\(40[13]\)"
+        r"|exceeded your (?:current )?quota|payment required|credit balance|insufficient[ _-]?credit"
+        r"|gousagelimiterror|freeusagelimiterror|monthly usage limit reached|available balance"
+        r"|insufficient[ _-]?quota|out of budget|quota exceeded|billing")),
     ("rate_limit", re.compile(r"rate[ _-]?limit|too many requests|\b429\b")),
     ("context_overflow", re.compile(
         r"context[ _-]?(?:length|window)|maximum context|too many tokens|prompt is too long"
@@ -1255,7 +1264,7 @@ _FAILURE_KINDS = (
     ("timeout", re.compile(r"time(?:d[ -]?| )?out|deadline exceeded")),
     ("server_error", re.compile(
         r"overloaded|internal server error|service unavailable|bad gateway|\b(?:500|502|503|529)\b")),
-    ("protocol_violation", re.compile(r"without settling|unparsable|bad schema|protocol")),
+    ("protocol_violation", re.compile(r"without settling|unparsable|bad schema")),
     ("crash", re.compile(r"reclaim|crash|supervisor|exited with code|killed by signal|segfault")),
 )
 

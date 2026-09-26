@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import io
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TextIO
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,6 +19,8 @@ from misaka.core.tools._common import (
     _ignore_background_task_result,
     _string_arg,
     abort_race,
+    regular_file,
+    whole_file_bytes,
 )
 from misaka.core.tools.path_utils import resolve_read_path_async, resolve_to_cwd
 from misaka.core.tools.render_utils import (
@@ -88,17 +91,89 @@ class ReadToolOptions:
 @dataclass(slots=True)
 class _DefaultReadOperations:
     async def readFile(self, absolute_path: str) -> bytes:
-        return await asyncio.to_thread(Path(absolute_path).read_bytes)
+        return await asyncio.to_thread(whole_file_bytes, absolute_path, "read")
 
     async def access(self, absolute_path: str) -> None:
-        def _check() -> None:
-            with open(absolute_path, "rb"):
-                return
-
-        await asyncio.to_thread(_check)
+        await asyncio.to_thread(regular_file, absolute_path)
 
     async def detectImageMimeType(self, absolute_path: str) -> str | None:
         return await detect_supported_image_mime_type_from_file(absolute_path)
+
+    def openText(self, absolute_path: str) -> TextIO:
+        # MISAKA fork: pi reads the whole file and splits it. Text is streamed instead (see
+        # ``_scan_text``), decoded exactly as ``bytes.decode("utf-8", "replace")`` would be and
+        # split only on "\n", so a multi-gigabyte log pages with offset/limit in bounded memory.
+        return open(absolute_path, encoding="utf-8", errors="replace", newline="\n")
+
+
+# MISAKA fork: an Office file is rendered in memory; past this size the rendering is refused.
+MAX_OFFICE_READ_BYTES = 100 * 1024 * 1024
+_SCAN_CHUNK_CHARS = 1024 * 1024
+# The selection's first characters that decide ``truncate_head`` exactly as the whole selection
+# would: anything longer is over the byte limit in both, and they cut at the same line.
+_WINDOW_CHARS = DEFAULT_MAX_BYTES + 2
+
+
+@dataclass(slots=True)
+class _TextScan:
+    total_lines: int          # len(text.split("\n"))
+    window: str               # the first _WINDOW_CHARS characters of the selection
+    selected_bytes: int       # UTF-8 bytes of the selection, "\n".join(lines[start:end])
+    first_line_bytes: int     # UTF-8 bytes of the selection's first line
+    last_char: str            # the selection's last character, "" when it is empty
+
+
+def _nth_newline(text: str, start: int, count: int) -> int:
+    """Index of the ``count``-th "\n" in ``text`` at or after ``start``; -1 if there are fewer."""
+    index = start - 1
+    for _ in range(count):
+        index = text.find("\n", index + 1)
+        if index < 0:
+            return -1
+    return index
+
+
+def _scan_text(stream: Any, start_line: int, limit: int | None, signal: Any = None) -> _TextScan:
+    """One pass over ``stream`` that measures ``"\n".join(lines[start_line:start_line + limit])``
+    and keeps only its first characters. Lines outside the selection are counted, not split."""
+    end_line = None if limit is None else start_line + limit
+    line = 0                          # the line the next character belongs to
+    window: list[str] = []
+    window_chars = selected_bytes = first_line_bytes = 0
+    first_line_open = True
+    last_char = ""
+    while chunk := stream.read(_SCAN_CHUNK_CHARS):
+        if signal_aborted(signal):
+            raise RuntimeError("Operation aborted")
+        position = 0
+        while position < len(chunk):
+            if line < start_line:
+                boundary = _nth_newline(chunk, position, start_line - line)
+                if boundary < 0:
+                    line += chunk.count("\n", position)
+                    break
+                line, position = start_line, boundary + 1
+            elif end_line is not None and line >= end_line:
+                line += chunk.count("\n", position)
+                break
+            else:
+                stop = len(chunk) if end_line is None else _nth_newline(chunk, position, end_line - line)
+                part = chunk[position:len(chunk) if stop < 0 else stop]
+                if part:
+                    selected_bytes += len(part.encode("utf-8"))
+                    if first_line_open:
+                        cut = part.find("\n")
+                        first_line_bytes += len((part if cut < 0 else part[:cut]).encode("utf-8"))
+                        first_line_open = cut < 0
+                    if window_chars < _WINDOW_CHARS:
+                        window.append(part[:_WINDOW_CHARS - window_chars])
+                        window_chars += len(window[-1])
+                    last_char = part[-1]
+                    line += part.count("\n")
+                if stop < 0 or stop == len(chunk):
+                    break
+                line, position = line + 1, stop + 1       # the newline that ends the selection
+    return _TextScan(line + 1, "".join(window), selected_bytes, first_line_bytes, last_char)
 
 
 def _coerce_options(options: ReadToolOptions | Mapping[str, Any] | None) -> ReadToolOptions:
@@ -257,6 +332,10 @@ async def _render_office(absolute_path: str, cell_range: str | None, workspace: 
     """
     from misaka.core.documents import office
 
+    size = (await asyncio.to_thread(os.stat, absolute_path)).st_size
+    if size > MAX_OFFICE_READ_BYTES:
+        raise RuntimeError(f"{absolute_path} is {format_size(size)}; read renders Office files up to "
+                           f"{format_size(MAX_OFFICE_READ_BYTES)}. Use doc_read or bash for a file this large.")
     if cell_range:
         return await asyncio.to_thread(office.render, absolute_path, cell_range=cell_range)
     return await asyncio.to_thread(
@@ -342,34 +421,41 @@ def create_read_tool_definition(
                 # would show -- a quotation copied out of this verifies against the indexed
                 # document. Everything below is unchanged: offset/limit page the rendering
                 # exactly as they page a text file.
+                start_line = max(0, parsed.offset - 1) if parsed.offset else 0
+                open_text = getattr(operations, "openText", None)
                 if _office_format(absolute_path) is not None:
-                    text_content = await _render_office(absolute_path, parsed.cell_range, cwd)
+                    text_stream: Any = io.StringIO(await _render_office(absolute_path, parsed.cell_range, cwd))
                 elif parsed.cell_range:
                     raise RuntimeError(
                         "cell_range names a sheet and a range, and this is not a spreadsheet. "
                         "Call read again without it."
                     )
+                elif callable(open_text):
+                    text_stream = await asyncio.to_thread(open_text, absolute_path)
                 else:
                     buffer = await operations.readFile(absolute_path)
-                    text_content = buffer.decode("utf-8", errors="replace")
-                all_lines = text_content.split("\n")
-                total_file_lines = len(all_lines)
-                start_line = max(0, parsed.offset - 1) if parsed.offset else 0
+                    text_stream = io.StringIO(buffer.decode("utf-8", errors="replace"))
+                with text_stream:
+                    scan = await asyncio.to_thread(_scan_text, text_stream, start_line, parsed.limit, signal)
+                total_file_lines = scan.total_lines
                 start_line_display = start_line + 1
-                if start_line >= len(all_lines):
-                    raise RuntimeError(f"Offset {parsed.offset} is beyond end of file ({len(all_lines)} lines total)")
+                if start_line >= total_file_lines:
+                    raise RuntimeError(f"Offset {parsed.offset} is beyond end of file ({total_file_lines} lines total)")
 
                 user_limited_lines: int | None = None
+                end_line = total_file_lines
                 if parsed.limit is not None:
-                    end_line = min(start_line + parsed.limit, len(all_lines))
-                    selected_content = "\n".join(all_lines[start_line:end_line])
+                    end_line = min(start_line + parsed.limit, total_file_lines)
                     user_limited_lines = end_line - start_line
-                else:
-                    selected_content = "\n".join(all_lines[start_line:])
 
-                truncation = truncate_head(selected_content)
+                # What truncate_head reports about the whole selection, from the window it needs
+                # plus the scan's measurements (the same numbers it would count on the full text:
+                # a selection ending in "\n" has no last line, an empty one has no lines).
+                counted_lines = end_line - start_line - (scan.last_char == "\n") if scan.selected_bytes else 0
+                truncation = dataclasses.replace(
+                    truncate_head(scan.window), totalLines=counted_lines, totalBytes=scan.selected_bytes)
                 if truncation.firstLineExceedsLimit:
-                    first_line_size = format_size(len(all_lines[start_line].encode("utf-8")))
+                    first_line_size = format_size(scan.first_line_bytes)
                     output_text = (
                         f"[Line {start_line_display} is {first_line_size}, exceeds {format_size(DEFAULT_MAX_BYTES)} limit. "
                         f"Use bash: sed -n '{start_line_display}p' {parsed.path} | head -c {DEFAULT_MAX_BYTES}]"
@@ -390,8 +476,8 @@ def create_read_tool_definition(
                             f"({format_size(DEFAULT_MAX_BYTES)} limit). Use offset={next_offset} to continue.]"
                         )
                     details = ReadToolDetails(truncation=truncation)
-                elif user_limited_lines is not None and start_line + user_limited_lines < len(all_lines):
-                    remaining = len(all_lines) - (start_line + user_limited_lines)
+                elif user_limited_lines is not None and start_line + user_limited_lines < total_file_lines:
+                    remaining = total_file_lines - (start_line + user_limited_lines)
                     next_offset = start_line + user_limited_lines + 1
                     output_text = (
                         f"{truncation.content}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]"

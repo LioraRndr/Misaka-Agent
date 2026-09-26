@@ -31,6 +31,7 @@ class ToolPromptGovernanceTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.workspace = self.directory.name
         collector = ToolCollector()
+        collector.on = lambda name, handler: None   # coverage also offers its maps through resources_discover
         for register in (documents.register, extract.register, web_search.register, coverage.register):
             register(collector)
         for factory in (create_office_tool_definition, create_download_file_tool_definition,

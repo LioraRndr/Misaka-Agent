@@ -15,8 +15,8 @@ What each section touches, and nothing else:
   otherwise shows up an hour later inside a research run.
 - sisters: ``~/.misaka/profiles/sisters/<id>/`` through ``roster.create_sister``. Without at
   least one Sister a research run has nobody to hand cards to.
-- skills: installs ``DEFAULT_SKILLS`` from the optional catalog that ships in the package,
-  into the shared layer every role reads. Nothing else is installed by default.
+- skills: nothing; it shows the three skill layers and the optional catalog. The one skill a
+  research install needs, ``coverage-maps``, ships with the coverage extension.
 - documents: the optional PDF outline extra and the office libraries, checked by import.
 - web: the same complete settings menu as ``misaka web`` (search, extraction, browser, accounts and policy).
 - research: nothing; it explains the shape of a run and the approval gate, which is the one
@@ -59,11 +59,6 @@ SECTIONS = ("environment", "model", "sisters", "skills", "documents", "web", "re
 # further to walk than the person with a credit card.
 FEATURED_PROVIDERS = ("anthropic", "openai-codex", "github-copilot", "xai", "openrouter",
                       "openai", "google", "mistral", "amazon-bedrock", "ollama")
-
-# The skills a research install wants out of the box, from the optional catalog under
-# ``core/skills/assets/optional/``. Everything else in that catalog (140 skills across 24
-# categories) ships too and stays uninstalled until somebody asks for it by name.
-DEFAULT_SKILLS = ("coverage-maps",)
 
 PAGEINDEX_PACKAGES = ("PyPDF2==3.0.1", "pypdfium2==4.30.0", "regex>=2024.0.0", "sortedcontainers==2.4.0")
 
@@ -481,9 +476,9 @@ class Wizard:
         from misaka.core.skills import layers as skill_layers
         ui.print_header("Skills")
         roles_root = os.path.expanduser(CFG["roles_root"])
-        shared = os.path.join(roles_root, "skills")
+        shared = skill_layers.shared_skills_dir()
         shown = ((f"{ui.tilde(roles_root)}/<role>/skills/", "that role alone"),
-                 (ui.tilde(shared), "every role; the wizard installs here"),
+                 (ui.tilde(shared), "every role"),
                  ("~/.agents/skills", "shared with your other agent tools, read-only"))
         column = max(len(path) for path, _purpose in shown)
         ui.print_info("A skill is a folder with a SKILL.md a role reads when the work calls for it.",
@@ -497,75 +492,12 @@ class Wizard:
         else:
             ui.print_info(ui.color("  ~/.agents/skills is absent; it appears by itself once another "
                                    "agent tool creates it.", ui.DIM))
-        installed = self._installed_skills(skill_layers, shared)
-        wanted = [name for name in DEFAULT_SKILLS if name not in installed]
-        if not wanted:
-            ui.print_success(f"Already installed: {', '.join(DEFAULT_SKILLS)}")
-        elif prompt_yes_no(f"Install {', '.join(wanted)}? (maps of a field, scanned before planning "
-                           f"and again when red-teaming)", True):
-            for name in wanted:
-                self._install_skill(name)
+        ui.print_success("coverage-maps ships with the coverage extension, beside coverage_scan: "
+                         "maps of a field, read before planning and again when red-teaming.")
         ui.print_info("", "The package also carries an optional catalog nothing installs by itself:",
                       "  misaka skills optional-list                 what ships, by category",
                       "  misaka skills hub-install <name>            install one",
                       "  misaka skills pending / approve <id>        the review step each install goes through")
-
-    @staticmethod
-    def _installed_skills(skill_layers, shared: str) -> set[str]:
-        """The skill names already present in the shared layer, category folders included."""
-        try:
-            return {path.parent.name for path in skill_layers.iter_skill_files(shared)}
-        except (OSError, ValueError):
-            return set()
-
-    def _install_skill(self, name: str) -> None:
-        """Install one catalog skill into the shared layer, then approve it.
-
-        Two calls because that is the design: a distribution write is scanned and staged, and
-        a person approves it (``misaka skills pending`` / ``approve``). The person is standing
-        at this prompt and just said yes, so the wizard completes the round trip instead of
-        leaving a pending item behind -- and only ever for a skill that ships inside the
-        package, never something fetched from a hub.
-
-        The shared layer is addressed by passing the roles root as the profile: a scope's skill
-        directory is ``<profile>/skills``, which for the roles root is the shared layer itself.
-        """
-        from misaka.config import CFG
-        from misaka.core.skills import manage as skill_manage
-        from misaka.core.skills import write as skill_write
-        from misaka.core.skills.operations import execute
-        roles_root = os.path.expanduser(CFG["roles_root"])
-        try:
-            result = execute("hub-install", name, profile_dir=roles_root, workspace=os.getcwd(),
-                             source="official", category="", force=False, restore=False, repo="",
-                             dry_run=False, bundled_root=None, optional_root=None, expected_digest=None)
-        except Exception as error:  # noqa: BLE001 - one skill is not worth failing the wizard for
-            ui.print_error(f"{name}: {error}")
-            return
-        pending = result.get("pending_id")
-        if result.get("success") and not pending:
-            ui.print_success(f"{name} installed.")
-            return
-        if not pending:
-            ui.print_error(f"{name}: {result.get('error') or 'the install did not complete'}")
-            if "skill_write_mode" in str(result.get("error") or ""):
-                ui.print_info("Skill writing is off; `misaka skills mode ask` turns the review queue back on.")
-            return
-        record = skill_write.get_pending(pending)
-        if record is None:
-            ui.print_error(f"{name}: the staged write could not be read back.")
-            return
-        applied = skill_manage.apply_pending(record)
-        if not applied.get("success"):
-            ui.print_error(f"{name}: approval failed: {applied.get('error')}")
-            ui.print_info(f"It is still queued: `misaka skills pending` and `misaka skills approve {pending}`.")
-            return
-        skill_write.discard_pending(record.get("_pending_file_id") or record["id"])
-        verdict = (applied.get("scan") or {}).get("verdict")
-        ui.print_success(f"{name} installed into the shared layer"
-                         + (f" (scanned: {verdict})" if verdict else "")
-                         + f" -- {ui.tilde(str(applied.get('path') or ''))}")
-        self.state.setdefault("skills", []).append(name)
 
     # -- 5. documents -------------------------------------------------------------------------
 
@@ -695,9 +627,7 @@ class Wizard:
             ui.print_check(shutil.which(binary) is not None, binary, "" if shutil.which(binary) else _install_command(binary))
         ui.print_check(state.get("pageindex", None), "PDF outlines", "" if state.get("pageindex") else "optional")
         ui.print_check(None, "web tools", str(state.get("web") or "not checked: misaka web status"))
-        skills = state.get("skills")
-        ui.print_check(bool(skills) if skills is not None else None, "skills",
-                       ", ".join(skills) if skills else "none added: `misaka skills optional-list`")
+        ui.print_check(None, "skills", "coverage-maps built in; more: `misaka skills optional-list`")
         indexed = state.get("documents")
         ui.print_check(bool(indexed) if indexed is not None else None, "documents",
                        f"{indexed} indexed" if indexed else "none indexed yet: `misaka doc scan <folder>`")

@@ -14,7 +14,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import secrets
 import socket
 import sys
@@ -29,6 +28,7 @@ from misaka.core.platform import tasks as task_store
 from misaka.core.research import bundle, commands, ledger, planner, report, runs
 from misaka.core.research import context as context_packet
 from misaka.utils.async_lifecycle import settle, settle_thread_call
+from misaka.utils.markdown import atx_headings
 
 POLL_SECONDS = 2.0
 _LOG = logging.getLogger(__name__)
@@ -1171,25 +1171,6 @@ def _cell(value):
     return " ".join(str(value or "").splitlines()).strip().replace("|", r"\|")
 
 
-_HEADING = re.compile(r"^(#{1,6})(\s|$)")
-_FENCE = re.compile(r"^\s{0,3}(```|~~~)")
-
-
-def _headings(text):
-    """``(line index, level)`` of every ATX heading outside a fenced block -- a ``#`` in code is prose."""
-    fence, out = None, []
-    for index, line in enumerate(text.splitlines()):
-        opener = _FENCE.match(line)
-        if fence is not None:
-            if opener and line.strip().startswith(fence):
-                fence = None
-        elif opener:
-            fence = opener.group(1)
-        elif found := _HEADING.match(line):
-            out.append((index, len(found.group(1))))
-    return out
-
-
 def _nested(text, under):
     """A conclusion with its own headings pushed below the heading of the section quoting it.
 
@@ -1198,13 +1179,13 @@ def _nested(text, under):
     first node's conclusion, and the tree renders backwards. Only the level moves. The words are
     untouched, as is the synthesis artifact on disk -- that copy, not this one, is what gets cited.
     """
-    found = _headings(text)
+    lines = text.splitlines()
+    found = atx_headings(lines)
     if not found:
         return text
-    lines = text.splitlines()
-    deeper = max(0, under + 1 - min(level for _index, level in found))
-    for index, level in found:
-        lines[index] = "#" * min(6, level + deeper) + lines[index][level:]
+    deeper = max(0, under + 1 - min(level for _index, level, _title in found))
+    for index, level, _title in found:
+        lines[index] = "#" * min(6, level + deeper) + lines[index].lstrip(" ")[level:]
     return "\n".join(lines)
 
 

@@ -20,9 +20,13 @@ file); nothing else is read. `servers_for` unions that file with the child's own
 so the injected set can only widen what the child reaches, never narrow it.
 
 Tools are registered as `mcp__<server>__<tool>`, matching Claude Code's naming so they
-never collide with built-in tools.
+never collide with built-in tools. Both parts are sanitized to `[A-Za-z0-9_-]` (as Claude Code
+does) and, as in Hermes, the whole name is clamped to 64 characters with a hash suffix, so a
+provider never rejects a request over one server's naming; `server_of` recovers the
+configured server.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -434,8 +438,90 @@ def _schema_of(tool):
     return s
 
 
+def sanitize_mcp_name_component(value: str) -> str:
+    """Replace every char outside ``[A-Za-z0-9_-]`` with ``_`` so generated names pass provider
+    validation.
+
+    MISAKA fork: Hermes replaces hyphens too; Claude Code's ``normalizeNameForMCP`` keeps them,
+    and so does this. Every provider accepts a hyphen, most MCP servers are named with one
+    (``brave-search``, ``sequential-thinking``), and the sub-agent layer matches agent
+    definitions written the Claude Code way by exact tool name -- so a server whose name was
+    already valid keeps exactly the tool names it had.
+    """
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(value or ""))
+
+
+# ``mcp__<server>__<tool>``: the convention shared by Claude Code, Codex and OpenCode. The
+# double underscore disambiguates the server/tool boundary even when either contains
+# underscores, and matches the Anthropic-OAuth wire form.
+MCP_TOOL_NAME_PREFIX = "mcp__"
+
+
+# OpenAI-compatible providers validate function names against ``^[a-zA-Z0-9_-]{1,64}$`` and 400 the
+# whole request when one generated name is longer. Portable plugin server keys fold the plugin name in
+# several times, so ``mcp__<server>__<tool>`` routinely passes 64 chars there (#81331). Clamp with a
+# deterministic hash suffix (same idea as ``schema_sanitizer.sanitize_property_key``); dispatch is
+# unaffected because handlers close over the original unprefixed tool name.
+_MCP_TOOL_NAME_MAX_LENGTH = 64
+_MCP_TOOL_NAME_HASH_LENGTH = 8
+_clamped_names_warned: set[str] = set()
+
+
+def mcp_prefixed_tool_name(server_name: str, tool_name: str) -> str:
+    """Registry/wire name: ``mcp__<sanitizedServer>__<sanitizedTool>``, clamped to 64 chars with a
+    stable hash suffix when the natural name is longer."""
+    full_name = f"{MCP_TOOL_NAME_PREFIX}{sanitize_mcp_name_component(server_name)}__{sanitize_mcp_name_component(tool_name)}"
+    if len(full_name) <= _MCP_TOOL_NAME_MAX_LENGTH:
+        return full_name
+    suffix = "_" + hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:_MCP_TOOL_NAME_HASH_LENGTH]
+    if full_name not in _clamped_names_warned:  # recomputed on every health refresh; warn once
+        _clamped_names_warned.add(full_name)
+        logger.warning("MCP tool name %r (%d chars) exceeds the %d-char provider limit; shortened to a "
+                       "deterministic hash-suffixed name", full_name, len(full_name), _MCP_TOOL_NAME_MAX_LENGTH)
+    return full_name[:_MCP_TOOL_NAME_MAX_LENGTH - len(suffix)] + suffix
+
+
+# MISAKA fork: Hermes dispatches through closures and never reads a name back. Here the sub-agent
+# layer asks which server a registered tool belongs to (required-server checks); a sanitized or
+# clamped name cannot answer that, so every name this process builds remembers its server.
+_TOOL_SERVERS: dict[str, str] = {}
+
+
 def tool_name(server, tool):
-    return f"mcp__{server}__{tool}"
+    name = mcp_prefixed_tool_name(server, tool)
+    _TOOL_SERVERS[name] = server
+    return name
+
+
+def server_of(name):
+    """The configured server a registered MCP tool name belongs to; None for any other tool.
+
+    A name built in another process (a fork's snapshot) falls back to its ``mcp__<server>__``
+    segment, which is the sanitized server name -- compare it with ``server_matches``."""
+    name = str(name or "")
+    if name in _TOOL_SERVERS:
+        return _TOOL_SERVERS[name]
+    if name.startswith(MCP_TOOL_NAME_PREFIX) and name.count("__") >= 2:
+        return name.split("__", 2)[1]
+    return None
+
+
+def server_matches(pattern, server):
+    """Whether a required-server ``pattern`` names ``server``: a case-insensitive substring match,
+    as it always was, that also holds when one side is the sanitized spelling.
+
+    The sanitized comparison is only a fallback for a name built in another process (a fork's
+    snapshot keeps only ``mcp__<sanitized>__``), and only on a pattern that still names something
+    once sanitized: two non-ASCII names both sanitize to underscores and must not match.
+    """
+    pattern, server = str(pattern or ""), str(server or "")
+    if pattern.casefold() in server.casefold():
+        return True
+    wanted, have = sanitize_mcp_name_component(pattern), sanitize_mcp_name_component(server)
+    if (wanted, have) == (pattern, server):
+        return False
+    return (any(char.isascii() and char.isalnum() for char in wanted)
+            and wanted.casefold() in have.casefold())
 
 
 def _dim(text):

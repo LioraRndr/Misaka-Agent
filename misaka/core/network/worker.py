@@ -378,13 +378,17 @@ def card_extras(con, task, cfg=None, *, include_materials=True):
     never through the task body. Restore paths can skip materials they will not publish,
     avoiding unrelated filesystem reads.
     """
-    extras = {"_research": None, "_materials": ""}
+    extras = {"_research": None, "_materials": "", "_session_overrides": {}}
     with contextlib.suppress(Exception):   # a board without the research schema is an ordinary board
         if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_run_tasks'").fetchone():
             row = con.execute("SELECT run_id, branch_id, kind FROM research_run_tasks WHERE task_id=?",
                               (task["id"],)).fetchone()
             if row is not None:
                 extras["_research"] = dict(row)
+                from misaka.core.research import runs
+
+                # The run's own compaction threshold and output limit, when it chose them.
+                extras["_session_overrides"] = runs.session_overrides(runs.get(con, row["run_id"]))
     if include_materials:
         extras["_materials"] = materials_on_hand(task["workspace"])
     return extras
@@ -610,7 +614,7 @@ def card_session_setup(task, workspace, profile_dir, provider, default_model):
         flags += ["--model", model]
     ro_root = os.path.join(state_dir, ".skills-ro")
     sender = role.rsplit("/", 1)[-1]
-    from misaka.core.wiring import SessionSpec, assemble
+    from misaka.core.wiring import SessionSpec, assemble, spec_overrides
 
     kind = "beast" if beast else "card"
     delegates = not profiles.is_last_order(profile_dir)
@@ -638,6 +642,7 @@ def card_session_setup(task, workspace, profile_dir, provider, default_model):
         tool_ceiling=MANAGEMENT_TOOLS if beast and delegates else None,
         skill_roots=skill_roots,
         research_context=bool(task.get("_research")),
+        overrides=spec_overrides(task.get("_session_overrides")),
     ))
     from misaka.config import identity
     for section in identity.base_prompt_sources(profile_dir, role):

@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import time
 
 from misaka.config import CFG, current_config
+from misaka.core import session_overrides
 from misaka.core.moments import CoreCommand
 from misaka.core.platform import budget
 from misaka.core.platform import tasks as task_store
@@ -23,15 +25,70 @@ _PARALLEL_QUESTION = "How many Last Order nodes may run at once?"
 _SISTER_PARALLEL_QUESTION = "How many Sister cards may be active per Last Order node?"
 _ROUNDS_QUESTION = "After its first cards are back, how many more times may a node send its Sisters out before it concludes?"
 _APPROVAL_QUESTION = "Should each research plan wait for your approval?"
+_THRESHOLD_QUESTION = "At what share of the context window should this run's sessions compact their context?"
+_OUTPUT_QUESTION = "How long may each reply in this run be, at most?"
+_GLOBAL_THRESHOLD = "Global setting"
+_MODEL_OUTPUT = "Model default"
+
+
+def _global_threshold_label():
+    from misaka.config.product import settings_document
+
+    lcm = settings_document().get("lcm")
+    value = lcm.get("context_threshold") if isinstance(lcm, dict) else None
+    return f"{_GLOBAL_THRESHOLD} ({value})" if isinstance(value, (int, float)) else _GLOBAL_THRESHOLD
+
+
+def _parse_threshold(answer):
+    """``None`` for the global setting, else a fraction: ``0.6``, ``60%`` and ``60`` all mean 0.6."""
+    text = str(answer or "").strip()
+    if not text or text.startswith(_GLOBAL_THRESHOLD):
+        return None
+    try:
+        value = float(text.rstrip("%").strip())
+    except ValueError:
+        raise ValueError(f"Compaction threshold must be a fraction such as 0.6 or a percentage such as 60%, not {text!r}.") from None
+    if text.endswith("%") or value >= 1:
+        value /= 100
+    if not runs.MIN_CONTEXT_THRESHOLD <= value <= runs.MAX_CONTEXT_THRESHOLD:
+        raise ValueError(f"Compaction threshold must be between {runs.MIN_CONTEXT_THRESHOLD:g} and "
+                         f"{runs.MAX_CONTEXT_THRESHOLD:g} (10% to 95%), not {text!r}.")
+    return round(value, 4)
+
+
+def _parse_output(answer):
+    """``None`` for each model's own limit, else tokens: ``64k``, ``64000`` and ``64 k`` all mean 64000."""
+    text = str(answer or "").strip()
+    if not text or text.startswith(_MODEL_OUTPUT):
+        return None
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kK])?", text.replace(",", ""))
+    if match is None:
+        raise ValueError(f"Output limit must be a number of tokens such as 64000 or 64k, not {text!r}.")
+    tokens = int(float(match.group(1)) * (1000 if match.group(2) else 1))
+    if tokens < 1024:
+        raise ValueError(f"Output limit must be at least 1024 tokens, not {text!r}.")
+    return tokens
+
+
+def _session_limits_text(limits):
+    """The run's own session settings, for the status and start notices; empty when it has none."""
+    parts = []
+    if limits.get("context_threshold") is not None:
+        parts.append(f"compaction at {limits['context_threshold']:g} of the window")
+    if limits.get("max_output_tokens") is not None:
+        parts.append(f"output limit {limits['max_output_tokens']:,} tokens")
+    return "".join(f" | {part}" for part in parts)
 USAGE = (
-    "Usage: /research [DEPTH] [--parallel N] [--sister-parallel N] [--followups N] [QUESTION]\n"
+    "Usage: /research [--depth N] [--parallel N] [--sister-parallel N] [--followups N] [QUESTION]\n"
     f"       Start research at once (depth defaults to {runs.DEFAULT_LIMITS['max_depth']}, LO parallelism to "
     f"{runs.DEFAULT_LIMITS['parallel']}, Sister cards per LO to {runs.DEFAULT_LIMITS['sister_parallel']}, follow-up rounds per node to {runs.DEFAULT_LIMITS['max_followups']}).\n"
     "       Bare /research lets you pick depth, LO parallelism, Sister cards per LO, follow-ups and plan approval; your next message is the question.\n"
     "       Require approval: each root, fork and follow-up plan waits for your go-ahead in its LO window.\n"
     "       Automatic: accepted plans proceed without that extra wait; genuine clarification still applies.\n"
     "       The choice is saved for this run, including resume. The default comes from settings.json research.plan_approval (true).\n"
-    "       Options precede QUESTION; --depth N is also accepted. --parallel limits LO nodes.\n"
+    "       Options precede QUESTION. A question may start with a number: a bare leading number is the depth\n"
+    "       only when nothing but options follows it (/research 3, /research 3 --parallel 2 QUESTION).\n"
+    "       --parallel limits LO nodes.\n"
     "       --sister-parallel N limits active Sister cards per LO; global/per-Sister admission limits still apply.\n"
     "       --followups N: after its first cards are back, how many more times a node may send its Sisters out\n"
     "       before it concludes (0-6). Talking a plan over with you is never counted.\n"
@@ -53,6 +110,16 @@ def _con():
 def _cfg():
     """Small seam for tests and alternate frontends; production returns the live config."""
     return current_config()
+
+
+def _positional_depth(words):
+    """Whether a leading integer is the depth: only when nothing follows it, or an option does.
+    Otherwise it opens the question ("1968 student movements", "3 main causes of ...")."""
+    try:
+        int(words[0])
+    except ValueError:
+        return False
+    return len(words) == 1 or words[1].startswith("--")
 
 
 def parse_command(raw):
@@ -83,7 +150,7 @@ def parse_command(raw):
         if len(tokens) > 2:
             raise ValueError(USAGE)
         return {"action": "stop", "run_id": tokens[1] if len(tokens) == 2 else None}
-    # Activation: [start] [DEPTH] [--depth N] [--parallel N] [--sister-parallel N] [QUESTION...]. Use the raw
+    # Activation: [start] [DEPTH (alone or before an option)] [--depth N] [--parallel N] [--sister-parallel N] [QUESTION...]. Use the raw
     # line, not the shlex tokens: an apostrophe in "Stalin's constitution" is not an open quote.
     line = (raw or "").strip()
     words = line.split(None, 1)
@@ -105,13 +172,10 @@ def parse_command(raw):
             if not value:
                 raise ValueError(f"{option} requires an integer.\n{USAGE}")
             selected[key] = value
-        elif "max_depth" not in selected:
-            try:
-                selected["max_depth"] = int(words[0])
-            except ValueError:
-                break  # the rest is the question, including any apostrophes or options within it
+        elif "max_depth" not in selected and _positional_depth(words):
+            selected["max_depth"] = int(words[0])
         else:
-            break
+            break  # the rest is the question, including any apostrophes or options within it
         line = words[1].strip() if len(words) > 1 else ""
         words = line.split(None, 1)
     limits = runs.normalize_limits(selected)
@@ -144,7 +208,8 @@ def _status(con, target, workspace):
         f"{value['status']}/{value['phase']} | depth {value['wave']}/{value['limits']['max_depth']} | "
         f"LO parallelism {value['limits']['parallel']} | Sister cards per LO {value['limits']['sister_parallel']} | "
         f"follow-ups per node {value['limits']['max_followups']} | "
-        f"plan approval {'required' if planner.plan_waits_for_user(_cfg(), run) else 'automatic'} | "
+        f"plan approval {'required' if planner.plan_waits_for_user(_cfg(), run) else 'automatic'}"
+        f"{_session_limits_text(value['limits'])} | "
         f"tasks {value['tasks']} | nodes {value['nodes']} | open issues {value['open_issues']}"
         + token_text
         + (f" | error {value['last_error']}" if value["last_error"] else "")
@@ -179,6 +244,9 @@ class ResearchPart:
             )
 
         async def drive(run_id, ctx, *, resume=False, clarification=""):
+            # While the run works in this window, the window's session runs with the run's own
+            # compaction threshold and output limit; a paused or finished run gives them back.
+            release = session_overrides.apply(self.session, runs.session_overrides(runs.get(con, run_id)))
             try:
                 def progress(event):
                     content = f"Research `{run_id}` | {event['message']}"
@@ -231,6 +299,7 @@ class ResearchPart:
                     {"deliverAs": "followUp", "triggerTurn": False},
                 )
             finally:
+                release()
                 drivers.pop(run_id, None)
 
         def launch(run_id, ctx, *, resume=False, clarification=""):
@@ -240,16 +309,17 @@ class ResearchPart:
             drivers[run_id] = asyncio.create_task(drive(run_id, ctx, resume=resume, clarification=clarification))
             return True
 
-        pending = {"depth": None, "parallel": None, "sister_parallel": None, "rounds": None, "workspace": None, "plan_approval": None}
+        pending = {"depth": None, "parallel": None, "sister_parallel": None, "rounds": None, "workspace": None, "plan_approval": None,
+                   "session": None}
         starts = set()
 
-        async def begin(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval):
+        async def begin(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval, session=None):
             from misaka.core.platform import cards as card_files
             await asyncio.to_thread(card_files.init_project, workspace, draft_brief=False)
             run = runs.create(
                 con, workspace=workspace, question=question,
                 limits={"max_depth": depth, "parallel": parallel, "sister_parallel": sister_parallel, "plan_approval": plan_approval,
-                        **({"max_followups": rounds} if rounds is not None else {})},
+                        **({"max_followups": rounds} if rounds is not None else {}), **(session or {})},
                 token_start=budget.spent(con),
                 origin_session=getattr(getattr(ctx, "sessionManager", None), "sessionId", None),
             )
@@ -268,20 +338,21 @@ class ResearchPart:
             ctx.ui.notify(
                 f"Research run started: {run['id']} | project {runs.project_name(run)!r} | "
                 f"maximum depth {depth} | LO parallelism {parallel} | Sister cards per LO {sister_parallel} | follow-ups per node "
-                f"{runs.limits(run)['max_followups']} | plan approval {'required' if plan_approval else 'automatic'}. "
-                "Use /research status to check progress.",
+                f"{runs.limits(run)['max_followups']} | plan approval {'required' if plan_approval else 'automatic'}"
+                f"{_session_limits_text(runs.limits(run))}. Use /research status to check progress.",
                 "info",
             )
 
-        async def begin_safely(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval):
+        async def begin_safely(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval, session=None):
             try:
-                await begin(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval)
+                await begin(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval, session)
             except Exception as error:  # noqa: BLE001 - the failure is shown and the question is kept for a retry
                 pending["depth"] = depth
                 pending["parallel"] = parallel
                 pending["sister_parallel"] = sister_parallel
                 pending["rounds"] = rounds
                 pending["plan_approval"] = plan_approval
+                pending["session"] = session
                 pending["workspace"] = workspace
                 send_progress(
                     f"Research startup failed: {type(error).__name__}: {error}\n"
@@ -290,16 +361,17 @@ class ResearchPart:
                              "plan_approval": plan_approval},
                 )
 
-        def start_question(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval):
+        def start_question(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval, session=None):
             """Persist the question, then let this window plan it as the run's root LO."""
             self.session.moments.send_message(
                 {"customType": "research-question", "display": True,
                  "content": f"Research question | {question}",
                  "details": {"question": question, "depth": depth, "parallel": parallel, "sister_parallel": sister_parallel, "rounds": rounds,
-                             "workspace": workspace, "plan_approval": plan_approval}},
+                             "workspace": workspace, "plan_approval": plan_approval, "session": session or {}}},
                 {"deliverAs": "followUp", "triggerTurn": False},
             )
-            task = asyncio.create_task(begin_safely(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval))
+            task = asyncio.create_task(begin_safely(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval,
+                                                    session))
             starts.add(task)
             task.add_done_callback(starts.discard)
 
@@ -311,9 +383,10 @@ class ResearchPart:
                 return {"action": "handled"}
             depth, parallel, rounds, workspace = pending["depth"], pending["parallel"], pending["rounds"], pending["workspace"]
             sister_parallel = pending["sister_parallel"]
-            plan_approval = pending["plan_approval"]
-            pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None)
-            start_question(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval)
+            plan_approval, session = pending["plan_approval"], pending["session"]
+            pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None,
+                           session=None)
+            start_question(question, depth, parallel, workspace, ctx, rounds, sister_parallel, plan_approval, session)
             return {"action": "handled"}
 
         self._capture_question = capture_question
@@ -338,7 +411,7 @@ class ResearchPart:
                     run = _find_run(con, spec["run_id"], _workspace(ctx), active=True)
                     if not run:
                         if pending["depth"] is not None:
-                            pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None)
+                            pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None, session=None)
                             ctx.ui.notify("Research mode closed.", "info")
                             return
                         ctx.ui.notify("No active research run.", "info")
@@ -381,13 +454,13 @@ class ResearchPart:
                     ctx.ui.notify("A research run is already active in this window; stop it before starting another.", "info")
                     return
                 if pending["depth"] is not None and not spec["explicit"]:
-                    pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None)
+                    pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None, session=None)
                     ctx.ui.notify("Research mode closed.", "info")
                     return
                 spec["plan_approval"] = planner.plan_waits_for_user(_cfg())
                 if spec.get("question"):
-                    # `/research [DEPTH] QUESTION`: no picker, no waiting for the next message.
-                    pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None)
+                    # `/research [--depth N] QUESTION`: no picker, no waiting for the next message.
+                    pending.update(depth=None, parallel=None, sister_parallel=None, rounds=None, workspace=None, plan_approval=None, session=None)
                     start_question(spec["question"], spec["depth"], spec["parallel"], _workspace(ctx), ctx, spec["rounds"], spec["sister_parallel"], spec["plan_approval"])
                     return
                 if not spec["explicit"]:
@@ -440,6 +513,26 @@ class ResearchPart:
                                 "question": _APPROVAL_QUESTION,
                                 "multiSelect": False,
                                 "options": approval_options,
+                            }, {
+                                "header": "Compaction",
+                                "question": _THRESHOLD_QUESTION,
+                                "multiSelect": False,
+                                "options": [
+                                    {"label": _global_threshold_label(),
+                                     "description": "Default: settings.json lcm.context_threshold, as every other session uses."},
+                                    {"label": "0.5", "description": "Compact at half the window: smaller requests, earlier summaries."},
+                                    {"label": "0.85", "description": "Compact late: more of the conversation stays verbatim; larger, costlier requests."},
+                                ],
+                            }, {
+                                "header": "Output limit",
+                                "question": _OUTPUT_QUESTION,
+                                "multiSelect": False,
+                                "options": [
+                                    {"label": _MODEL_OUTPUT,
+                                     "description": "Default: each model's own maximum (models.json or the built-in catalog)."},
+                                    {"label": "64k", "description": "At most 64,000 tokens per reply, or the model's own maximum if lower."},
+                                    {"label": "32k", "description": "At most 32,000 tokens per reply, or the model's own maximum if lower."},
+                                ],
                             }],
                             done,
                             tui=tui,
@@ -451,7 +544,8 @@ class ResearchPart:
                     if result.get("action") == "clarify":
                         self.session.moments.send_user_message(
                             "I chose \"Chat about this\" in the research-options picker. Ask me what I want "
-                            "to clarify and talk through depth, LO parallelism, Sister cards per LO, rounds and plan approval; do not start research yet."
+                            "to clarify and talk through depth, LO parallelism, Sister cards per LO, rounds, plan approval, the compaction threshold "
+                            "and the output limit; do not start research yet."
                         )
                         return
                     answers = result.get("answers") or {}
@@ -465,19 +559,24 @@ class ResearchPart:
                     picked = {"max_depth": answers.get(_DEPTH_QUESTION), "parallel": answers.get(_PARALLEL_QUESTION),
                               "sister_parallel": answers.get(_SISTER_PARALLEL_QUESTION),
                               "max_followups": answers.get(_ROUNDS_QUESTION)}
+                    picked.update(context_threshold=_parse_threshold(answers.get(_THRESHOLD_QUESTION)),
+                                  max_output_tokens=_parse_output(answers.get(_OUTPUT_QUESTION)))
                     limits = runs.normalize_limits({k: v for k, v in picked.items() if v is not None})
                     spec.update(depth=limits["max_depth"], parallel=limits["parallel"],
-                                sister_parallel=limits["sister_parallel"], rounds=limits["max_followups"])
+                                sister_parallel=limits["sister_parallel"], rounds=limits["max_followups"],
+                                session=session_overrides.clean(limits))
                 pending["depth"] = spec["depth"]
                 pending["parallel"] = spec["parallel"]
                 pending["sister_parallel"] = spec["sister_parallel"]
                 pending["rounds"] = spec["rounds"]
                 pending["plan_approval"] = spec["plan_approval"]
+                pending["session"] = spec.get("session") or {}
                 pending["workspace"] = _workspace(ctx)
                 ctx.ui.notify(
                     f"Research mode enabled | maximum depth {spec['depth']} | LO parallelism {spec['parallel']} | "
                     f"Sister cards per LO {spec['sister_parallel']} | follow-ups per node {spec['rounds']} | "
-                    f"plan approval {'required' if spec['plan_approval'] else 'automatic'} | "
+                    f"plan approval {'required' if spec['plan_approval'] else 'automatic'}"
+                    f"{_session_limits_text(pending['session'])} | "
                     f"workspace {pending['workspace']}. Your next regular message becomes the "
                     "research question; this Last Order writes the brief and root plan together.",
                     "info",

@@ -53,3 +53,34 @@ def test_a_node_claims_its_row_although_the_parent_recorded_a_drifted_identity(t
                     (_shifted(mine, 3600.0), node["id"]))
         assert runs.claim_runner(con, "research_branches", node["id"], key) is False
         assert "identity mismatch" in runs.note_claim_failure(con, "research_branches", node["id"], key)
+
+
+def _group_leader():
+    """A child leading its own process group, reaped in the background so a killed leader
+    does not linger as a zombie that still answers ``killpg(pgid, 0)``."""
+    import subprocess
+    import threading
+
+    proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    threading.Thread(target=proc.wait, daemon=True).start()
+    return proc
+
+
+def test_a_drifted_leader_identity_still_gets_its_group_stopped():
+    proc = _group_leader()
+    try:
+        recorded = _shifted(processes.identity(proc.pid), 1.0)      # the recorder read one second off
+        assert processes.terminate_orphaned_group(proc.pid, recorded) is True
+        assert proc.wait(timeout=5) is not None                         # stopped, not just forgotten
+    finally:
+        proc.kill()
+
+
+def test_a_reused_pid_is_never_signalled():
+    proc = _group_leader()
+    try:
+        recorded = _shifted(processes.identity(proc.pid), 3600.0)   # a different, older process
+        assert processes.terminate_orphaned_group(proc.pid, recorded) is True
+        assert proc.poll() is None                                   # the new owner of the PID lives
+    finally:
+        proc.kill()

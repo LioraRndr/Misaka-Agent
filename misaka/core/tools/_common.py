@@ -16,6 +16,7 @@ one-line body, and it was the same line in both that broke symlinks.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import stat
 from collections.abc import AsyncIterator, Awaitable
@@ -236,3 +237,44 @@ def write_file_text(path: str, content: str) -> None:
             # fsync is meaningless on a pipe and an error on some platforms; the durability
             # this buys is only owed to files that have durable contents in the first place.
             os.fsync(handle.fileno())
+
+
+# MISAKA fork: pi checks ``fs.access`` and then reads the whole file. A FIFO or a character
+# device passes that check and then blocks, or (``/dev/zero``) never ends; the read runs on a
+# worker thread an abort cannot interrupt, so the tool call never comes back. Tools open
+# regular files only, and a whole-file read has a ceiling.
+MAX_WHOLE_READ_BYTES = 50 * 1024 * 1024
+
+
+def regular_file(absolute_path: str, *, writable: bool = False) -> os.stat_result:
+    """``stat`` of ``absolute_path`` (symlinks followed) once it is known to be a regular file this
+    process may read (and write): the check pi makes with ``fs.access``, without opening anything."""
+    status = os.stat(absolute_path)
+    if stat.S_ISDIR(status.st_mode):
+        raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), absolute_path)
+    if not stat.S_ISREG(status.st_mode):
+        raise RuntimeError(f"{absolute_path} is not a regular file (a pipe, socket or device); "
+                           "tools read and edit regular files only")
+    if not os.access(absolute_path, os.R_OK | (os.W_OK if writable else 0)):
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), absolute_path)
+    return status
+
+
+def whole_file_bytes(absolute_path: str, what: str) -> bytes:
+    """A regular file's bytes, refused past ``MAX_WHOLE_READ_BYTES`` rather than loaded whole."""
+    limit = MAX_WHOLE_READ_BYTES
+
+    def refuse(size: int) -> RuntimeError:
+        return RuntimeError(f"{absolute_path} is {size / 1024 / 1024:.1f} MB; {what} loads at most "
+                            f"{limit // 1024 // 1024} MB. Use bash to work with a file this large.")
+
+    size = regular_file(absolute_path).st_size
+    if size > limit:
+        raise refuse(size)
+    with open(absolute_path, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        # It grew past the limit after the stat: handing back the first ``limit`` bytes would let
+        # edit rewrite the file from a truncated copy.
+        raise refuse(len(data))
+    return data
