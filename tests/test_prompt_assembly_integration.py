@@ -147,7 +147,6 @@ async def test_real_role_assembly(prompt_home, role, kind, research):
         assert '"id": "10033"' in text
         assert ('"id": "10032"' in text) == (role == "last_order")
         assert ("## Sub-agents" in text) == ("Agent" in active)
-        assert ("## Allies" in text) == ("misaka_ally_start" in active)
         assert text.count("## Last Order / Sister coordination") == bool(active.intersection(SISTER_TOOLS))
         if kind == "card":
             assert "misaka_my_card" in active
@@ -167,11 +166,11 @@ async def test_custom_system_and_live_tool_selection(prompt_home, role):
         text = await final_prompt(session)
         assert text.startswith("CUSTOM SYSTEM: keep this exact opening.\n")
         assert identity.COMMON_CHARTER in text
-        header = "## Allies" if role == "last_order" else "## Sub-agents"
+        header = "## Last Order / Sister coordination" if role == "last_order" else "## Sub-agents"
         assert header in text
         session.setActiveToolsByName(["read"])
         limited = await final_prompt(session)
-        assert "## Allies" not in limited and "## Sub-agents" not in limited
+        assert "## Sub-agents" not in limited
         assert "## Last Order / Sister coordination" not in limited
         assert "## Sister capability profiles" in limited
         assert set(session.getActiveToolNames()) == {"read"}
@@ -347,7 +346,7 @@ async def test_lo_entrypoints_share_actual_default_tools_and_complete_prompt(pro
             # the real default registry, then apply the production Research delta.
             with ExitStack() as scope:
                 initial = session.getActiveToolNames()
-                assert {"AskUserQuestion", "misaka_ally_start", "SendMessage"} <= set(initial)
+                assert {"AskUserQuestion", "SendMessage"} <= set(initial)
                 assert ("misaka_card" in initial) == (not research)
                 if research:
                     scope.enter_context(session.toolScope(list(planner.session_tools(SimpleNamespace(session=session)))))
@@ -443,7 +442,7 @@ async def test_research_inherits_order_and_preserves_selection_through_lifecycle
         assert session.getActiveToolNames() == expected
         assert list(planner.session_tools(owner)) == expected
         assert {"misaka_sister_stop", "misaka_sister_message", "skill_manage",
-                "misaka_board", "misaka_ally_start", "SendMessage"} <= set(expected)
+                "misaka_board", "SendMessage"} <= set(expected)
         for name in DRIVER_OWNED_TOOLS:
             result = await session.agent.beforeToolCall({"toolCall": {"name": name}, "args": {}})
             assert result["block"]
@@ -541,16 +540,15 @@ def test_research_planning_and_report_do_not_set_thinking(tmp_path, monkeypatch)
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from misaka.core.research import planner, report
+    from misaka.core.research import planner
 
     worker = SimpleNamespace(run_llm_json=Mock(return_value=(None, "Fixture answer", None)))
     cfg = {"roles_root": str(tmp_path), "provider": "fixture", "default_model": "fixture"}
     planner._call(worker, cfg, "Plan", cwd=str(tmp_path), session_dir=str(tmp_path))
-    monkeypatch.setattr(report, "_nodes", lambda *_: [])
-    monkeypatch.setattr(report, "_boundary", lambda *_: [])
-    run = {"id": "fixture", "workspace": str(tmp_path), "question": "Fixture?",
-           "root_session": str(tmp_path / "session.jsonl")}
-    assert report._write(None, run, cfg, worker, "Report", tools=()) == "Fixture answer"
+    # The report stages go through the same turn as every phase command (report._stage -> planner.commanded).
+    assert planner.commanded(worker, cfg, "Report", command=object(), name="misaka_research_report",
+                             recorded=lambda: {"payload": {}}, cwd=str(tmp_path), session_dir=str(tmp_path),
+                             raw=True)[1] == "Fixture answer"
     assert worker.run_llm_json.call_count == 2
     for call in worker.run_llm_json.call_args_list:
         assert "thinking" not in call.kwargs

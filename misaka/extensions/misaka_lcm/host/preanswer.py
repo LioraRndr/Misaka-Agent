@@ -78,7 +78,10 @@ def inject(event, ctx, *, active_tools=None) -> dict | None:
     messages = list(read_field(event, "messages") or [])
     index = next((i for i in range(len(messages) - 1, -1, -1)
                   if ingest.is_task_message(messages[i])), None)
-    if index is None:
+    # Upstream recalls for the user's message. A misaka work order -- a research phase, a mailbox
+    # note -- opens a turn too (moments.TURN) but asks nothing to recall for: a 290 KB phase prompt
+    # split into thousands of search terms failed every turn it opened (2026-09-29).
+    if index is None or read_field(messages[index], "role") != "user":
         return None
     built = context_engine.bound_engine(ctx)
     question, question_date = _anchor(messages)

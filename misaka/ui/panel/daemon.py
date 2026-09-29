@@ -4,15 +4,15 @@ Process model (after herdr): this long-lived process owns every pane (PTY);
 the panel and CLI are thin clients, and a disconnect only removes an observer.
 The protocol is newline-delimited JSON (requests carry id/method/params).
 
-Card panes: ``pane.run_card`` claims a lease and opens the worker.  The daemon
-keeps that lease alive and reconciles the real process exit; the Sister's own
-lifecycle hook submits her result.  External ally panes retain their exit
-adapter.
+Card panes: ``pane.run_card`` claims a lease and opens the worker (``card_program``: a
+Sister's session, or an ally's ACP runner).  The daemon keeps that lease alive and reconciles
+the real process exit; the worker settles its own result.
 """
 import asyncio
 import base64
 import fcntl
 import json
+import logging
 import os
 import re
 import secrets
@@ -37,7 +37,7 @@ from misaka.utils.streams import STREAM_LIMIT
 # Wire protocol version (strict equality, as in herdr). Bump it whenever *server
 # behaviour* changes, not only method/event shapes: an unbumped behaviour change
 # once let a stale daemon slip through the version gate.
-PROTOCOL = 50   # 50: one home, one layout table -- a daemon from before it serves the old paths; 49: panes.list says which pane holds a card's claim, and a card is continued in the pane it already has; 48: pane.send/pane.input drain through a per-pane write queue and wait for delivery; 47: drag resizes are fire-and-forget (id=None, no reply) and the layout is persisted at drag end, so the divider never blocks on a busy daemon; 46: a drag resizes the program as fast as it repaints; 44: reflow held until repaint; 43: libghostty-vt; 42: panes.resize acknowledged first; 40: shown frame in a sync block; 38: input state, extract, kitty
+PROTOCOL = 53   # 53: panes.list takes {"tab_of": pane_id}, the panes of that pane's tab (Last Order's pane tools); 52: spaces have durable ids (state/spaces.json), a pane's program carries MISAKA_NET_SPACE, place {"space": id} reopens a remembered space, layout.get lists dormant spaces; 51: screen frames carry the program's content revision, a pane's OSC 52 copy reaches the panel, idle scrollback is compressed; 50: one home, one layout table -- a daemon from before it serves the old paths; 49: panes.list says which pane holds a card's claim, and a card is continued in the pane it already has; 48: pane.send/pane.input drain through a per-pane write queue and wait for delivery; 47: drag resizes are fire-and-forget (id=None, no reply) and the layout is persisted at drag end, so the divider never blocks on a busy daemon; 46: a drag resizes the program as fast as it repaints; 44: reflow held until repaint; 43: libghostty-vt; 42: panes.resize acknowledged first; 40: shown frame in a sync block; 38: input state, extract, kitty
 RING_CAP = 256 * 1024          # output tail kept per pane
 SEND_TIMEOUT = 8.0             # pane.send: how long a message may take to enter the pane before it counts as undelivered (under the client's 10 s request timeout)
 INPUT_TIMEOUT = 1.0            # pane.input: keystrokes and pastes wait this long, then stay queued (typing must not block the panel)
@@ -50,6 +50,7 @@ CARD_POLL_SECONDS = 5.0        # card-pane polling interval
 DEFAULT_ROWS, DEFAULT_COLS = 32, 120
 EXIT_GRACE_TRIES, EXIT_POLL_SECONDS = 40, 0.05   # 2 s for a program to save state, then SIGKILL
 CARD_SHELL = [sys.executable, "-m", "misaka", "card-shell"]   # tests may override
+ALLY_CARD = [sys.executable, "-m", "misaka", "ally-card"]     # tests may override
 SINGLETON_LOCK_TRIES = 100     # x 50 ms: how long a cold start waits for another one's probe+bind
 
 
@@ -96,6 +97,10 @@ class _PendingWrite:
 # this pair). A block is abandoned once the program has been silent for SYNC_TIMEOUT,
 # measured from the last byte: a long transcript's repaint arrives in many chunks.
 SYNC_TIMEOUT = 1.0
+# pane.rs TERMINAL_COMPRESSION_IDLE / TERMINAL_COMPRESSION_STEP: scrollback is compressed once
+# the terminal has been left alone this long, one bounded step at a time.
+COMPRESSION_IDLE = 0.250
+COMPRESSION_STEP = 0.001
 
 
 def _colour_sgr(colour, base):
@@ -144,6 +149,7 @@ def _render_cells(cells):
 def _screen_lines(pane):
     """The rows of the active area as text (herdr's detection text: what a shell or agent
     shows at the bottom, whatever the viewer has scrolled to)."""
+    pane.compression.wake()
     return pane.term.recent_text(pane.term.rows).split("\n")
 
 
@@ -151,24 +157,25 @@ def _screen_lines(pane):
 # the / in paths and the ubiquitous - would make every screen look busy.
 _SPINNER_CHARS = set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷◐◓◑◒◴◷◶◵")
 _SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "-zsh", "-bash"}
-# A command typed by hand in a pane's shell counts as a transient ally only if it
-# is on the allow-list; otherwise vim/htop would show up in the roster too. The list is
-# ``"allies"`` in the global settings.json (no env knob, by user decision), read fresh on
-# each ask so an edit takes effect without a daemon restart. Allies launched by Last
-# Order are not subject to the list.
-ALLY_SEED = ("claude", "codex")
+# A command typed by hand in a pane's shell counts as a transient ally only if it is one of
+# the allies this home enables (``settings.json``'s ``allies``, whose names are the commands);
+# otherwise vim/htop would show up in the roster too. Read fresh on each ask, so an edit takes
+# effect without a daemon restart.
 
 
 def ally_commands():
-    """The hand-launched ally allow-list: ``settings.json``'s ``allies``, else the seed."""
-    from misaka.core.settings_manager import SettingsManager
-    try:
-        listed = SettingsManager.forRole(None).settings.get("allies")
-    except Exception:  # noqa: BLE001 - an unreadable settings file must not block panes
-        return frozenset(ALLY_SEED)
-    if not isinstance(listed, list):
-        return frozenset(ALLY_SEED)
-    return frozenset(c.strip() for c in listed if isinstance(c, str) and c.strip())
+    """The names a hand-launched agent is recognised by: the enabled allies."""
+    from misaka.core.network.ally import presets
+    return frozenset(presets.names())
+
+
+def card_program(row, say=None):
+    """The program that runs an attempt at this card: an ally's ACP runner for an ally, a Sister's
+    session otherwise. ``say`` continues the card with a message as the attempt's first turn."""
+    from misaka.core.network.ally import presets
+    if row["assignee"] in presets.names():
+        return [*ALLY_CARD, row["id"], *(["--say", say] if say is not None else [])]
+    return [*CARD_SHELL, row["id"], *(["--resume", "--say", say] if say is not None else [])]
 
 
 def _looks_like_command(name):
@@ -229,15 +236,10 @@ def _foreground(pane):
 
 
 def _ally_name(pane):
-    """Name of the third-party agent running in this pane, or None -- the test for a transient ally.
-
-    Two sources: an ally launched by Last Order (``pane.ally`` is set; any
-    command qualifies), or a command the user typed into a MISAKA pane's shell
-    (only names on the ``allies`` allow-list, see ``ally_commands()``).
-    Excluded: Sister card panes and MISAKA's own chat/card-shell sessions.
+    """Name of the third-party agent running in this pane, or None -- the test for a transient ally:
+    a command the user typed into a MISAKA pane's shell that is an enabled ally (``ally_commands()``).
+    Excluded: card panes and MISAKA's own chat/card-shell sessions.
     """
-    if pane.ally:
-        return pane.ally
     if pane.card or not pane.alive():
         return None
     if "misaka" in " ".join(pane.argv or []):   # MISAKA's own sessions are not allies
@@ -397,12 +399,39 @@ def extract_text(pane, start, end):
     if (end_row, end_col) < (start_row, start_col):
         (start_row, start_col), (end_row, end_col) = (end_row, end_col), (start_row, start_col)
     term = pane.term
+    pane.compression.wake()
     last_row, last_col = term.total_rows() - 1, term.cols - 1
     if last_row < 0 or start_row > last_row:
         return ""
     clamp = lambda value, high: max(0, min(int(value), high))
     return term.read_text((clamp(start_col, last_col), clamp(start_row, last_row)),
                           (clamp(end_col, last_col), clamp(end_row, last_row)))
+
+
+PARAGRAPH_SCAN_ROWS = 1000     # pane/terminal.rs paragraph_motion_target: how far { and } look
+
+
+def paragraph_target(pane, row, direction):
+    """pane/terminal.rs paragraph_motion_target: the nearest blank row above (direction < 0)
+    or below the absolute ``row``, looking at most PARAGRAPH_SCAN_ROWS - 1 rows away, or None
+    (copy mode then leaves the cursor where it is). The formatter reads rows one line each
+    and leaves out the blank rows at the end of a range, so a row past its lines is blank."""
+    term = pane.term
+    total = term.total_rows()
+    if direction == 0 or not 0 <= row < total:
+        return None
+    reach = min(total, PARAGRAPH_SCAN_ROWS) - 1
+    first, last = (max(0, row - reach), row - 1) if direction < 0 else (row + 1, min(total - 1, row + reach))
+    if first > last:
+        return None
+    pane.compression.wake()
+    lines = term.read_text((0, first), (max(0, term.cols - 1), last), unwrap=False, trim=True).split("\n")
+    candidates = range(last, first - 1, -1) if direction < 0 else range(first, last + 1)
+    for candidate in candidates:
+        index = candidate - first
+        if index >= len(lines) or not lines[index].strip():
+            return candidate
+    return None
 
 
 def _scroll_metrics(pane):
@@ -417,6 +446,7 @@ def _scroll_pane(pane, delta=0, to=None):
         pane.term.scroll_to_bottom()
     else:
         pane.term.scroll(int(delta))
+    pane.compression.wake()
     pane.sent_cursor = None             # visibility changes with the offset; resend it
 
 
@@ -426,12 +456,80 @@ def _rows_for(pane):
     return [_render_cells(cells) for _index, cells in pane.render.rows(all_rows=True)]
 
 
+class DecscusrTracker:
+    """pane/cursor.rs DecscusrTracker: whether the program has set a cursor shape with
+    DECSCUSR (``CSI Ps SP q``, Ps 1-6); ``CSI 0 SP q`` gives the shape back to the host
+    terminal's default. A sequence split across reads is followed through; outside an
+    escape sequence the scan jumps to the next ESC."""
+
+    __slots__ = ("collecting", "first", "overridden", "space", "state")
+
+    def __init__(self):
+        self.state, self.first, self.collecting, self.space = "ground", None, True, False
+        self.overridden = False
+
+    def observe(self, data):
+        index, end = 0, len(data)
+        while index < end:
+            if self.state == "ground":
+                index = data.find(0x1B, index)
+                if index < 0:
+                    return
+            self._byte(data[index])
+            index += 1
+
+    def _byte(self, byte):
+        if self.state == "ground":
+            if byte == 0x1B:
+                self.state = "escape"
+        elif self.state == "escape":
+            if byte == 0x5B:                            # [
+                self.state, self.first, self.collecting, self.space = "csi", None, True, False
+            elif byte != 0x1B:
+                self.state = "ground"
+        elif byte == 0x1B:
+            self.state = "escape"
+        elif 0x30 <= byte <= 0x39 and self.collecting:
+            self.first = min(0xFFFF, (self.first or 0) * 10 + byte - 0x30)
+        elif byte in (0x3B, 0x3A):                      # ; :
+            self.collecting = False
+        elif byte == 0x20:
+            self.space, self.collecting = True, False
+        elif 0x40 <= byte <= 0x7E:
+            if byte == 0x71 and self.space:             # q
+                param = self.first or 0
+                if param <= 6:
+                    self.overridden = param != 0
+            self.state = "ground"
+        elif not 0x20 <= byte <= 0x3F:
+            self.state = "ground"
+
+
+def decscusr_cursor_shape(style, blinking):
+    """pane/terminal.rs decscusr_cursor_shape: the DECSCUSR parameter for ghostty's cursor
+    style (a hollow block reads as a block)."""
+    if style == vt.CURSOR_STYLE_UNDERLINE:
+        return 3 if blinking else 4
+    if style == vt.CURSOR_STYLE_BAR:
+        return 5 if blinking else 6
+    return 1 if blinking else 2
+
+
+def _cursor_shape(pane):
+    """cursor_state_from_render_state: the program's shape once it set one, else 0 (the host
+    terminal's default). The render state must be current."""
+    if not pane.decscusr.overridden:
+        return 0
+    return decscusr_cursor_shape(*pane.render.cursor_style())
+
+
 def _display(pane, rows):
     """The pane as a viewer sees it right now: rows, cursor, metrics, modes."""
     x, y, visible = pane.render.cursor()
     return {"rows": rows,
             "cursor": [x, y],
             "cursor_hidden": not visible,
+            "cursor_shape": _cursor_shape(pane),
             "size": [pane.term.rows, pane.term.cols],
             "scroll": pane.term.scroll_metrics(),
             "alt_screen": pane.term.alternate_screen(),
@@ -454,6 +552,125 @@ def _shown(pane, rendered=None):
     return pane.shown
 
 
+# pane.rs apply_pane_terminal_env: host handles refer to the outer terminal, never to a pane.
+PANE_HOST_IDENTITY = ("ITERM_SESSION_ID", "LC_TERMINAL", "LC_TERMINAL_VERSION", "WEZTERM_PANE",
+                      "KITTY_WINDOW_ID", "WT_SESSION", "TMUX", "TMUX_PANE", "STY", "ZELLIJ",
+                      "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID")
+# pane.rs apply_pane_launch_env: a new pane is not a child agent of whatever started the daemon.
+PANE_OUTER_AGENT_IDENTITY = ("CODEX_THREAD_ID", "OMPCODE", "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION",
+                             "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_TOKEN")
+
+
+def _pane_env(inherited, explicit=None):
+    """The environment of a program in a pane (pane.rs apply_pane_terminal_env, then
+    apply_pane_launch_env): the pane's terminal is the daemon's ghostty, so TERM, COLORTERM
+    and TERM_PROGRAM name that and nothing of the host terminal or of an outer agent session
+    leaks in. Explicit launch env comes last and can opt back in."""
+    from misaka.config.engine import VERSION
+
+    child = dict(inherited)
+    child.update({"TERM": "xterm-256color", "COLORTERM": "truecolor",
+                  "TERM_PROGRAM": "misaka", "TERM_PROGRAM_VERSION": VERSION})
+    for key in PANE_HOST_IDENTITY + PANE_OUTER_AGENT_IDENTITY:
+        child.pop(key, None)
+    child.update(explicit or {})
+    return child
+
+
+class _Compression:
+    """pane.rs TerminalCompressionTask on the daemon's event loop. libghostty-vt compresses
+    scrollback only when asked; herdr asks once the terminal's compression activity token
+    and its own access generation have both stayed put for COMPRESSION_IDLE, then runs
+    incremental steps COMPRESSION_STEP apart until a pass completes, and after that waits for
+    the next access. Output, resizes, scrolling and text reads count as access (``wake``).
+    One step is bounded (well under a millisecond on a full 10 MB scrollback), so it runs
+    inline; the daemon is single-threaded, which also serialises it with every other use of
+    the terminal as the C API requires. Compression changes only how history is stored,
+    never its contents or the scrollback limit."""
+
+    __slots__ = ("activity", "done", "generation", "handle", "observed", "off", "pane")
+
+    def __init__(self, pane):
+        self.pane = pane
+        self.generation = self.observed = 0
+        self.activity = None
+        self.handle = None
+        self.done = False
+        self.off = True               # not scheduled until the pane's program is spawned
+
+    def start(self):
+        self.cancel()
+        self.off = False
+        self.done = False
+        self.observed = self.generation
+        try:
+            self.activity = self.pane.term.compression_activity()
+        except RuntimeError:
+            self.off = True
+            return
+        self._later(COMPRESSION_IDLE, self._idle_check)
+
+    def cancel(self):
+        if self.handle is not None:
+            self.handle.cancel()
+            self.handle = None
+        self.off = True
+
+    def wake(self):
+        """The terminal was used: restart the idle wait (herdr TerminalCompressionWake)."""
+        self.generation += 1
+        if self.done and not self.off:
+            self.done = False
+            self.observed = self.generation
+            self._later(COMPRESSION_IDLE, self._idle_check)
+
+    def _later(self, delay, callback):
+        if self.handle is not None:
+            self.handle.cancel()
+        self.handle = asyncio.get_running_loop().call_later(delay, callback)
+
+    def _idle_check(self):
+        self.handle = None
+        if self.off:
+            return
+        try:
+            current = self.pane.term.compression_activity()
+        except RuntimeError:
+            self.off = True
+            return
+        if current == self.activity and self.observed == self.generation:
+            self._step()
+            return
+        self.activity, self.observed = current, self.generation
+        self._later(COMPRESSION_IDLE, self._idle_check)
+
+    def _step(self):
+        self.handle = None
+        if self.off:
+            return
+        if self.observed != self.generation:
+            self.observed = self.generation
+            self._later(COMPRESSION_IDLE, self._idle_check)
+            return
+        try:
+            current = self.pane.term.compression_activity()
+            if current != self.activity:          # try_compress_incremental_if_activity
+                self.activity, self.observed = current, self.generation
+                self._later(COMPRESSION_IDLE, self._idle_check)
+                return
+            result = self.pane.term.compress_incremental()
+        except RuntimeError:
+            logging.getLogger(__name__).warning("scrollback compression failed for pane %s; not retried", self.pane.id)
+            self.off = True
+            return
+        if result == vt.COMPRESSION_UNSUPPORTED:
+            self.off = True
+        elif result == vt.COMPRESSION_PENDING:
+            self._later(COMPRESSION_STEP, self._step)
+        else:
+            self.done = True
+
+
 def _seated_pane_ids(spaces):
     """Every pane id a layout seats."""
     out = set()
@@ -466,12 +683,15 @@ def _seated_pane_ids(spaces):
 
 class Pane:
     __slots__ = (
-        "ally",
         "argv",
         "buf",
         "card",
         "claim_lock",
+        "clipboard_writes",
+        "compression",
+        "content_rev",
         "cwd",
+        "decscusr",
         "exit_code",
         "fd",
         "fg_at",
@@ -516,12 +736,16 @@ class Pane:
         self.seen_status = None       # board status seen while focused ("finished but not yet looked at")
         # The pane's terminal is ghostty's (as herdr's): it parses, keeps the scrollback,
         # reflows on resize, answers queries, and tracks every mode the panel encodes for.
-        self.term = vt.Terminal(DEFAULT_COLS, DEFAULT_ROWS, on_write_pty=self.reply)
+        self.clipboard_writes = []    # a program's OSC 52 copies, forwarded to the panel after each read
+        self.term = vt.Terminal(DEFAULT_COLS, DEFAULT_ROWS, on_write_pty=self.reply,
+                                on_clipboard_write=self.clipboard_writes.append)
         self.render = vt.RenderState()
+        self.decscusr = DecscusrTracker()   # the program's DECSCUSR cursor shape, passed to the host
+        self.compression = _Compression(self)
+        self.content_rev = 0          # herdr content_revision: bumps with every read of program output
         self.full_frame = True        # the next frame carries every row (first sight, resize, a client that fell behind)
         self.theme = "dark"           # theme variant (set from env at create; OSC 10/11 answers follow it)
         self.set_theme(self.theme)
-        self.ally = None              # ally label (only for third-party agent panes started by Last Order)
         self.flush = None             # pending frame-coalescing timer
         self.sent_cursor = None       # last cursor broadcast (position + visibility)
         self.sent_input = None        # last input state broadcast (a mode change alone is a frame)
@@ -561,10 +785,12 @@ class Pane:
         """ghostty reflows the primary screen and keeps the offset from the bottom (herdr
         ``TerminalRuntime::resize``); every row is sent with the next frame."""
         self.term.resize(cols, rows)
+        self.compression.wake()
         self.full_frame = True
         self.sent_cursor = None
 
     def close_terminal(self):
+        self.compression.cancel()     # a pending step must never run on a freed terminal
         self.render.close()
         self.term.close()
 
@@ -573,8 +799,10 @@ class Pane:
         the modes, scrollback and alternate screen of the program that left are not inherited."""
         rows, cols = self.size()
         self.close_terminal()
-        self.term = vt.Terminal(cols, rows, on_write_pty=self.reply)
+        self.term = vt.Terminal(cols, rows, on_write_pty=self.reply,
+                                on_clipboard_write=self.clipboard_writes.append)
         self.render = vt.RenderState()
+        self.decscusr = DecscusrTracker()
         self.set_theme(self.theme)
         self.full_frame = True
         self.sent_cursor = self.sent_input = self.shown = None
@@ -595,7 +823,10 @@ class Daemon:
         # The layout, as in herdr: the server holds spaces -> tabs -> split trees and seats every
         # pane at creation; clients only draw it. {"id","folder","name","tabs":[{"name","tree"}]}
         self.spaces: list[dict] = []
-        self._space_seq = 0
+        # Every space a session may still belong to, open or not: id -> {"folder", "name"}.
+        # A session belongs to the space it first ran in, so an id outlives its panes and the
+        # daemon (state/spaces.json); `_load_spaces` prunes it at start.
+        self.known_spaces: dict[str, dict] = {}
         self.layout_revision = 0    # bumps on every layout change; clients edit against it
         self._theme = "dark"        # session theme variant; updated when the panel creates a pane with MISAKA_THEME
         self._con = None            # board connection, opened on the first card run
@@ -623,8 +854,14 @@ class Daemon:
         try:
             rows, cols = pane.size()      # a fresh pane is still at the default size
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-            child_env = {**os.environ, **(env or {}), "TERM": "xterm-256color",
-                         "COLORTERM": "truecolor", "MISAKA_NET_PANE": pane.id}
+            child_env = _pane_env(os.environ, env)
+            child_env["MISAKA_NET_PANE"] = pane.id
+            # The space the pane is seated in: a session started here belongs to it for good.
+            seat = self._tab_holding(pane.id)
+            if seat:
+                child_env["MISAKA_NET_SPACE"] = seat[0]["id"]
+            else:
+                child_env.pop("MISAKA_NET_SPACE", None)
             child_env.pop("MISAKA_DM_CARD_ALLOWLIST", None)  # contact-session capability
             pane.proc = subprocess.Popen(
                 pane.argv, cwd=pane.cwd, stdin=slave, stdout=slave, stderr=slave,
@@ -641,6 +878,7 @@ class Daemon:
         os.set_blocking(master, False)
         pane.fd = master
         asyncio.get_running_loop().add_reader(master, self._pump, pane)
+        pane.compression.start()
 
     @staticmethod
     def _discard_output(pane: Pane, rounds=16):
@@ -732,7 +970,6 @@ class Daemon:
         pane.seen_status = None
         pane.started = pane.generation = None
         pane.claim_lock = None
-        pane.ally = (env or {}).get("MISAKA_ALLY")   # as `create` reads it, per program
         pane.fg_at = pane.fg_seen = None
         pane.resize_target = pane.resize_hold = pane.sync_until = None
         pane.started_at = int(time.time())
@@ -844,7 +1081,17 @@ class Daemon:
         pane.last_output = time.time()
         if len(pane.buf) > RING_CAP:
             del pane.buf[: len(pane.buf) - RING_CAP]
+        pane.decscusr.observe(chunk)
         pane.term.write(chunk)                # ghostty parses; its answers come back through Pane.reply
+        pane.content_rev += 1
+        pane.compression.wake()
+        if pane.clipboard_writes:
+            # herdr AppEvent::ClipboardWrite -> ServerMessage::Clipboard: a client-local side
+            # effect, so it goes to the panel (the "*" subscriber), never to a single-pane viewer.
+            for content in pane.clipboard_writes:
+                self._broadcast_to_panels({"event": "clipboard", "id": pane.id,
+                                           "data": base64.b64encode(content).decode()})
+            pane.clipboard_writes.clear()
         # A synchronized block (DEC 2026) holds frames until it closes; the grace period
         # restarts with every chunk, so a slow repaint is never shown half-painted.
         pane.sync_until = time.monotonic() + SYNC_TIMEOUT if pane.term.mode(vt.MODE_SYNC_OUTPUT) else None
@@ -900,7 +1147,7 @@ class Daemon:
         rendered = {index: _render_cells(cells) for index, cells in pane.render.rows(all_rows=pane.full_frame)}
         pane.full_frame = False
         x, y, visible = pane.render.cursor()
-        cursor = ([x, y], not visible)
+        cursor = ([x, y], not visible, _cursor_shape(pane))
         # Cursor moves and mode changes are frames too: neither dirties a row.
         if not rendered and cursor == pane.sent_cursor and state == pane.sent_input:
             return
@@ -913,9 +1160,11 @@ class Daemon:
             "rows": {str(r): line for r, line in rendered.items()},
             "cursor": cursor[0],
             "cursor_hidden": cursor[1],
+            "cursor_shape": cursor[2],
             "scroll": shown["scroll"],
             "alt_screen": shown["alt_screen"],
             "input": state,
+            "revision": pane.content_rev,
         })
         # The program has finished this frame; if a drag moved on while it rendered, resize it
         # toward the size the client now wants (herdr resizes each render, as fast as pi keeps up).
@@ -986,6 +1235,16 @@ class Daemon:
         pane.full_frame = True
         self._schedule_flush(pane, FRAME_SECONDS)
 
+    def _broadcast_to_panels(self, payload):
+        line = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
+        for writer in list(self._panels):
+            if writer.transport.is_closing():
+                continue
+            try:
+                writer.write(line)
+            except Exception:  # noqa: BLE001, S110 - a panel that went away is dropped by _serve_client
+                pass
+
     def _broadcast(self, pane_id, payload):
         line = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
         behind = False
@@ -1016,11 +1275,14 @@ class Daemon:
         if env and env.get("MISAKA_THEME") in ("dark", "light"):
             self._theme = env["MISAKA_THEME"]   # remember the session variant
             pane.set_theme(self._theme)
-        if env and env.get("MISAKA_ALLY"):
-            pane.ally = env["MISAKA_ALLY"]      # transient ally: in the roster until the process exits
-        self._spawn(pane, env=env)
-        self.panes[pane.id] = pane
+        # Seated before it is spawned, so the program knows its space (MISAKA_NET_SPACE).
         self._seat(pane, place or {})
+        try:
+            self._spawn(pane, env=env)
+        except BaseException:
+            self._unseat(pane.id)
+            raise
+        self.panes[pane.id] = pane
         self._save_snapshot()
         return pane
 
@@ -1034,17 +1296,54 @@ class Daemon:
                     return space, tab
         return None
 
+    def _load_spaces(self):
+        """Read the space registry and keep only the spaces some session still belongs to."""
+        from misaka.core import session_catalog
+        try:
+            with open(home.path("spaces"), encoding="utf-8") as handle:
+                known = json.load(handle)
+        except (OSError, ValueError):
+            known = {}
+        in_use = session_catalog.spaces_in_use()
+        self.known_spaces = {key: value for key, value in (known if isinstance(known, dict) else {}).items()
+                             if key in in_use and isinstance(value, dict)}
+        self._write_spaces()
+
+    def _write_spaces(self):
+        from misaka.utils import atomic
+        path = home.path("spaces")
+        os.makedirs(path.parent, exist_ok=True)
+        atomic.write_text(str(path), json.dumps(self.known_spaces, ensure_ascii=False))
+
+    def _remember(self, space):
+        entry = {"folder": space["folder"], "name": space.get("name")}
+        if self.known_spaces.get(space["id"]) != entry:
+            self.known_spaces[space["id"]] = entry
+            self._write_spaces()
+
     def _seat(self, pane, place):
         """``{"split": pane_id[, "direction": "h"|"v"]}`` splits that pane in its own tab (herdr
         split_at, 50/50); ``{"grid": pane_id}`` adds the pane to that pane's tab and re-lays the
         tab as a balanced grid (a Last Order and the Sisters she summoned share one tab this
-        way); ``{"tab": pane_id}`` opens a new tab in the space holding that pane; anything else
-        (or an unknown pane) opens a new space in the pane's folder. ``name`` names a new tab
-        (herdr custom_name); a new tab is otherwise named after its pane."""
+        way); ``{"tab": pane_id}`` opens a new tab in the space holding that pane; ``{"space":
+        id}`` opens a new tab in that space, reopening it from the registry (its folder and
+        name) when no pane holds it; anything else (or an unknown pane) opens a new space in the
+        pane's folder. ``name`` names a new tab (herdr custom_name); a new tab is otherwise named
+        after its pane."""
         ref = place.get("split") or place.get("tab") or place.get("grid")
         at = self._tab_holding(ref) if ref else None
         name = place.get("name") or pane.title
-        if at and place.get("grid"):
+        wanted = place.get("space")
+        if isinstance(wanted, str) and wanted:
+            space = next((s for s in self.spaces if s["id"] == wanted), None)
+            if space is None:
+                known = self.known_spaces.get(wanted) or {}
+                space = {"id": wanted, "folder": known.get("folder") or os.path.realpath(pane.cwd),
+                         "name": known.get("name"), "tabs": []}
+                self.spaces.append(space)
+                self._remember(space)
+            space["tabs"].append({"name": name, "tree": ["pane", pane.id]})
+        elif at and place.get("grid"):
             tab = at[1]
             ids = hui.pane_ids(hui.from_jsonable(tab["tree"])) + [pane.id]
             tab["tree"] = hui.to_jsonable(hui.grid_tree(ids))
@@ -1056,9 +1355,10 @@ class Daemon:
         elif at:
             at[0]["tabs"].append({"name": name, "tree": ["pane", pane.id]})
         else:
-            self._space_seq += 1
-            self.spaces.append({"id": f"w{self._space_seq}", "folder": os.path.realpath(pane.cwd),
-                                "name": None, "tabs": [{"name": name, "tree": ["pane", pane.id]}]})
+            space = {"id": "w" + secrets.token_hex(4), "folder": os.path.realpath(pane.cwd),
+                     "name": None, "tabs": [{"name": name, "tree": ["pane", pane.id]}]}
+            self.spaces.append(space)
+            self._remember(space)
         self.layout_revision += 1
 
     def _unseat(self, pane_id):
@@ -1093,6 +1393,8 @@ class Daemon:
                                      "carries no readable split tree.")
         seated = _seated_pane_ids(incoming)
         self.spaces = incoming
+        for space in incoming:              # a renamed space keeps its name when it next reopens
+            self._remember(space)
         for pane in list(self.panes.values()):
             if pane.id not in seated and pane.alive():
                 self._seat(pane, {})
@@ -1232,7 +1534,7 @@ class Daemon:
         from misaka.core.platform import tasks as db
         return {
             "MISAKA_THEME": self._theme,    # card panes follow the session theme
-            # misaka commands inside the pane (e.g. an ally's `misaka tell`) must use
+            # misaka commands inside the pane (an ally's MCP bridge among them) must use
             # the daemon's home, or messages land in a different messages.db
             # and Last Order never sees them.
             home.ENV_HOME: str(home.home()),
@@ -1380,10 +1682,10 @@ class Daemon:
             # Nothing to resume: this is the card's first attempt, run from its contract, and
             # the note travels by mail so the card's own inbox hands it over at the first
             # tool boundary (B16; the mail path is B8's card address).
-            argv = [*CARD_SHELL, task_id]
+            argv = card_program(row)
             self._mail_card(row, say, generation)
         else:
-            argv = [*CARD_SHELL, task_id, "--resume", "--say", say]
+            argv = card_program(row, say)
         return await self._host_card(
             con, row, lock, generation, argv, place,
             undo=lambda: db.block_task(con, task_id, "transient",
@@ -1395,8 +1697,7 @@ class Daemon:
         """A note for one attempt at a card, from its Last Order, read by the card's inbox."""
         from misaka.core.network import messages
         messages.send(self._mailbox(), row["assignee"], text, summary=text[:80].strip() or "note",
-                      sender="last-order", to_task=row["id"], generation=generation,
-                      workspace=row["workspace"])
+                      sender="last-order", to_task=row["id"], generation=generation)
 
     async def run_card(self, task_id, place=None) -> Pane:
         from misaka.core.platform import admission
@@ -1413,11 +1714,8 @@ class Daemon:
             raise ValueError(f"Card {task_id} is not ready (current status: {row['status']}).")
         # A card requeued while its last window is still open runs in that window again.
         reuse = self._card_pane_to_reuse(task_id)
-        # Who runs the card: no executor = a Sister (card-shell), otherwise an ally's
-        # third-party CLI. This is the only fork; claim, lease, submission,
-        # acceptance, and audit are shared (the board is the single bus).
-        executor = json.loads(row["executor"]) if row["executor"] else None
-        if executor is None:
+        from misaka.core.network.ally import presets
+        if row["assignee"] not in presets.names():     # an ally's runner says itself why it cannot start
             profile = os.path.join(_expand(CFG["profiles_root"]), row["assignee"])
             if not os.path.isdir(profile):
                 raise ValueError(f"Sister {row['assignee']} is not in the roster.")
@@ -1429,25 +1727,10 @@ class Daemon:
                         host_cap=host_cap, assignee_cap=assignee_cap):
             raise ValueError(db.claim_refusal(task_id) or f"Card {task_id} was claimed by another dispatcher.")
         undo = lambda: db.back_to_ready(con, task_id, generation=generation, claim_lock=lock)
-        try:
-            workspace = self._card_workspace(row)
-            env = None
-            if executor is None:
-                argv = [*CARD_SHELL, task_id]
-            else:  # ally: the card contract is the prompt, run one non-interactive turn
-                from misaka.core.network.ally import runner as ally_runner
-                from misaka.core.platform import cards
-                task = dict(row)
-                task["_attachments"] = cards.attachment_list(workspace, task_id, workspace=workspace)
-                argv = ally_runner.build_argv(executor, ally_runner.card_prompt(task))
-                env = {"MISAKA_ALLY": row["assignee"]}
-        except BaseException:
-            undo()
-            raise
-        return await self._host_card(con, row, lock, generation, argv, place,
-                                     undo=undo, env=env, reuse=reuse)
+        return await self._host_card(con, row, lock, generation, card_program(row), place,
+                                     undo=undo, reuse=reuse)
 
-    async def _host_card(self, con, row, lock, generation, argv, place, *, undo, env=None,
+    async def _host_card(self, con, row, lock, generation, argv, place, *, undo,
                          event="claimed", reuse=None):
         """Host a claimed card in a pane; ``undo`` releases its claim if no pane starts."""
         from misaka.core.platform import processes as process_tree
@@ -1469,8 +1752,7 @@ class Daemon:
                        "MISAKA_USAGE_TASK_ID": task_id,
                        "MISAKA_USAGE_GENERATION": str(generation),
                        "MISAKA_USAGE_CLAIM_LOCK": lock,
-                       "MISAKA_USAGE_TOKEN_CAP": str(int(CFG["token_cap"] or 0)),
-                       **(env or {})}
+                       "MISAKA_USAGE_TOKEN_CAP": str(int(CFG["token_cap"] or 0))}
             if reuse is not None and self.panes.get(reuse.id) is reuse:
                 pane = reuse
                 await self._replace_program(pane, argv, cwd=workspace, env=hosting, title=title)
@@ -1508,19 +1790,14 @@ class Daemon:
     async def _watch_cards(self):
         """Keep every card pane's lease alive and reconcile its process exit.
 
-        A Sister's lifecycle hook owns submission; an external ally has no such hook, so
-        its process exit is adapted into a submission.  Neither is interrupted for taking
-        a long time.
+        The worker in the pane -- a Sister's session, an ally's runner -- settles its own
+        result; an exit that leaves the card running under this claim is a crash (non-zero)
+        or an unsettled attempt. Neither is interrupted for taking a long time.
 
-        Everything slow here runs off the loop. This coroutine shares its thread with every
-        pane's PTY reader and frame timer. The ally adapter import, `ally_runner.finish`,
-        and `dispatch.accept` go through `asyncio.to_thread`; the board's own statements stay
-        inline (single indexed CAS updates on a WAL connection, and keeping them here keeps
-        every mutation of pane state on one thread). Each await is a suspension point, so the
-        pane is re-checked afterwards -- `card.stop` or `pane.close` may have run meanwhile.
+        This coroutine shares its thread with every pane's PTY reader and frame timer; the
+        board's own statements stay inline (single indexed CAS updates on a WAL connection,
+        and keeping them here keeps every mutation of pane state on one thread).
         """
-        import importlib
-
         from misaka.core.platform import tasks as db
 
         def still_ours(pane):
@@ -1553,97 +1830,43 @@ class Daemon:
                         if pane.exit_code is not None
                         else pane.proc.poll()
                     )
-                    if not pane.ally:
-                        if exit_code:
-                            tail = pane.buf.decode("utf-8", errors="replace")
-                            tail = re.sub(
-                                r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|[\r\x00]",
-                                "",
-                                tail,
-                            ).strip()
-                            reason = f"Sister process exited with code {exit_code}"
-                            if tail:
-                                reason += f": {tail[-500:]}"
-                            if db.add_event(
-                                con,
-                                pane.card,
-                                "failed",
-                                {"reason": reason},
-                                generation=pane.generation,
-                                claim_lock=pane.claim_lock,
-                            ):
-                                db.mark_failed(
-                                    con,
-                                    pane.card,
-                                    generation=pane.generation,
-                                    claim_lock=pane.claim_lock,
-                                    failure_kind="crash",
-                                    reason=reason,
-                                )
-                        else:
-                            db.mark_unsettled(
-                                con,
-                                pane.card,
-                                generation=pane.generation,
-                                claim_lock=pane.claim_lock,
-                            )
-                        pane.claim_lock = None
-                        continue
-                    # An ally has no lifecycle hook, so adapt its exit into the same
-                    # submission object the board accepts for Sisters.
-                    ally_runner = await asyncio.to_thread(
-                        importlib.import_module,
-                        "misaka.core.network.ally.runner")
-                    # The tail is snapshotted here, on the loop's thread: decoding the
-                    # live bytearray from the worker would race _pump's append.
-                    tail = pane.buf.decode("utf-8", errors="replace")
-                    submission, summary = await asyncio.to_thread(
-                        ally_runner.finish,
-                        pane.cwd,
-                        exit_code if exit_code is not None else -1,
-                        tail,
-                        assignee=pane.ally, task_id=pane.card,
-                        output_dir=row["output_dir"], generation=pane.generation,
-                        since=getattr(pane, "started", None))
-                    if not still_ours(pane):
-                        continue
-                    accepted = False
-                    if submission is not None:
-                        dispatch = await asyncio.to_thread(
-                            importlib.import_module, "misaka.core.network.dispatch"
-                        )
-                        accepted = await asyncio.to_thread(
-                            dispatch.accept,
+                    if exit_code:
+                        tail = pane.buf.decode("utf-8", errors="replace")
+                        tail = re.sub(
+                            r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|[\r\x00]",
+                            "",
+                            tail,
+                        ).strip()
+                        reason = f"{row['assignee']}'s card process exited with code {exit_code}"
+                        if tail:
+                            reason += f": {tail[-500:]}"
+                        if db.add_event(
                             con,
-                            row,
-                            submission,
+                            pane.card,
+                            "failed",
+                            {"reason": reason},
                             generation=pane.generation,
                             claim_lock=pane.claim_lock,
-                            workspace=pane.cwd,
-                        )
+                        ):
+                            db.mark_failed(
+                                con,
+                                pane.card,
+                                generation=pane.generation,
+                                claim_lock=pane.claim_lock,
+                                failure_kind="crash",
+                                reason=reason,
+                            )
                     else:
-                        # No submission to adapt: a crash if the ally died, otherwise a turn
-                        # that ended without one. Both count against the card's attempts.
-                        db.mark_failed(
-                            con, pane.card, generation=pane.generation,
+                        db.mark_unsettled(
+                            con,
+                            pane.card,
+                            generation=pane.generation,
                             claim_lock=pane.claim_lock,
-                            failure_kind="protocol_violation" if exit_code == 0 else "crash",
-                            reason=str(summary)[:500],
                         )
                     pane.claim_lock = None
-                    head = "finished and submitted" if accepted else "could not submit"
-                    try:
-                        await asyncio.to_thread(
-                            ally_runner.notify,
-                            pane.card,
-                            f"Ally {pane.ally} {head} (card {pane.card}):\n\n{summary}",
-                            sender=pane.ally,
-                        )
-                    except Exception:  # noqa: BLE001, S110 - notification cannot change board state
-                        pass
                 else:
-                    # The lease says the pane's process exists; progress is the Sister's own
-                    # session to stamp.
+                    # The lease says the pane's process exists; progress is the worker's own
+                    # to stamp.
                     if time.time() - pane.last_heartbeat >= 60 and db.heartbeat(
                         con, pane.card, pane.claim_lock,
                         generation=pane.generation, progress=False,
@@ -1745,7 +1968,13 @@ class Daemon:
                         # second tab).
                         "argv": list(p.argv),
                         "pid": p.proc.pid if p.proc else None}
-            return {"panes": [row(p) for p in self.panes.values()]}
+            shown = list(self.panes.values())
+            if params.get("tab_of"):
+                # One tab's panes: what a Last Order has beside her in the tab her pane sits in.
+                seat = self._tab_holding(params["tab_of"])
+                seated = set(hui.pane_ids(hui.from_jsonable(seat[1]["tree"]))) if seat else set()
+                shown = [p for p in shown if p.id in seated]
+            return {"panes": [row(p) for p in shown]}
         if method == "cards.list":
             # The board's cards with what the panel's sessions list needs: the folder each
             # belongs to, whether it has a session to reopen, and which Last Order conversation
@@ -1864,7 +2093,10 @@ class Daemon:
                 self.close(pane.id, expected_generation=params.get("expected_generation"))
                 return {"stopped": True, "pid": pid, "identity": identity}
         if method == "layout.get":       # the daemon owns the layout (herdr server model)
-            return {"spaces": self.spaces, "revision": self.layout_revision}
+            open_ids = {space["id"] for space in self.spaces}
+            return {"spaces": self.spaces, "revision": self.layout_revision,
+                    "dormant": [{"id": key, "folder": value.get("folder"), "name": value.get("name")}
+                                for key, value in self.known_spaces.items() if key not in open_ids]}
         if method == "layout.set":       # client-side edits: a dragged divider, a renamed tab or space
             return self.apply_layout(params.get("spaces") or [], params.get("revision"))
         if method == "pane.create":
@@ -1954,6 +2186,7 @@ class Daemon:
                 # divider-drag step, and cleared the dirty set so the rows painted before the
                 # request never reached the panel afterwards.
                 return dict(pane.shown, held=True)
+            pane.compression.wake()
             return _shown(pane)
         if method == "pane.extract":
             # The text between two absolute (row, col) points: the panel's selection lives in
@@ -1965,6 +2198,11 @@ class Daemon:
             start, end = params["start"], params["end"]
             return {"text": extract_text(pane, (int(start[0]), int(start[1])),
                                          (int(end[0]), int(end[1])))}
+        if method == "pane.paragraph":
+            pane = self.panes.get(params["id"])
+            if pane is None:
+                raise ValueError(f"Pane not found: {params['id']}")
+            return {"row": paragraph_target(pane, int(params["row"]), int(params["direction"]))}
         if method == "pane.scroll":
             # Negative delta scrolls up; positive scrolls down; "bottom" jumps to the end.
             pane = self.panes.get(params["id"])
@@ -2129,6 +2367,7 @@ class Daemon:
             self._socket_identity = (info.st_dev, info.st_ino)
         finally:
             os.close(lock_fd)   # releases the flock
+        self._load_spaces()
         skipped = self.restore_snapshot()
         if skipped:
             print(

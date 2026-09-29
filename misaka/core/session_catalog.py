@@ -169,24 +169,52 @@ def _inbox(spec):
     return sender_address(spec)
 
 
-def live_inbox(address, *, workspace=None):
-    """Whether a live session's pump reads the mail addressed to ``address``.
-
-    With ``workspace``, only a session working in that project counts: a card's help
-    request is answered by the Last Order that can see the card, not by one open on
-    another project. A sender uses this to tell a live delivery from a wake-up; an
-    automatic wake-up uses it to leave the row to the live session instead of racing it.
-    """
-    wanted = os.path.realpath(workspace) if workspace else None
+def _live_records():
+    """The records of sessions whose process is still there."""
     for file in _index_dir().glob("*.json"):
         value = _object(file)
-        if value.get("inbox") != address or value.get("state") == "saved":
-            continue
-        if wanted is not None and os.path.realpath(value.get("workspace") or "") != wanted:
+        if value.get("state") == "saved":
             continue
         if processes.identity_is_alive(value.get("pid"), value.get("identity")):
-            return True
-    return False
+            yield value
+
+
+def live_readers(inbox, space):
+    """The live sessions in panel space ``space`` whose pump reads ``inbox``, one per session id.
+    A name sent from that space means exactly one of them; a session with no space is nobody's
+    neighbour."""
+    if not space:
+        return []
+    found = {}
+    for value in _live_records():
+        if value.get("inbox") == inbox and value.get("space") == space and value.get("id"):
+            found.setdefault(value["id"], value)
+    return list(found.values())
+
+
+def live_contact(role):
+    """Whether ``role``'s contact session (``misaka dm``) is running a turn right now."""
+    return any(value.get("kind") == "dm" and value.get("inbox") == role for value in _live_records())
+
+
+def find_session(session_id):
+    """The catalog record of this session, live or saved (a live one first), or None."""
+    if not session_id:
+        return None
+    saved = None
+    for file in _index_dir().glob("*.json"):
+        value = _object(file)
+        if value.get("id") != session_id:
+            continue
+        if value.get("state") != "saved" and processes.identity_is_alive(value.get("pid"), value.get("identity")):
+            return value
+        saved = saved or value
+    return saved
+
+
+def spaces_in_use():
+    """Every panel space some session still belongs to."""
+    return {value["space"] for value in map(_object, _index_dir().glob("*.json")) if value.get("space")}
 
 
 def live_session(session_id):
@@ -232,6 +260,9 @@ class CatalogPart:
         self.session_id = None
         self._unregister = None
         self.session = self.control = None
+        # False for a reader that takes mail only between turns (an ally over ACP); SendMessage
+        # tells the sender so.
+        self.steer = True
 
     def attach(self, session):
         from misaka.core.session_control import SessionControl
@@ -260,14 +291,23 @@ class CatalogPart:
         record = _index_dir() / (hashlib.sha256(key.encode()).hexdigest() + ".json")
         if record != self.record:
             self._retire()
+        kind = self.spec.kind if self.spec else "session"
+        # A session belongs to the panel space it first ran in: a record that already names
+        # one keeps it, wherever the session is opened again. A contact session is nobody's
+        # neighbour.
+        space = None if kind == "dm" else (_object(record).get("space")
+                                           or os.environ.get("MISAKA_NET_SPACE") or None)
         # A reserved filename is not history. Keep Pi's first-assistant flush;
         # only this live-owner pointer makes an unsaved session visible.
         value = {"id": manager.getSessionId(), "path": os.path.realpath(path) if path else None,
                  "pending": bool(path and not manager.flushed and not os.path.exists(path)),
                  "cwd": manager.getCwd(), "role": _role(self.spec.role) if self.spec else "unknown",
-                 "kind": self.spec.kind if self.spec else "session", "task_id": self.spec.task_id if self.spec else None,
+                 "kind": kind, "task_id": self.spec.task_id if self.spec else None,
                  "workspace": getattr(self.spec, "workspace", None), "inbox": _inbox(self.spec),
+                 "space": space,
                  "pid": self.pid, "identity": self.identity, "instance": self.instance, "state": state}
+        if not self.steer:
+            value["steer"] = False
         if self.control is not None and self.control.path:
             value.update(control=self.control.path, paused=self.control.paused)
         _write(record, value)
@@ -399,7 +439,7 @@ def list_entries(con, *, extra_paths=()):
             continue
         row = {"id": header["id"], "path": path, "cwd": header["cwd"], "workspace": header["cwd"],
                "role": record.get("role", "unknown"), "kind": record.get("kind", "session"),
-               "state": record.get("state", "saved"), "modified": modified}
+               "state": record.get("state", "saved"), "modified": modified, "space": record.get("space")}
         if record.get("catalog_file"):
             row["catalog_file"] = record["catalog_file"]
         if record.get("state") != "saved" and record.get("control"):
@@ -422,7 +462,7 @@ def list_entries(con, *, extra_paths=()):
             run = run_rows.get(run_parts[0])
             scope = run_parts[1]
             if scope == "root-lo":
-                node = next((n for n in nodes.values() if n["run_id"] == run_parts[0] and n["parent_id"] is None), None)
+                node = next((n for n in nodes.values() if n["run_id"] == run_parts[0] and n["depth"] == 0), None)
                 row.update(kind="node", role="last-order")
             elif scope.startswith("node-"):
                 node = nodes.get(scope[5:])
@@ -430,7 +470,7 @@ def list_entries(con, *, extra_paths=()):
         if path in node_files:
             node = node_files[path]
             run = run_rows.get(node["run_id"])
-            if node["parent_id"] is not None or row["kind"] not in {"foreground", "dm"}:
+            if node["depth"] != 0 or row["kind"] not in {"foreground", "dm"}:
                 row.update(kind="node", role="last-order")
         if run:
             row.update(workspace=run["workspace"], run_id=run["id"], run_status=run["status"])

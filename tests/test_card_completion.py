@@ -98,10 +98,12 @@ async def test_a_reply_turn_leaves_the_card_running_and_says_so_once(tmp_path, m
     await _end_turn(part, "Received, working on the genealogy next.")
     await _end_turn(part, "Still working.")
     assert tasks.get(con, tid)["status"] == "running"
-    held = [m for m, _ in part.session.moments.sent if m["customType"] == "submission-held"]
+    held = [(m, options) for m, options in part.session.moments.sent if m["customType"] == "submission-held"]
     assert len(held) == 1
-    assert "choson-tusol-genealogy.md" in held[0]["content"]
-    assert "keep working" in held[0]["content"]
+    assert "choson-tusol-genealogy.md" in held[0][0]["content"]
+    assert "keep working" in held[0][0]["content"]
+    # It starts the turn itself: in a research run nobody else writes to the card again (2026-09-27).
+    assert held[0][1]["triggerTurn"] is True
     assert tasks.latest_payload(con, tid, "submitted") is None
 
 
@@ -137,6 +139,60 @@ async def test_completion_does_not_carry_into_a_turn_that_did_not_end_cleanly(tm
     assert tasks.get(con, tid)["status"] == "running"     # an aborted turn submits nothing
     await _end_turn(part, "and now it ends")
     assert tasks.get(con, tid)["status"] == "done"        # the recorded completion still stands
+
+
+async def test_a_run_that_ends_in_an_error_fails_the_attempt_instead_of_holding_the_card(tmp_path, monkeypatch, request):
+    """2026-09-27: eight research panes whose first turn died on a broken LCM cache sat with
+    their cards running, claims heartbeated and nobody to type. A headless card fails the same
+    attempt; the board's failure model takes it from there."""
+    con, tid, _out = _board(tmp_path, request)
+    part = _part(monkeypatch, con, tid)
+    await part.agent_end({"type": "agent_end", "messages": [
+        {"role": "assistant", "stopReason": "error", "content": [],
+         "errorMessage": "Not a MISAKA LCM cache; leave existing files untouched: /p/.misaka/lcm"}]})
+    await part.agent_settled()
+    row = tasks.get(con, tid)
+    assert row["status"] == "ready" and row["claim_lock"] is None and row["consecutive_failures"] == 1
+    assert "Not a MISAKA LCM cache" in row["last_failure_error"]
+    assert "Not a MISAKA LCM cache" in (tasks.latest_payload(con, tid, "failed") or "")
+
+
+async def test_a_cut_reply_gets_one_more_turn_and_a_second_cut_fails_the_attempt(tmp_path, monkeypatch, request):
+    con, tid, _out = _board(tmp_path, request)
+    part = _part(monkeypatch, con, tid)
+    cut = {"type": "agent_end", "messages": [
+        {"role": "assistant", "stopReason": "length", "content": [], "usage": {"output": 32000}}]}
+    await part.agent_end(cut)
+    await part.agent_settled()
+    assert tasks.get(con, tid)["status"] == "running"
+    [(message, options)] = [(m, o) for m, o in part.session.moments.sent if m["customType"] == "submission-incomplete"]
+    assert "cut off" in message["content"] and "32000 tokens" in message["content"]
+    assert options == {"deliverAs": "followUp", "triggerTurn": True}
+    await part.agent_end(cut)
+    await part.agent_settled()
+    row = tasks.get(con, tid)
+    assert row["status"] == "ready" and row["consecutive_failures"] == 1
+    assert "32000 tokens" in row["last_failure_error"]
+
+
+async def test_an_aborted_run_is_a_person_at_the_pane_and_changes_nothing(tmp_path, monkeypatch, request):
+    con, tid, _out = _board(tmp_path, request)
+    part = _part(monkeypatch, con, tid)
+    await part.agent_end(_turn("aborted", ""))
+    await part.agent_settled()
+    row = tasks.get(con, tid)
+    assert row["status"] == "running" and row["consecutive_failures"] == 0
+
+
+def test_a_deliverable_written_by_an_earlier_attempt_is_still_the_cards_product(tmp_path, request):
+    """2026-09-27: a divergence card reopened after a resume declared again without rewriting its
+    file; only files changed in the attempt were listed, and divergence.md lost its registration."""
+    con, tid, out = _board(tmp_path, request)
+    (out / "choson-tusol-genealogy.md").write_text("# genealogy\n")    # written by attempt 1
+    con.execute("UPDATE tasks SET generation=2 WHERE id=?", (tid,))    # reopened to declare again
+    worker.record_output_baseline(con, tasks.get(con, tid))            # attempt 2 starts with the file there
+    submission = worker.build_submission(con, tasks.get(con, tid), "declared again")
+    assert os.path.relpath(out / "choson-tusol-genealogy.md", tmp_path) in submission["artifacts"]
 
 
 def test_bookkeeping_lists_know_the_tool():

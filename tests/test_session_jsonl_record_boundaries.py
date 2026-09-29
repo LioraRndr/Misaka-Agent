@@ -54,7 +54,8 @@ def test_native_open_list_and_forks_preserve_unicode(tmp_path):
         assert infos[0].allMessagesText == f"{TEXT} {TEXT}"
 
     forked = SessionManager.forkFrom(str(path), str(tmp_path), str(tmp_path / "fork"))
-    research_path = fork_session(str(path), str(tmp_path / "research-fork"))
+    research_path, entry = fork_session(str(path), str(tmp_path / "research-fork"))
+    assert entry == original.getLeafId()     # the node's own turns begin after this inherited entry
     for manager in (forked, SessionManager.open(research_path)):
         assert manager.getSessionId() != original.getSessionId()
         assert manager.getEntries() == original.getEntries()

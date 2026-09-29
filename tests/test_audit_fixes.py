@@ -103,7 +103,7 @@ async def test_streaming_mail_is_not_acknowledged_before_persistence(tmp_path):
         session.sessionManager = SessionManager.create(str(tmp_path), str(tmp_path / 'sessions'))
         session.sessionManager.rewrite_file()
         transcript_before = Path(session.sessionManager.sessionFile).read_bytes()
-        inbox = messages.MessagesPart(sender='last-order', receive=True)
+        inbox = messages.MessagesPart(sender='last-order', receive=True, contact=True)
         inbox.attach(session)
         delivery = asyncio.create_task(inbox._deliver_once(con))
         async with asyncio.timeout(5):
@@ -115,7 +115,7 @@ async def test_streaming_mail_is_not_acknowledged_before_persistence(tmp_path):
         row = con.execute('SELECT delivered_at FROM messages WHERE id=?', (mid,)).fetchone()
         assert row['delivered_at'] is None, 'mail ACKed with only an in-memory follow-up; a crash loses it'
         # The real transcript append fires the receipt, then the inbox may ACK.
-        queued = session.agent._follow_up_queue.drain()
+        queued = session.agent._steering_queue.drain()
         for message in queued:
             session._append_custom_message(message)
         await asyncio.wait_for(delivery, 5)
@@ -136,7 +136,7 @@ def test_mailbox_initialization_failure_closes_database(tmp_path, monkeypatch):
     connection.execute('CREATE TABLE messages(id INTEGER PRIMARY KEY)')
     monkeypatch.setattr(messages.sqlite3, 'connect', lambda *args, **kwargs: connection)
     try:
-        with pytest.raises(RuntimeError, match='another MISAKA'):
+        with pytest.raises(RuntimeError, match='pre-release MISAKA'):
             messages.connect(str(db))
         with pytest.raises(sqlite3.ProgrammingError, match='closed'):
             connection.execute('SELECT 1')
@@ -313,7 +313,7 @@ def _busy_mail_session(tmp_path):
 
 async def _wait_for_queue(session, count=1):
     async with asyncio.timeout(5):
-        while len(session.agent._follow_up_queue._messages) < count:
+        while len(session.agent._steering_queue._messages) < count:
             await asyncio.sleep(0.01)
 
 
@@ -324,7 +324,7 @@ async def test_mail_shutdown_or_cancel_keeps_unpersisted_rows_retryable(tmp_path
 
     con = messages.connect(str(tmp_path / 'mail.db'))
     session = _busy_mail_session(tmp_path)
-    inbox = messages.MessagesPart(sender='last-order', receive=True)
+    inbox = messages.MessagesPart(sender='last-order', receive=True, contact=True)
     inbox.attach(session)
     job = None
     try:
@@ -342,7 +342,7 @@ async def test_mail_shutdown_or_cancel_keeps_unpersisted_rows_retryable(tmp_path
         assert tuple(row) == (None, None)
         # A late persistence callback does not use the already-closed connection.
         con.close()
-        for message in session.agent._follow_up_queue.drain():
+        for message in session.agent._steering_queue.drain():
             session._append_custom_message(message)
     finally:
         if job is not None:
@@ -357,7 +357,7 @@ async def test_mail_retry_after_ack_failure_deduplicates_each_row(tmp_path, monk
 
     con = messages.connect(str(tmp_path / 'mail.db'))
     session = _busy_mail_session(tmp_path)
-    inbox = messages.MessagesPart(sender='last-order', receive=True)
+    inbox = messages.MessagesPart(sender='last-order', receive=True, contact=True)
     inbox.attach(session)
     original_ack = messages.ack
     job = None
@@ -369,7 +369,7 @@ async def test_mail_retry_after_ack_failure_deduplicates_each_row(tmp_path, monk
         monkeypatch.setattr(messages, 'ack', fail_ack)
         job = asyncio.create_task(inbox._deliver_once(con))
         await _wait_for_queue(session)
-        for message in session.agent._follow_up_queue.drain():
+        for message in session.agent._steering_queue.drain():
             session._append_custom_message(message)
         with pytest.raises(sqlite3.OperationalError, match='ACK failure'):
             await asyncio.wait_for(job, 5)
@@ -379,7 +379,7 @@ async def test_mail_retry_after_ack_failure_deduplicates_each_row(tmp_path, monk
         monkeypatch.setattr(messages, 'ack', original_ack)
         job = asyncio.create_task(inbox._deliver_once(con))
         await _wait_for_queue(session)
-        queued = session.agent._follow_up_queue.drain()
+        queued = session.agent._steering_queue.drain()
         assert len(queued) == 1
         assert 'second fixture' in queued[0]['content']
         session._append_custom_message(queued[0])
@@ -400,7 +400,7 @@ async def test_mail_persist_error_does_not_ack_batch(tmp_path):
 
     con = messages.connect(str(tmp_path / 'mail.db'))
     session = _busy_mail_session(tmp_path)
-    inbox = messages.MessagesPart(sender='last-order', receive=True)
+    inbox = messages.MessagesPart(sender='last-order', receive=True, contact=True)
     inbox.attach(session)
     job = None
     try:
@@ -426,7 +426,7 @@ async def test_mail_renews_lease_while_waiting_for_persistence(tmp_path, monkeyp
 
     con = messages.connect(str(tmp_path / 'mail.db'))
     session = _busy_mail_session(tmp_path)
-    inbox = messages.MessagesPart(sender='last-order', receive=True)
+    inbox = messages.MessagesPart(sender='last-order', receive=True, contact=True)
     inbox.attach(session)
     renewals = []
     original = messages.renew
@@ -445,7 +445,7 @@ async def test_mail_renews_lease_while_waiting_for_persistence(tmp_path, monkeyp
             while not renewals:
                 await asyncio.sleep(0.01)
         assert con.execute('SELECT delivered_at FROM messages').fetchone()[0] is None
-        for message in session.agent._follow_up_queue.drain():
+        for message in session.agent._steering_queue.drain():
             session._append_custom_message(message)
         await asyncio.wait_for(job, 5)
     finally:
@@ -658,7 +658,7 @@ async def test_mail_cancelled_batch_reattaches_receipts_without_duplicating_queu
 
     con = messages.connect(str(tmp_path / 'mail.db'))
     session = _busy_mail_session(tmp_path)
-    inbox = messages.MessagesPart(sender='last-order', receive=True)
+    inbox = messages.MessagesPart(sender='last-order', receive=True, contact=True)
     inbox.attach(session)
     job = None
     try:
@@ -666,17 +666,17 @@ async def test_mail_cancelled_batch_reattaches_receipts_without_duplicating_queu
             messages.send(con, 'last-order', body, sender='10032')
         job = asyncio.create_task(inbox._deliver_once(con))
         await _wait_for_queue(session)
-        assert len(session.agent._follow_up_queue._messages) == 1  # one batch, one wake-up
-        assert session.agent._follow_up_queue._messages[0]['details']['count'] == 2
+        assert len(session.agent._steering_queue._messages) == 1  # one batch, one wake-up
+        assert session.agent._steering_queue._messages[0]['details']['count'] == 2
         job.cancel()
         with pytest.raises(asyncio.CancelledError):
             await job
         messages.send(con, 'last-order', 'third', sender='10032')
         job = asyncio.create_task(inbox._deliver_once(con))
         await _wait_for_queue(session, 2)
-        assert len(session.agent._follow_up_queue._messages) == 2
+        assert len(session.agent._steering_queue._messages) == 2
         while session.agent.hasQueuedMessages():
-            for message in session.agent._follow_up_queue.drain():
+            for message in session.agent._steering_queue.drain():
                 session._append_custom_message(message)
         await asyncio.wait_for(job, 5)
         assert con.execute('SELECT COUNT(*) FROM messages WHERE delivered_at IS NOT NULL').fetchone()[0] == 3

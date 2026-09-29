@@ -495,11 +495,13 @@ class BrowserSession:
         if self.recording_path and self.recording_path.is_file():
             final = self.recording_path.with_name(f'recording-{self.id}.webm')
             self.recording_path.replace(final)
-            files = sorted((path for path in final.parent.glob('recording-*.webm')
-                            if not path.name.endswith('.partial.webm') and not path.is_symlink()),
-                           key=lambda path: path.stat().st_mtime, reverse=True)
+            # The recording just finished is always kept: a coarse filesystem clock (Linux) can
+            # give an older recording the same mtime, and a tie must not delete the newest one.
+            others = sorted((path for path in final.parent.glob('recording-*.webm')
+                             if path != final and not path.name.endswith('.partial.webm') and not path.is_symlink()),
+                            key=lambda path: path.stat().st_mtime, reverse=True)
             keep = max(1, min(100, int(self.cfg.get('recording_retention', 10))))
-            for path in files[keep:]:
+            for path in others[keep - 1:]:
                 path.unlink(missing_ok=True)
 
     def _capture_harness(self):

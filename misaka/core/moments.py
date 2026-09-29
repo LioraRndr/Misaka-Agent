@@ -170,7 +170,9 @@ class Moments:
             return None
 
     async def _notify(self, name: str, event: dict[str, Any]) -> None:
-        if not self.parts:
+        # A moment that lands after the session was replaced (a card's retry) has no live context to
+        # act on: the replacement session announces its own. Its parts would only trip the stale guard.
+        if not self.parts or getattr(self.session.extensionRunner, "staleMessage", None):
             return
         ctx = self._ctx()
         for part in self.parts:

@@ -9,7 +9,6 @@ never through ``tasks.create_task`` directly -- a row without its file is refuse
 at dispatch and may be removed after inspection.
 """
 import io
-import json
 import os
 import stat
 import subprocess
@@ -24,7 +23,7 @@ from misaka.utils import atomic
 from misaka.utils.frontmatter import parse_frontmatter
 
 LOG_HEADING = "## log"
-_FIELD_ORDER = ("id", "title", "status", "generation", "assignee", "reviewer", "executor", "model",
+_FIELD_ORDER = ("id", "title", "status", "generation", "assignee", "reviewer", "model",
                 "priority", "origin_session", "needs", "urls", "created_at")
 _AT_REST_STATUSES = frozenset({
     "ready", "todo", "review", "done", "failed", "stopped", "blocked", "triage", "archived", "held",
@@ -180,7 +179,7 @@ def iter_cards(workspace):
 
 
 def create(con, workspace, title, body, assignee, *, reviewer=None, model=None,
-           priority=0, executor=None, origin_session=None, after_row=None, needs=()):
+           priority=0, origin_session=None, after_row=None, needs=()):
     """The one front door for new cards: index row first (it mints the id), then ``after_row(tid)``
     for whatever else the row must be tied to (a research link), then the file. Any failure before
     the file exists rolls the row back -- no card exists without its truth, and no file without its row."""
@@ -192,10 +191,10 @@ def create(con, workspace, title, body, assignee, *, reviewer=None, model=None,
             raise ValueError("A dependency must name an existing task in the same project.")
     tid = tasks.create_task(con, title, body=body, assignee=assignee, model=model,
                             priority=priority,
-                            executor=executor, reviewer=reviewer, workspace=workspace,
+                            reviewer=reviewer, workspace=workspace,
                             origin_session=origin_session)
     fields = {"id": tid, "title": title, "status": "ready", "generation": 1, "assignee": assignee,
-              "reviewer": reviewer, "executor": executor, "model": model,
+              "reviewer": reviewer, "model": model,
               "priority": priority,
               "origin_session": origin_session, "created_at": _now_iso()}
     text = body.strip() + f"\n\n{LOG_HEADING}\n- {_now_iso()} last-order: created\n"
@@ -421,12 +420,11 @@ def remove(con, workspace, task_id):
             shutil.rmtree(attachments)
         except OSError as error:
             return False, f"Card {task_id} was deleted but its attachments remain ({error}): {attachments}"
-    if tracked and not repo.commit(workspace, git_paths, f"card {task_id}: delete"):
-        return False, f"Card {task_id} was deleted but the deletion could not be committed to git; commit it by hand."
-    # Only say the file survives in git when git actually had it. `create()` never commits
-    # cards/, so unless something committed the card later the file is simply gone -- say so
-    # rather than send the user to a history that holds nothing.
-    msg += (" Its file, log, and attachments stay in the project repository's history."
+    # Nothing is committed here: the project's history is the user's to write. Only say the file
+    # survives in git when git actually has it -- nothing commits cards/ on its own, so unless the
+    # user did, the file is simply gone, and saying otherwise sends them to a history that holds nothing.
+    msg += (" Its committed copy stays in the project's git history; the deletion itself is left "
+            "uncommitted for you to commit."
             if tracked else
             " Its file, log, and attachments were deleted from disk; they were never committed "
             "to git, so there is no copy left.")
@@ -443,13 +441,12 @@ def _card_values(fields, body):
     return {
         "title": str(fields.get("title") or ""), "body": body,
         "assignee": str(fields.get("assignee") or ""), "reviewer": fields.get("reviewer"),
-        "executor": json.dumps(fields["executor"]) if fields.get("executor") else None,
         "model": fields.get("model"), "priority": int(fields.get("priority") or 0),
         "origin_session": fields.get("origin_session"), "status": status, "generation": generation,
     }
 
 
-_MIRRORED = ("title", "body", "assignee", "reviewer", "executor", "model", "priority",
+_MIRRORED = ("title", "body", "assignee", "reviewer", "model", "priority",
              "origin_session", "status", "generation")
 
 
@@ -517,7 +514,7 @@ def reconcile_one(con, workspace, task_id):
     # rows affected is that case, and it is not an error: the file's at-rest status is only ever
     # a mirror of the live state, and the next pass reads both again.
     changed = con.execute(
-        "UPDATE tasks SET title=?,body=?,assignee=?,reviewer=?,executor=?,model=?,priority=?,"
+        "UPDATE tasks SET title=?,body=?,assignee=?,reviewer=?,model=?,priority=?,"
         "origin_session=?,status=?,generation=? WHERE id=? AND status=?",
         (*(values[column] for column in _MIRRORED), task_id, row["status"]),
     ).rowcount
@@ -674,14 +671,15 @@ def _git(folder, *args):
         ) from None
 
 
-def init_project(folder, *, draft_brief=True):
-    """Make a folder a MISAKA project: a git repository with the skeleton (PROJECT.md,
-    cards/) and its cards indexed. Only a repository this call itself created gets the
-    initial commit; an existing repository is never committed to."""
+def init_project(folder, *, draft_brief=True, git=True):
+    """Make a folder a MISAKA project: the skeleton (PROJECT.md, cards/, .gitignore) with its
+    cards indexed, and -- with ``git``, as ``misaka init`` asks -- a git repository. Only a
+    repository this call itself created gets the initial commit; an existing repository is never
+    committed to. Starting research passes ``git=False``: git is the user's, never a side effect."""
     folder = tasks.canonical_workspace(folder)
     _refuse_whole_home(folder)
     actions = []
-    fresh = not repo.enabled(folder)  # a worktree's .git is a file, not a directory
+    fresh = git and not repo.enabled(folder)  # a worktree's .git is a file, not a directory
     if fresh:
         _git(folder, "init", "-q")
         actions.append("git repository created")

@@ -1,5 +1,9 @@
-"""Optional project Git history. Research and cards write directly into the project;
-commits record selected artifacts, never deliver them through branches or merges.
+"""The project's Git history, written only when the user asks.
+
+Research and cards write directly into the project and never commit: the history is the
+user's. ``misaka init`` creates the repository; ``project_commit`` and ``/commit`` commit what the
+user confirms, under the user's own git identity. Commits record selected files, never deliver
+them through branches or merges.
 """
 import fcntl
 import functools
@@ -7,14 +11,12 @@ import os
 import subprocess
 import time
 
-_IDENTITY = ["-c", "user.name=misaka", "-c", "user.email=misaka@local"]
-
 
 def _git(cwd, *args):
-    """Run git; an index.lock held by another process is retried briefly (node processes and the
-    driver commit on the same project line), a stale one still fails and the caller stops."""
+    """Run git; an index.lock held by another process is retried briefly, a stale one still
+    fails and the caller stops."""
     for attempt in range(5):
-        done = subprocess.run(["git", *_IDENTITY, *args], cwd=cwd, capture_output=True, text=True, check=False)
+        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
         if done.returncode == 0 or "index.lock" not in done.stderr or attempt == 4:
             return done
         time.sleep(0.2 * (attempt + 1))
@@ -38,48 +40,37 @@ def _serialized(operation):
         if common.returncode:
             raise OSError(common.stderr.strip())
         directory = os.path.realpath(os.path.join(workspace, common.stdout.strip()))
-        # ponytail: one repository lock; split by worktree only if Git throughput warrants it.
-        # Git's index.lock protects one command, not add/commit sequences.
+        # Git's index.lock protects one command, not an add/commit sequence.
         with open(os.path.join(directory, "misaka-git.lock"), "a", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             return operation(workspace, *args, **kwargs)
     return locked
 
 
+def changes(workspace, paths=()):
+    """What a commit of ``paths`` (all of the project when empty) would record, as ``git status
+    --porcelain`` lines: modified, added, deleted and untracked files, the ignored ones left out."""
+    done = _git(workspace, "status", "--porcelain", "--untracked-files=all", "--", *(paths or ["."]))
+    if done.returncode:
+        raise OSError(done.stderr.strip() or "git status failed")
+    return [line for line in done.stdout.splitlines() if line.strip()]
+
+
 @_serialized
-def commit(workspace, paths, message):
-    """Commit ``paths`` (relative to ``workspace``) on the line checked out there. A path that is
-    gone from disk but tracked is committed as a deletion; a path git has never seen is skipped.
-    True when the paths are committed (a commit was made, or there was nothing left to commit)."""
-    return _commit(workspace, paths, message)
-
-
-def _commit(workspace, paths, message):
-    """Commit with the repository mutation lock already held."""
-    if not enabled(workspace):
-        return False
-    # A ``:(exclude)...`` entry is pathspec magic, not a path: it narrows the paths beside it
-    # (a card's output folder without its derived bundle) and is never checked for existence.
-    magic = [p for p in paths if p.startswith(":(")]
-    paths = [p for p in paths
-             if not p.startswith(":(")
-             and (os.path.lexists(os.path.join(workspace, p))
-                  or _git(workspace, "ls-files", "--", p).stdout.strip())]
-    if not paths:
-        return False
-    spec = [*paths, *magic]
-    if _git(workspace, "add", "-A", "--", *spec).returncode != 0:
-        return False                                   # nothing staged: an empty diff below would lie
+def commit(workspace, message, paths=()):
+    """Stage and commit ``paths`` (all of the project when empty) under the repository's own
+    configured identity. Returns the new commit's short hash; raises OSError with git's own words
+    when git refuses (no identity configured, a hook, a lock)."""
+    spec = list(paths) or ["."]
+    added = _git(workspace, "add", "-A", "--", *spec)
+    if added.returncode:
+        raise OSError(added.stderr.strip() or "git add failed")
     staged = _git(workspace, "diff", "--cached", "--quiet", "--", *spec).returncode
     if staged == 0:
-        return True                                    # already committed: nothing to do is not a failure
+        raise OSError("nothing to commit")
     if staged != 1:
-        return False                                   # git itself failed (lock, corrupt index)
-    return _git(workspace, "commit", "-q", "-m", message, "--", *spec).returncode == 0
-
-
-def commit_card(workspace, task_id, submission, message):
-    """Commit a card's submitted artifacts together with its contract and inputs."""
-    return commit(workspace, [*(submission.get("artifacts") or []),
-                              os.path.join("cards", f"{task_id}.md"),
-                              os.path.join("cards", str(task_id))], message)
+        raise OSError("git could not compare the staged files")
+    done = _git(workspace, "commit", "-q", "-m", message, "--", *spec)
+    if done.returncode:
+        raise OSError(done.stderr.strip() or done.stdout.strip() or "git commit failed")
+    return _git(workspace, "rev-parse", "--short", "HEAD").stdout.strip()

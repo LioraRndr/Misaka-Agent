@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS tasks (
  body TEXT,
  assignee TEXT NOT NULL,
  reviewer TEXT,
- executor TEXT, -- NULL = MISAKA card shell; JSON argv = external ally CLI
  model TEXT,
  status TEXT NOT NULL DEFAULT 'ready',
  priority INTEGER NOT NULL DEFAULT 0,
@@ -152,7 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, kind, id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
 """
-TASK_SCHEMA_VERSION = 8
+TASK_SCHEMA_VERSION = 9
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 # One failure model for every way an attempt can end badly -- a crash, a timeout, a provider
 # error, a turn that ended without settling the card. Each counts against the same limit and the
@@ -316,10 +315,12 @@ def _serialized(operation):
 
 
 def require_schema(con, component, version, *, populated):
-    """A board component is current, fresh, or another MISAKA's. Returns True when fresh.
+    """A stored component is current, fresh, newer, or older. Returns True when fresh.
 
-    No upgrade path is shipped and nothing is reshaped in place: a board written by an older or
-    a newer build is refused by version, so its data stays exactly as that build left it.
+    Compatibility starts with 0.18.0, the first release; a later format change ships its
+    migration with it. Until one does, any other marker is refused and the data is left exactly
+    as it was: a newer build's, which this one must not reshape, or a pre-release build's, which
+    no release reads.
     """
     recorded = con.execute(
         "SELECT MAX(version) FROM schema_migrations WHERE component=?", (component,)
@@ -332,10 +333,16 @@ def require_schema(con, component, version, *, populated):
             (component, version, int(time.time())),
         )
         return True
+    where = con.execute("PRAGMA database_list").fetchone()[2] or "this database"
+    if recorded is not None and recorded > version:
+        raise RuntimeError(
+            f"{where}: its {component} tables were written by a newer MISAKA (v{recorded}; this build "
+            f"reads v{version}). Update MISAKA (`misaka update`); an older build cannot read them."
+        )
     written = f"v{recorded}" if recorded is not None else "no version marker"
     raise RuntimeError(
-        f"This board's {component} tables were written by another MISAKA ({written}; this build "
-        f"is v{version}). No upgrade is shipped: start a new home, or convert the board by hand."
+        f"{where}: its {component} tables were written by a pre-release MISAKA ({written}; this build "
+        f"reads v{version}), and pre-release data is not migrated. Move the file aside and MISAKA starts a new one."
     )
 
 
@@ -417,7 +424,7 @@ def _card_dispatchable(con, task_id):
 
 @_serialized
 def create_task(con, title, body="", assignee="", model=None, priority=0,
-                executor=None, reviewer=None, workspace=None, output_dir=None,
+                reviewer=None, workspace=None, output_dir=None,
                 origin_session=None):
     """Insert a card, record its ``created`` event, and return the new id.
 
@@ -438,10 +445,10 @@ def create_task(con, title, body="", assignee="", model=None, priority=0,
         tid = "t_" + secrets.token_hex(3)
         try:
             con.execute(
-                "INSERT INTO tasks (id,title,body,assignee,reviewer,executor,model,priority,"
+                "INSERT INTO tasks (id,title,body,assignee,reviewer,model,priority,"
                 "workspace,output_dir,origin_session,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (tid, title, body, assignee, reviewer, json.dumps(executor) if executor else None,
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (tid, title, body, assignee, reviewer,
                  model, priority, workspace, output_dir, origin_session or None,
                  int(time.time())),
             )
@@ -452,7 +459,7 @@ def create_task(con, title, body="", assignee="", model=None, priority=0,
         break
     add_event(con, tid, "created", {"title": title, "assignee": assignee,
                                     "reviewer": reviewer,
-                                    "workspace": workspace, "executor": executor})
+                                    "workspace": workspace})
     return tid
 
 
@@ -713,12 +720,11 @@ def insert_index_row(con, fields, body, *, workspace):
     """Restore one index row from a card file (misaka.core.platform.cards.rebuild). The file is
     the truth; this only re-derives the index and never overwrites an existing row."""
     cur = con.execute(
-        "INSERT OR IGNORE INTO tasks (id,title,body,assignee,reviewer,executor,model,"
+        "INSERT OR IGNORE INTO tasks (id,title,body,assignee,reviewer,model,"
         "priority,workspace,origin_session,status,generation,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(fields.get("id")), str(fields.get("title") or ""), body,
          str(fields.get("assignee") or ""), fields.get("reviewer"),
-         json.dumps(fields["executor"]) if fields.get("executor") else None,
          fields.get("model"), int(fields.get("priority") or 0),
          canonical_workspace(workspace),
          fields.get("origin_session"), str(fields.get("status") or "ready"),
@@ -779,9 +785,8 @@ def delete_task(con, task_id, *, allow_active=False):
     )
     con.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     shutil.rmtree(task_state_dir(task_id), ignore_errors=True)
-    # Nothing here touches the card *file*; only cards.remove does, and only it knows whether
-    # git was ever given a copy. Claiming anything about the file from in here was a lie for
-    # every card `cards.create` makes, because nothing commits cards/ on the way in.
+    # Nothing here touches the card *file*; only cards.remove does, so only it says anything
+    # about the file.
     message = (f"Card {task_id} and its runs, dependencies, events, budget, and to-do items "
                "were deleted.")
     if skipped:
@@ -918,17 +923,16 @@ def _validate_dependency(con, parent_id, child_id):
                 ) from error
 
 
-def _mirror_status(con, task_id, *, commit=False):
+def _mirror_status(con, task_id):
     """Write the live transition's at-rest fields to its authoritative card.
 
-    File-write failure aborts the SQLite transition. Git is only history: commit
-    failure leaves the file dirty and records a retry hint instead of fabricating
-    a rollback across stores. ``running`` remains lease-only and is never mirrored.
+    File-write failure aborts the SQLite transition. ``running`` remains lease-only and is
+    never mirrored. Nothing is committed: the project's git history is the user's to write.
     """
     row = get(con, task_id)
     if row is None or not row["workspace"]:
         return
-    from misaka.core.platform import cards, repo
+    from misaka.core.platform import cards
     try:
         cards.set_fields(
             row["workspace"], task_id, status=row["status"], generation=int(row["generation"])
@@ -947,13 +951,6 @@ def _mirror_status(con, task_id, *, commit=False):
         add_event(con, task_id, "card_file_missing",
                   {"status": row["status"], "workspace": row["workspace"]},
                   generation=row["generation"])
-        return
-    if commit and repo.enabled(row["workspace"]) and not repo.commit(
-            row["workspace"], [os.path.join("cards", f"{task_id}.md")], f"card {task_id}: {row['status']}"):
-        add_event(
-            con, task_id, "git_commit_pending", {"status": row["status"]},
-            generation=row["generation"],
-        )
 
 
 class UnreadableCard(ValueError):
@@ -1232,7 +1229,7 @@ def _terminal_transition(
                     (task_id,),
                 )
                 promote_dependents(con, task_id)
-            _mirror_status(con, task_id, commit=True)
+            _mirror_status(con, task_id)
         return cur.rowcount == 1
 
 
@@ -1419,7 +1416,7 @@ def mark_stopped(con, task_id, generation=None, claim_lock=None):
         )
         if cur.rowcount == 1:
             _finish_current_run(con, task_id, "stopped")
-            _mirror_status(con, task_id, commit=True)
+            _mirror_status(con, task_id)
         return cur.rowcount == 1
 
 
@@ -1430,7 +1427,7 @@ def mark_stopped(con, task_id, generation=None, claim_lock=None):
 
 
 @_serialized
-def submit_task(con, task_id, generation=None, claim_lock=None, *, commit=True):
+def submit_task(con, task_id, generation=None, claim_lock=None):
     """Accept a running card, or hand its submitted payload to the named reviewer."""
     now = int(time.time())
     clauses = ["id=?"]
@@ -1452,7 +1449,7 @@ def submit_task(con, task_id, generation=None, claim_lock=None, *, commit=True):
         )
         if cur.rowcount == 1:
             _settle_done(con, task_id)
-            _mirror_status(con, task_id, commit=commit)
+            _mirror_status(con, task_id)
         return cur.rowcount == 1
 
 
@@ -1543,7 +1540,7 @@ def approve_review(con, task_id, lock, *, generation=None, summary=None) -> bool
             add_event(con, task_id, "review_approved",
                       {"reviewer": reviewer, "summary": summary or ""},
                       generation=generation)
-            _mirror_status(con, task_id, commit=True)
+            _mirror_status(con, task_id)
         return cur.rowcount == 1
 
 
@@ -1583,7 +1580,7 @@ def request_review_changes(
                                      f"[review] {feedback[:2000]}")
                 except OSError:
                     pass                       # a stray index row without a file: the feedback column still has it
-            _mirror_status(con, task_id, commit=True)
+            _mirror_status(con, task_id)
         return cur.rowcount == 1
 
 
@@ -1697,7 +1694,7 @@ def reclaim_abandoned(
                       {"failure_kind": "crash", "failures": failures, "limit": FAILURE_LIMIT,
                        "reason": error[:500]},
                       generation=generation)
-        _mirror_status(con, task_id, commit=True)
+        _mirror_status(con, task_id)
         return status
 
 
@@ -1868,7 +1865,7 @@ def block_task(
         if message_id is not None:
             payload["message_id"] = int(message_id)
         add_event(con, task_id, status, payload, generation=generation)
-        _mirror_status(con, task_id, commit=True)
+        _mirror_status(con, task_id)
         return status
 
 

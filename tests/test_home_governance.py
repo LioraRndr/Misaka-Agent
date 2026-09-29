@@ -295,11 +295,16 @@ def test_a_board_written_by_another_build_is_refused_by_version_and_left_alone(t
     raw.execute("UPDATE schema_migrations SET version=version-1 WHERE component='tasks'")
     raw.commit()
     raw.close()
-    with pytest.raises(RuntimeError, match=f"another MISAKA .v{tasks.TASK_SCHEMA_VERSION - 1}"):
+    with pytest.raises(RuntimeError, match=f"pre-release MISAKA .v{tasks.TASK_SCHEMA_VERSION - 1}"):
         tasks.connect(CFG["db"])
     raw = sqlite3.connect(CFG["db"])                                                # nothing was reshaped
     assert raw.execute("SELECT version FROM schema_migrations WHERE component='tasks'").fetchone()[0] == tasks.TASK_SCHEMA_VERSION - 1
+    # A newer build's board: the way out is an update, not a new home.
+    raw.execute("UPDATE schema_migrations SET version=? WHERE component='tasks'", (tasks.TASK_SCHEMA_VERSION + 1,))
+    raw.commit()
     raw.close()
+    with pytest.raises(RuntimeError, match=f"newer MISAKA .v{tasks.TASK_SCHEMA_VERSION + 1}.*misaka update"):
+        tasks.connect(CFG["db"])
 
     # A populated board with no marker at all is another build's too.
     other = tmp_path / "unmarked.db"
@@ -337,7 +342,7 @@ def test_a_role_session_writes_its_own_keys_to_its_file_and_everything_else_glob
     other = home.path("profiles_root") / "10036"
     other.mkdir()
     assert SettingsManager.forRole(str(other)).getSection("web") == {"search_backend": "exa", "cache_ttl_minutes": 5}
-    assert {"defaultProvider", "defaultModel", "mcpServers", "web"} == set(ROLE_KEYS)
+    assert {"defaultProvider", "defaultModel", "defaultThinkingLevel", "mcpServers", "web"} == set(ROLE_KEYS)
 
 
 def test_the_role_scope_survives_the_manager_and_the_home_alike(tmp_path, monkeypatch):

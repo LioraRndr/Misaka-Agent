@@ -379,6 +379,13 @@ _KANA_HANDAKUTEN = frozenset(range(0xFF8A, 0xFF8F))                 # ﾊ..ﾎ a
 # use area scores a thousandth and keeps its own codec.
 _CODEC_MARGIN = 0.05
 
+# The encoding an HTML or XML file names for itself -- `<meta charset>`, the `http-equiv`
+# content type, or the XML declaration. Archive pages in windows-1251 or koi8-r are none of the
+# guessed codecs and were refused (2026-09-28, the 1812 manifesto).
+_DECLARED_CHARSET = re.compile(
+    rb"""<meta[^>]+charset\s*=\s*["']?([A-Za-z0-9._:-]+)|<\?xml[^>]+encoding\s*=\s*["']([A-Za-z0-9._:-]+)""",
+    re.IGNORECASE)
+
 
 def _mojibake(text, cjk_codec=True):
     """How much of a decode is evidence that the codec was wrong -- the share of the sample that
@@ -528,6 +535,13 @@ def _decode_bytes(raw, what):
     reads it visibly better, never merely later. A file written in the codec tried first still
     costs exactly one decode: scoring zero ends the loop, and real writing scores zero.
     """
+    declared = _DECLARED_CHARSET.search(raw[:4096])
+    if declared:
+        encoding = (declared.group(1) or declared.group(2)).decode("ascii").lower()
+        try:
+            return raw.decode(encoding), encoding
+        except (UnicodeDecodeError, LookupError):
+            pass                                  # a false declaration falls back to the guesses
     best = best_text = best_encoding = None
     for encoding in TEXT_ENCODINGS:
         if encoding == "utf-8" and raw.startswith(b"\xef\xbb\xbf"):
@@ -544,6 +558,11 @@ def _decode_bytes(raw, what):
         if best is None or wrong < best - _CODEC_MARGIN:
             best, best_text, best_encoding = wrong, text, encoding
     if best_text is None:
+        if what.lower().endswith((".htm", ".html")):
+            try:                                  # the HTML standard's default for a page that names none
+                return raw.decode("cp1252"), "cp1252"
+            except UnicodeDecodeError:
+                pass
         raise ValueError(f"not UTF-8 text; re-encode or name the encoding: {what}")
     return best_text, best_encoding
 
@@ -1073,6 +1092,12 @@ def _outline_for(p, ext, pages, reason):
     return _build_tree_with_reason(p, reason)
 
 
+# PDFium is not thread-safe. Text extraction and page renders run it in child processes; the
+# outline is its one caller inside this process, and ingests run on worker threads: two of them
+# in PDFium at once corrupted the heap and killed a Sister (2026-09-28, SIGTRAP in its font scan).
+_PDFIUM = threading.Lock()
+
+
 def _build_tree_with_reason(p, reason):
     """`build_tree(p, reason=...)`, tolerating a stand-in that predates the keyword.
 
@@ -1105,7 +1130,8 @@ def build_tree(p, *, workers=TREE_WORKERS, reason=None):
         return None
     try:
         from .pageindex import build_tree as pageindex_tree
-        nodes = pageindex_tree(os.path.abspath(p), workers=workers)
+        with _PDFIUM:
+            nodes = pageindex_tree(os.path.abspath(p), workers=workers)
         if nodes:
             return json.dumps(nodes, ensure_ascii=False)
         _note(reason, "tree", "none_found")

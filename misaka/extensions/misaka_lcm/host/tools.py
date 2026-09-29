@@ -107,6 +107,14 @@ def recall_guideline() -> str:
             "identifiers, not conversation content stored in LCM. Use the LCM session/content counts and actual "
             "retrieval results to establish what is available; do not claim prior-session recall from catalog-only "
             "entries. Status also does not establish which project files exist or have been read.\n\n"
+            # A misaka rule, not upstream's: sessions here leave work products (delivered files, declared
+            # findings), and those are what the work stands on. Stated with the tools, so it comes and goes
+            # with the plugin instead of being written into the prompts of whatever uses the sessions.
+            "Work products come before conversations. When another session's work left products -- files it "
+            "delivered, findings it declared -- read those first. Search or open that session "
+            "(`lcm_grep` with `session_scope=\"session\"` and its `session_id`, `lcm_load_session`) only where a "
+            "product is unclear or needs the context it came from: a conversation supplements its products, "
+            "never replaces them.\n\n"
             + get_recall_policy().strip().replace("Hermes-LCM", "MISAKA LCM").replace("Hermes", "MISAKA"))
 
 

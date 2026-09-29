@@ -19,7 +19,6 @@ from misaka.core.research import runs, workflow
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     monkeypatch.setattr(repo, "enabled", lambda *a: False)
     monkeypatch.setattr(workflow, "_bundle", lambda *a, **k: None)
     with closing(tasks.connect(str(tmp_path / "board.db"))) as con:

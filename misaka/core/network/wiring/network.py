@@ -39,7 +39,7 @@ def _mail_running_card(row, text, summary, sender_session):
     try:
         return messages.send(con, row["assignee"], text, summary=summary, sender="last-order",
                              to_task=row["id"], generation=int(row["generation"]),
-                             workspace=row["workspace"], sender_session=sender_session)
+                             sender_session=sender_session)
     finally:
         con.close()
 
@@ -97,6 +97,11 @@ def _con():
 
 def _sisters():
     return sorted(sisters())
+
+
+def _allies():
+    from misaka.core.network.ally import presets
+    return presets.names()
 
 
 def _workspace(ctx):
@@ -234,9 +239,11 @@ def _install(harn, runtime):
         named = ", ".join(
             f"{s} ({roster_mod.describe_line(s, root=_cfg()['profiles_root']) or 'no description'})"
             for s in _sisters())
+        allies = ", ".join(sorted(roster_mod.allies()))
         header = (
             f"Sister roster: {named or '(empty)'}"
             f"{' (use misaka_sister_view for introduction excerpts)' if named else ''}\n"
+            + (f"Allies (external agents, assigned cards like a Sister): {allies}\n" if allies else "") +
             f"Budget used: {b['used']:,} tokens ({b['mode']} mode)\n\n"
         )
         return _text(header + ("\n".join(lines) if lines else "(no task cards)"))
@@ -245,7 +252,7 @@ def _install(harn, runtime):
     class CardParams(BaseModel):
         title: str = Field(description="Short task-card title.")
         body: str = Field(description="Task contract: `## goal`, `## boundaries`, and a required, testable `## acceptance criteria` section.")
-        assignee: str = Field(description="Sister ID from the `misaka_board` roster.")
+        assignee: str = Field(description="A Sister ID or an ally from the `misaka_board` roster.")
         reviewer: str | None = Field(
             None, description="Optional independent reviewer; must be a different Sister from the assignee."
         )
@@ -268,10 +275,11 @@ def _install(harn, runtime):
         parameters=CardParams)
     async def misaka_card(tool_call_id, params, signal, on_update, ctx):
         con = _con()
+        from misaka.core.network import roster as roster_mod
         cards, errs = validate.validate_cards(
             [{"title": params.title, "body": params.body, "assignee": params.assignee,
               "priority": params.priority, "model": params.model}],
-            set(_sisters()))
+            roster_mod.executors())
         if errs:
             raise ValueError(';'.join(errs))
         if params.reviewer and params.reviewer not in set(_sisters()):
@@ -613,29 +621,21 @@ def _install(harn, runtime):
             row["status"] in {"blocked", "triage"}
             and row["block_kind"] == "needs_input"
         )
+        ally = row["assignee"] in _allies()
         if row["status"] == "running" and pane and pane.get("claimed", True):
-            if row["executor"]:
-                # An ally runs a third-party CLI in its pane and reads no mailbox: keystrokes
-                # are the only channel it has.
-                from misaka.ui.panel import client as net
-                await asyncio.to_thread(
-                    net.request, "pane.send",
-                    {"id": pane["id"], "card": params.task_id,
-                     "text": params.message, "enter": True,
-                     "expected_generation": params.generation})
-                _card_log(row["workspace"], params.task_id, "last-order", f"[steer] {params.message}")
-                return _text(f"Message typed into card {params.task_id}'s pane.")
             # A running Sister is steered through her own inbox, addressed to this attempt: the
-            # note is durable, lands at her next tool boundary as a follow-up rather than as
-            # keystrokes in her editor, and does not depend on the pane's input queue
+            # note is durable, lands at her next tool boundary as a steering message rather than
+            # as keystrokes in her editor, and does not depend on the pane's input queue
             # (2026-09-18: pane.send lost the Enter behind a full pty queue, B1, and could
             # land in a reader pane, B14). The pane stays the way to *see* her.
             mid = await asyncio.to_thread(
                 _mail_running_card, row, params.message, params.summary, _session_id(ctx))
             _card_log(row["workspace"], params.task_id, "last-order", f"[steer] {params.message}")
-            return _text(f"Message #{mid} queued for card {params.task_id} (attempt {row['generation']}); "
-                         "her session reads it at its next tool boundary.")
-        if row["status"] != "running" and (in_panel or pane or help_reply):
+            when = ("the ally reads it between turns: at once if it is idle, otherwise when its current turn ends"
+                    if ally else "her session reads it at its next tool boundary")
+            return _text(f"Message #{mid} queued for card {params.task_id} (attempt {row['generation']}); {when}.")
+        # An ally's attempt always runs in a daemon pane, with or without a panel.
+        if row["status"] != "running" and (in_panel or pane or help_reply or ally):
             # The daemon drains any old pane/headless runner, then owns the new attempt beyond
             # this contact turn. A finished card still only restarts on the user's nod.
             if not (params.confirmed or help_reply):
@@ -725,6 +725,92 @@ def _install(harn, runtime):
         return _text(f"Card {params.task_id}'s saved session is in pane {out['pane_id']}, beside this one, "
                      "as a reader. To continue her, send the next instruction with misaka_sister_message "
                      "(confirmed=true); it takes that pane over.")
+
+
+    def _tab_panes():
+        """This conversation's pane and the panes of the tab it sits in."""
+        from misaka.ui.panel import client as net
+        me = os.environ["MISAKA_NET_PANE"]
+        return me, net.request("panes.list", {"tab_of": me})["panes"]
+
+    def _pane_kind(pane, me):
+        """``(what it is, verdict)``; the verdict is what misaka_pane_close does with it."""
+        if pane["id"] == me:
+            return "this conversation", "self"
+        if pane.get("card"):
+            card = f"card {pane['card']} ({pane.get('status') or '?'})"
+            if pane.get("claimed", True):          # a daemon that does not say is treated as running
+                return f"running {card}", "running"
+            if pane.get("alive"):
+                return f"showing {card}; its attempt does not run here", "leftover"
+            return f"{card}; its program has exited", "leftover"
+        foreground = (pane.get("foreground") or {}).get("name") or (pane.get("argv") or ["?"])[0]
+        state = "running" if pane.get("alive") else "exited"
+        return f"{os.path.basename(str(foreground))} ({state})", "ask"
+
+    class PaneListParams(StrictParams):
+        pass
+
+    @_register(
+        harn,
+        name="misaka_pane_list", label="List this tab's panes",
+        description="List the panes in this conversation's tab of the panel -- the cards you started, the "
+                    "sessions you reopened, what finished cards left behind, shells -- and which of them "
+                    "misaka_pane_close may close.",
+        snippet="List the panes in this conversation's tab",
+        parameters=PaneListParams)
+    async def misaka_pane_list(tool_call_id, params, signal, on_update, ctx):
+        if not os.environ.get("MISAKA_NET_PANE"):
+            return _text("No panel, so this conversation has no tab and no panes.")
+        me, panes = await asyncio.to_thread(_tab_panes)
+        closes = {"self": "no", "running": "no: stop the card with misaka_sister_stop",
+                  "leftover": "yes", "ask": "only when the user asks"}
+        lines = []
+        for pane in panes:
+            what, verdict = _pane_kind(pane, me)
+            lines.append(f"{pane['id']}  {pane.get('title') or ''}  -- {what}; close: {closes[verdict]}")
+        return _text("\n".join(lines) or "No panes in this tab.")
+
+    class PaneCloseParams(StrictParams):
+        pane_ids: list[str] = Field(min_length=1, description="Pane ids from misaka_pane_list (p3, ...), not card ids.")
+        confirmed: bool = Field(False, description=(
+            "True only when the user asked to close a pane that is not a card's -- a shell or an agent they "
+            "started. A finished card's pane and a reader need no confirmation."))
+
+    @_register(
+        harn,
+        name="misaka_pane_close", label="Close panes in this tab",
+        description="Close panes in this conversation's tab. What a finished card left behind and a session "
+                    "reopened as a reader may be closed at any time; a pane running a card never (that is "
+                    "misaka_sister_stop); any other pane only when the user asks.",
+        snippet="Close leftover panes in this conversation's tab",
+        guidelines=[("Close what finished cards left in your tab once you have read their results; list the "
+                     "tab with misaka_pane_list first, since a pane id is not a card id.")],
+        parameters=PaneCloseParams)
+    async def misaka_pane_close(tool_call_id, params, signal, on_update, ctx):
+        if not os.environ.get("MISAKA_NET_PANE"):
+            return _text("No panel, so this conversation has no panes to close.")
+        from misaka.ui.panel import client as net
+        me, panes = await asyncio.to_thread(_tab_panes)
+        by_id = {pane["id"]: pane for pane in panes}
+        lines = []
+        for pane_id in dict.fromkeys(params.pane_ids):
+            pane = by_id.get(pane_id)
+            if pane is None:
+                lines.append(f"{pane_id}: not in this conversation's tab; left alone.")
+                continue
+            what, verdict = _pane_kind(pane, me)
+            if verdict == "self":
+                lines.append(f"{pane_id}: this conversation's own pane; left alone.")
+            elif verdict == "running":
+                lines.append(f"{pane_id}: {what}; stop the card with misaka_sister_stop instead.")
+            elif verdict == "ask" and not params.confirmed:
+                lines.append(f"{pane_id}: {what} is not a card's pane; close it only when the user asks "
+                             "(confirmed=true).")
+            else:
+                await asyncio.to_thread(net.request, "pane.close", {"id": pane_id})
+                lines.append(f"{pane_id}: closed ({what}).")
+        return _text("\n".join(lines))
 
 
 

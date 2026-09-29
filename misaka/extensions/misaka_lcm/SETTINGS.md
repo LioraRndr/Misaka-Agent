@@ -42,6 +42,21 @@ query, and a research project's `lcm.db` grows to tens of megabytes, where 3 s d
 message-search arm in silence (2026-09-18, B32). `LCM_EMBEDDING_QUERY_TIMEOUT_S` still wins
 when set; the vendored code is untouched.
 
+Three more defaults are MISAKA's own, each only while its `LCM_*` variable is unset:
+`reserve_tokens_floor` is 16,384 (upstream 0, which leaves overflow recovery unarmed),
+`dynamic_leaf_chunk_enabled` is on (upstream off: a compaction then summarises the whole raw backlog
+outside the fresh tail as one leaf, and a research Last Order's 600k-token backlog became one 4k-token
+summary; upstream's chunked passes, at most four per compaction, keep each leaf one chunk long), and the
+leaf chunk scales with the session's model window. Upstream's 20,000-token leaf chunk fits the
+~128k windows it was tuned on; MISAKA sessions run on 272k to 1M windows, where that size
+summarised a leaf at every research phase and pulled a 1M-window Last Order down at 30% of her
+window (2026-09-27). It is multiplied by window / 128k (never below upstream's) and capped at 60%
+of the summariser's window, since one leaf is summarised in one call: a 1M session gets a
+156,250-token chunk, a 272k session 42,500 tokens, recomputed when the session switches models.
+The fresh tail stays upstream's 32 messages with no token cap: scaled with the window to 250, it
+was a research Last Order's entire conversation, so nothing was ever summarised and she ran into
+the window on overflow recovery alone (2026-09-28).
+
 ## Actual automatic-recall path
 
 The native `context` hook calls the original upstream recall builder once per

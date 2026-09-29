@@ -75,6 +75,8 @@ LAYOUT: dict[str, Entry] = {
     "mcp_auth": Entry("credentials/mcp-auth", "secret", 0o700),
     "db": Entry("state/board.db", "state"),
     "messages_db": Entry("state/messages.db", "state"),
+    # The panel's spaces by durable id -> folder and name, for every space a session belongs to.
+    "spaces": Entry("state/spaces.json", "state"),
     "trust": Entry("state/trust.json", "state"),
     "models_store": Entry("state/models-store.json", "state"),
     "sessions": Entry("state/sessions", "state"),
@@ -87,6 +89,8 @@ LAYOUT: dict[str, Entry] = {
     "skills_state": Entry("state/skills", "state"),
     "skills_pending": Entry("state/skills-pending", "state"),
     "web_evidence": Entry("state/web-evidence", "state"),
+    # What `misaka update` copies before it changes anything (``cli.backup``); owner-only when made.
+    "backups": Entry("state/backups", "state"),
     "shared": Entry("shared", "shared"),
     "bin": Entry("cache/bin", "cache"),
     "engine_cache": Entry("cache/engine", "cache"),

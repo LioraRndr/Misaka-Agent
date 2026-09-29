@@ -216,7 +216,7 @@ COMPLETION_INSTRUCTIONS = """
   submits the card when that turn ends; do not write a submission file.
 - A turn that ends without that call leaves the card running: that is how to answer a message from Last Order or
   report progress. A card whose contract names a deliverable cannot be completed until that file exists there.
-- Put deliverables in the requested location. Successful `write`, `edit`, and `office` operations are recorded
+- Put deliverables in the requested location: files written into the card's output directory are collected
   automatically.
 - On a research card, record final evidence-backed findings and concrete uncertainties with `misaka_card_note`.
 """
@@ -251,6 +251,58 @@ def contract_deliverable(task):
     return split_deliverable(section)[0]
 
 
+COMPLETION_EVENT = "completion_declared"
+
+
+def claim_env(task_id):
+    """``(generation, claim_lock)`` this process holds on ``task_id``, or ``(None, None)``.
+
+    Whoever claimed the card -- the daemon for a pane, the dispatcher, a Last Order's Sister
+    runtime -- hands the claim to the process doing the work through these variables, and to
+    that process's own helpers (an ally's MCP bridge) the same way."""
+    owner = os.environ.get("MISAKA_SISTER_OWNER_TASK_ID") or os.environ.get("MISAKA_USAGE_TASK_ID")
+    generation = (os.environ.get("MISAKA_SISTER_OWNER_GENERATION")
+                  or os.environ.get("MISAKA_USAGE_GENERATION"))
+    claim_lock = (os.environ.get("MISAKA_SISTER_OWNER_CLAIM_LOCK")
+                  or os.environ.get("MISAKA_USAGE_CLAIM_LOCK"))
+    if owner != task_id or not generation or not claim_lock:
+        return None, None
+    try:
+        return int(generation), claim_lock
+    except ValueError:
+        return None, None
+
+
+def owned_card(con, task_id, generation, claim_lock):
+    """The running card this attempt still owns, its lease renewed; None once it is not."""
+    row = task_store.get(con, task_id)
+    if (generation is None or row is None or row["status"] != "running"
+            or int(row["generation"]) != generation or row["claim_lock"] != claim_lock):
+        return None
+    if not task_store.heartbeat(con, task_id, claim_lock, generation=generation, ttl_seconds=1800):
+        return None
+    return row
+
+
+def declare_completion(con, row, summary):
+    """Record that this attempt's work is done. The host submits it when the turn ends: a
+    Sister's session at ``agent_settled``, an ally's runner after its ACP turn. A board event,
+    so a declaration made in another process (an ally's MCP bridge) reaches the host too."""
+    if not task_store.add_event(con, row["id"], COMPLETION_EVENT, {"summary": summary},
+                                generation=row["generation"], claim_lock=row["claim_lock"]):
+        raise ValueError("Card ownership changed before its completion was recorded.")
+
+
+def declared_completion(con, row):
+    """The summary this attempt declared with ``misaka_card_complete``, or None."""
+    raw = task_store.latest_payload(con, row["id"], COMPLETION_EVENT, generation=row["generation"])
+    try:
+        value = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return str(value.get("summary") or "") if isinstance(value, dict) else None
+
+
 def missing_deliverable(task):
     """The contract deliverable that is not yet a non-empty file under the card's output
     directory, or None when the card has no contract deliverable or it is in place.
@@ -264,23 +316,34 @@ def missing_deliverable(task):
         name = contract_deliverable(task)
     except ValueError as error:
         return str(error)  # malformed contracts block completion, including the idle-turn notice
-    if name is None:
-        return None
+    return None if name is None or deliverable_path(task, name) else name
+
+
+def deliverable_path(task, name):
+    """The delivered file for contract name ``name`` under the card's output directory, or None.
+    The Sister's file may differ from the contract name in a character or two: Last Order's
+    plans misspell names (2026-09-28: 莱茅邦联 for 莱茵邦联, 狂太 for 犹太), and holding her to the
+    misspelling only made her copy the file under it."""
     output_dir = _card_field(task, "output_dir")
     if not output_dir:
-        return name
+        return None
     try:
         root = Path(output_dir).resolve(strict=True)
         workspace = _card_field(task, "workspace")
         if workspace:
             root.relative_to(Path(workspace).resolve(strict=True))
-        path = (root / name).resolve(strict=True)
-        path.relative_to(root)  # a symlink outside this card is not its deliverable
-        if path.is_file() and path.stat().st_size > 0:
-            return None
+        candidates = [name] + sorted(
+            entry for entry in os.listdir(root)
+            if entry != name and len(entry) == len(name) and os.path.splitext(entry)[1] == os.path.splitext(name)[1]
+            and sum(a != b for a, b in zip(entry, name, strict=True)) <= 2)
+        for candidate in candidates:
+            path = (root / candidate).resolve(strict=True)
+            path.relative_to(root)  # a symlink outside this card is not its deliverable
+            if path.is_file() and path.stat().st_size > 0:
+                return path
     except (OSError, RuntimeError, ValueError):
         pass
-    return name
+    return None
 
 
 def card_handoffs(con, task):
@@ -442,6 +505,19 @@ def card_prompt(task):
     return prompt
 
 
+def _contract_artifact(task, root):
+    """The contract deliverable, as the card's product whether or not this attempt rewrote it. A
+    card reopened to declare again left an unchanged deliverable out of its submission -- only
+    files changed since the attempt's baseline were listed -- and the run lost the file's
+    registration (2026-09-27, a divergence review after a resume)."""
+    try:
+        name = contract_deliverable(task)
+    except ValueError:
+        return None
+    path = deliverable_path(task, name) if name else None
+    return _artifact(root, os.path.relpath(path, root)) if path else None
+
+
 def _artifact(root, value):
     """Return one existing workspace-relative regular file, else ``None``."""
     if not isinstance(value, str) or not value or "\0" in value or len(value) > MAX_ARTIFACT_PATH_CHARS:
@@ -457,12 +533,22 @@ def _artifact(root, value):
     return os.path.relpath(path, root) if path.is_file() else None
 
 
+def _output_files(root, workspace):
+    """Workspace-relative files under ``root``, nested ones included; hidden entries and the
+    board's own folders are not deliverables."""
+    out = []
+    for base, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("cards", "research", "node_modules"))
+        out.extend(os.path.relpath(os.path.join(base, name), workspace)
+                   for name in sorted(files) if not name.startswith("."))
+    return out
+
+
 def _output_snapshot(task, root):
     """Current deliverables keyed by a revision stronger than mtime alone."""
     output_dir = task.get("output_dir")
     if not output_dir:
         return {}
-    from misaka.core.network.ally.runner import _artifacts
     from misaka.utils.paths import get_file_revision
 
     output = Path(output_dir).resolve()
@@ -470,7 +556,7 @@ def _output_snapshot(task, root):
     if not output.is_dir():
         return {}
     snapshot = {}
-    for value in _artifacts(str(output), str(root), None):
+    for value in _output_files(str(output), str(root)):
         relative = _artifact(root, value)
         revision = get_file_revision(str(root / relative)) if relative else None
         if revision is not None:
@@ -554,6 +640,8 @@ def build_submission(con, task, summary):
             continue
         if path := _artifact(root, value):
             artifacts.append(path)
+    if path := _contract_artifact(task, root):
+        artifacts.append(path)
 
     # Notes append material. Only critique issues are a complete snapshot (below).
     # Never let an uncertainty-only note erase the findings recorded earlier.
@@ -583,13 +671,21 @@ def build_submission(con, task, summary):
     critique = task_store.latest_payload(con, task["id"], "research_critique", generation=task["generation"])
     if critique is not None:
         submission["issues"] = json.loads(critique)["issues"]
-    elif con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_run_tasks'").fetchone():
+    divergence = task_store.latest_payload(con, task["id"], "research_divergence", generation=task["generation"])
+    if divergence is not None:
+        submission["alternatives"] = json.loads(divergence)["alternatives"]
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_run_tasks'").fetchone():
         link = con.execute("SELECT kind FROM research_run_tasks WHERE task_id=?", (task["id"],)).fetchone()
         from misaka.core.research import runs
-        if link and link["kind"] in runs.REVIEW_KINDS:
+        if link and link["kind"] in runs.CRITIQUE_KINDS and "issues" not in submission:
             raise IncompleteSubmission(
                 "Record the red-team issues with misaka_card_note before completing the card "
                 "(issues=[] if none)."
+            )
+        if link and link["kind"] == "divergence" and "alternatives" not in submission:
+            raise IncompleteSubmission(
+                "Record the alternatives with misaka_card_note before completing the card "
+                "(alternatives=[] if none)."
             )
     return submission
 
@@ -650,6 +746,26 @@ def card_session_setup(task, workspace, profile_dir, provider, default_model):
     return flags, assembly, prompt, ro_root, role
 
 
+def continue_flags(session_file, session_dir):
+    """Engine flags that go on in a card's own conversation, or None when it has none: the newest
+    transcript in its session folder -- after an in-pane fork the recorded path is the pre-fork
+    line and the branched file is newer -- else the recorded one. One rule for a pane
+    (``card_shell``) and a headless continuation (``run_card``)."""
+    try:
+        files = [os.path.join(session_dir, n) for n in os.listdir(session_dir) if n.endswith(".jsonl")]
+    except OSError:
+        files = []
+    try:
+        newest = max(files, key=os.path.getmtime) if files else None
+    except OSError:
+        newest = None
+    if newest:
+        return ["--session", newest]
+    if session_file and os.path.isfile(session_file):
+        return ["--session", session_file]
+    return None
+
+
 def run_card(
     task,
     workspace,
@@ -669,6 +785,13 @@ def run_card(
     flags, assembly, prompt, ro_root, role = card_session_setup(
         task, workspace, profile_dir, provider, default_model
     )
+    if task.get("_say") is not None:
+        # A settled card continued with a message (``dispatch.run_task(say=...)``): the turn goes on
+        # in her own conversation and is the message alone, as ``card-shell --resume --say`` is in
+        # a pane -- the contract she already worked from is not sent again.
+        from misaka.config import sessions as session_roots
+        flags += continue_flags(task.get("session_file"), session_roots.card_session_dir(task)) or []
+        prompt = task["_say"]
     from misaka.config import env as env_file
 
     env = {**env_file.role_overlay(profile_dir),      # the Sister's own .env, then the card's hand-off names

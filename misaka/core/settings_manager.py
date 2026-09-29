@@ -50,7 +50,7 @@ type SettingsScope = Literal["global", "role", "project"]
 # The keys a role may hold a value of its own for. A role session that sets one of these writes
 # its own scope; every other key is the user's, shared by every role, and stays global. This
 # table is what keeps Last Order's and a Sister's configuration apart -- not per-key special cases.
-ROLE_KEYS = frozenset({"defaultProvider", "defaultModel", "mcpServers", "web"})
+ROLE_KEYS = frozenset({"defaultProvider", "defaultModel", "defaultThinkingLevel", "mcpServers", "web"})
 type TransportSetting = Transport
 type DefaultProjectTrust = Literal["ask", "always", "never"]
 
@@ -817,7 +817,19 @@ class SettingsManager:
     def getDefaultThinkingLevel(self) -> str | None:
         return self.settings.get("defaultThinkingLevel")
 
+    def getRoleThinkingLevel(self) -> str | None:
+        """The bound role's own default thinking level; None when she keeps none or no role is
+        bound. A new session and a model switch take it before the shared per-model table:
+        one agent's own level is the most specific choice made about her."""
+        level = (self.roleSettings or {}).get("defaultThinkingLevel")
+        return level if isinstance(level, str) and level else None
+
     def setDefaultThinkingLevel(self, level: str) -> None:
+        # A role session saves the level as the role's own (``ROLE_KEYS``); outside a role it is
+        # the global default, as in pi. A role file that cannot be read or written raises.
+        if self._owner_scope("defaultThinkingLevel") == "role":
+            self._write_role(lambda data: data.__setitem__("defaultThinkingLevel", level))
+            return
         self._set_global_value("defaultThinkingLevel", level)
 
     def getDefaultProjectTrust(self) -> DefaultProjectTrust:

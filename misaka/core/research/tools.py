@@ -14,7 +14,7 @@ from misaka.config import CFG
 from misaka.core.extensions.types import ToolDefinition
 from misaka.core.platform import tasks as task_store
 from misaka.core.platform.prompt_guard import untrusted
-from misaka.core.research import ledger, runs
+from misaka.core.research import graph, ledger, runs
 from misaka.core.tools.truncate import TruncationOptions, format_size, truncate_head
 
 # One tool result is one prompt turn for the smallest window in play (272k); the whole index of a
@@ -28,12 +28,15 @@ def _text(value):
 
 def register(harn):
     class Params(BaseModel):
-        view: Literal["run", "workspace", "issues", "findings"] = Field(
-            "run", description="Information to return; workspace gives current states and exact card/artifact paths."
+        view: Literal["run", "graph", "workspace", "issues", "findings"] = Field(
+            "run", description=("Information to return: graph gives every node, how it was reached, the decisions "
+                                "and options, and the relations; workspace gives current states and exact "
+                                "card/artifact paths; issues gives every review issue and what Last Order did with it.")
         )
         run_id: str | None = Field(
             None, description="Optional research-run ID; omit to inspect the latest run of the current workspace."
         )
+        node: str | None = Field(None, description="issues only: one node's issues instead of the whole run's.")
         offset: int = Field(0, ge=0, description="Findings page offset.")
         limit: int = Field(50, ge=1, le=200, description="Findings per page; a next offset is returned when more exist.")
 
@@ -80,14 +83,19 @@ def register(harn):
         if params.view == "run":
             value = runs.summary(con, run["id"])
             return _text("\n".join(f"{k}: {v}" for k, v in value.items()))
+        if params.view == "graph":
+            return _text(untrusted("research-graph", graph.render_graph(graph.snapshot(con, run))))
         if params.view == "issues":
             rows = con.execute(
-                "SELECT * FROM research_issues WHERE run_id=? ORDER BY status,priority DESC",
-                (run["id"],),
+                "SELECT * FROM research_issues WHERE run_id=? AND (? IS NULL OR branch_id=?) "
+                "ORDER BY branch_id,round,origin,priority DESC",
+                (run["id"], params.node, params.node),
             ).fetchall()
-            return _text("\n".join(
-                f"{r['id']} [{r['status']}/{r['kind']}] {r['question']} — {r['rationale']}"
-                for r in rows) or "(empty)")
+            return _text(untrusted("research-issues", "\n".join(
+                f"{r['id']} node {r['branch_id']} round {r['round']} [{r['origin']}/{r['kind']}] "
+                f"→ {r['disposition'] or 'undisposed'}" + (f" ({runs.destination(r)})" if runs.destination(r) else "")
+                + f": {r['question']} — {r['rationale']}" + (f" | Last Order: {r['reason']}" if r["reason"] else "")
+                for r in rows) or "(empty)"))
         rows = ledger.findings(con, run["id"], limit=params.limit + 1, offset=params.offset)
         result = _text("\n".join(
             f"{r['id']} [{r['claim_type']}] {r['text']}" for r in rows[:params.limit]) or "(empty)")
@@ -105,8 +113,9 @@ def register(harn):
     harn.registerTool(ToolDefinition(
         name="misaka_research_view", label="View research run",
         description=(
-            "Inspect live research state, the workspace index with exact file paths, issues, and findings. "
-            "Each call reads current records; saved workspace-index files are historical snapshots. This tool is read-only."
+            "Inspect live research state: the research graph, the workspace index with exact file paths, review issues "
+            "with their dispositions, and findings. Each call reads current records; saved workspace-index and graph "
+            "files are snapshots. This tool is read-only."
         ),
         parameters=Params.model_json_schema(), execute=execute,
         promptSnippet="Inspect live research state, material paths, and declarations",
@@ -115,6 +124,38 @@ def register(harn):
              "Use returned paths verbatim; node IDs and artifact titles are not filenames. "
              "Saved workspace indexes and context packets are snapshots, not live state; query again for newer artifacts.")
         ],
+    ))
+
+
+    class Retry(BaseModel):
+        node: str = Field(min_length=1, description="The id of the failed node to run again.")
+        run_id: str | None = Field(None, description="Optional research-run ID; omit for the latest run of this workspace.")
+
+    def retry(params, workspace, session_file, call_id):
+        with closing(task_store.connect(os.path.expanduser(CFG["db"]))) as con:
+            run = runs.get(con, params.run_id) if params.run_id else runs.latest(con, workspace=workspace)
+            if run is None:
+                return _text("No research run exists.")
+            attempt = runs.retry_node(con, run, params.node, session_file=session_file, tool_call_id=call_id)
+            when = ("its level's driver starts it again as soon as a slot is free" if run["status"] in runs.ACTIVE
+                    else f"`/research resume {run['id']}` starts it")
+            return _text(f"Node {params.node} is queued again (retry {attempt} of {runs.RETRY_LIMIT}): its failed cards went "
+                         f"back to their Sisters and it picks up where it was; {when}.")
+
+    async def execute_retry(tool_call_id, raw, _signal, _on_update, ctx):
+        params = raw if isinstance(raw, Retry) else Retry(**(raw or {}))
+        workspace = os.path.realpath(getattr(ctx, "cwd", None) or os.getcwd())
+        session_file = getattr(getattr(ctx, "sessionManager", None), "sessionFile", None)
+        return await asyncio.to_thread(retry, params, workspace, session_file, tool_call_id)
+
+    retry_description = ("Run a failed research node again -- its failed cards go back to their Sisters and it picks up "
+                         "where it was -- without waiting for the level to end and the run to be resumed")
+    harn.registerTool(ToolDefinition(
+        name="misaka_research_retry", label="Retry a failed research node", description=retry_description,
+        parameters=Retry.model_json_schema(), execute=execute_retry, promptSnippet=retry_description,
+        promptGuidelines=[("When a research node fails -- a provider refused its request, a Sister card failed, its process "
+                           "died -- and the cause was passing, misaka_research_retry(node=...) runs it again at once; a "
+                           "node that keeps failing the same way is left for the user.")],
     ))
 
 

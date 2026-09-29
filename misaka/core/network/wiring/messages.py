@@ -11,14 +11,10 @@ def part(spec):
     if can_delegate:
         from misaka.core.subagent import extension as subagent
         route = subagent.route_to_children
-    sender = sender_address(spec)
     return messages.MessagesPart(
-        sender=sender, route=route, receive=spec.receive_messages,
+        sender=sender_address(spec), route=route, receive=spec.receive_messages,
         card_task=spec.task_id,
-        # A Sister's help request is answered by the Last Order working in that card's
-        # project: the one session that can read the card and reply through
-        # misaka_sister_message. Any other project's help waits for the contact turn, which
-        # carries an allowlist for exactly those cards.
-        task_help_consumer=spec.receive_messages and spec.kind == "foreground" and sender == "last-order",
-        workspace=spec.workspace,
+        # The role's contact session (`misaka dm`) reads the mail no live session of the role
+        # was found for; every other session reads only what is pinned to it.
+        contact=spec.kind == "dm",
     )

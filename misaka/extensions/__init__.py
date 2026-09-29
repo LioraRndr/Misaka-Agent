@@ -10,7 +10,9 @@ the folder a module sits in decides who gets it. A module takes part by defining
 ``activate(spec) -> register | None``: ``register(harn)`` installs the extension into the
 harness, ``None`` skips it for this session. A module may override its descriptor name
 with ``EXTENSION_NAME``, hide it with ``HIDDEN``, or restrict itself to session kinds
-with ``SESSION_KINDS = {...}``; the default is every kind except ``bare``.
+with ``SESSION_KINDS = {...}``; the default is every kind except ``bare``. A module may also
+offer a top-level command, ``misaka <COMMAND> ...``, by defining ``COMMAND`` and
+``command(argv)``; the first line of that function's docstring is its help.
 
 Nothing in ``misaka.core`` imports this package. The process entry hands ``discover``
 to ``misaka.core.wiring.bundled`` (``misaka.cli.bootstrap``), the way Pi's ``main.ts``
@@ -60,4 +62,16 @@ def discover(spec) -> list[dict[str, Any]]:
     return out
 
 
-__all__ = ["discover"]
+def commands() -> dict[str, Any]:
+    """The top-level commands bundled extensions offer: ``{COMMAND: command}``. Every bundled
+    module is imported to look, so the process entry asks only for a name that is not its own."""
+    found: dict[str, Any] = {}
+    for package in (__name__, *(f"{__name__}.{role}" for role in _ROLE_DIRS)):
+        for mod in _modules(package):
+            name, command = getattr(mod, "COMMAND", None), getattr(mod, "command", None)
+            if name and callable(command):
+                found[name] = command
+    return found
+
+
+__all__ = ["commands", "discover"]

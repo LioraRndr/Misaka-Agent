@@ -37,7 +37,7 @@ def _run_command(monkeypatch, replies):
     monkeypatch.setattr(planner.commands, "tool", lambda *args, **kwargs: object())
     monkeypatch.setattr(planner, "find_most_recent_session", lambda directory: None)
     run = {"id": "r1", "workspace": "/tmp", "root_session": "root.jsonl"}
-    node = {"id": "b1", "parent_id": None}
+    node = {"id": "b1", "depth": 0}
     try:
         outcome = planner._command(None, run, {}, None, node, "plan prompt", key="plan",
                                    name="misaka_research_assign", description="d", model=None,
@@ -75,6 +75,50 @@ def test_other_failures_are_not_retried(monkeypatch):
     assert isinstance(outcome, RuntimeError)
     assert len(calls) == 1
     assert "request aborted" in str(outcome)
+
+
+def test_a_reply_that_ends_in_prose_gets_one_nudged_turn(monkeypatch):
+    """2026-09-28: a dispose turn wrote the revised conclusion as its reply and never called
+    ``misaka_research_dispose``; with no retry the node failed and took the whole run with it."""
+    calls, outcome = _run_command(monkeypatch, [None, "accepted"])
+    assert not isinstance(outcome, RuntimeError)
+    assert outcome[1] == "recorded"
+    assert len(calls) == 2
+    nudge, continued = calls[1]
+    assert continued is True
+    assert "ended without calling `misaka_research_assign`" in nudge
+    assert "output token limit" not in nudge
+
+
+def test_a_second_prose_reply_fails_as_before(monkeypatch):
+    calls, outcome = _run_command(monkeypatch, [None, None])
+    assert isinstance(outcome, RuntimeError)
+    assert len(calls) == 2
+    assert "no command accepted" in str(outcome)
+
+
+def test_reconcile_nudges_a_reply_that_ends_in_prose(monkeypatch):
+    calls = []
+    recorded = {"value": None}
+
+    def fake_call(worker, cfg, prompt, **kwargs):
+        calls.append((prompt, kwargs.get("continue_session")))
+        if len(calls) == 2:
+            recorded["value"] = {"round": 1}
+        return None, "", None
+
+    monkeypatch.setattr(planner, "_call", fake_call)
+    monkeypatch.setattr(planner.runs, "reconcile", lambda con, run_id, round: recorded["value"])
+    monkeypatch.setattr(planner.runs, "root", lambda con, run_id: {"id": "b0", "depth": 0})
+    monkeypatch.setattr(planner, "_lo_session", lambda run, node: "/tmp")
+    monkeypatch.setattr(planner.commands, "reconcile_tool", lambda *args, **kwargs: object())
+    monkeypatch.setattr(planner, "find_most_recent_session", lambda directory: None)
+    run = {"id": "r1", "workspace": "/tmp", "root_session": "root.jsonl", "limits_json": "{}"}
+    outcome = planner.reconcile(None, run, {}, None, round=1, material={}, validate=lambda value: value)
+    assert outcome == {"round": 1}
+    assert len(calls) == 2
+    assert "ended without calling `misaka_research_reconcile`" in calls[1][0]
+    assert calls[1][1] is True
 
 
 @pytest.mark.parametrize("message", [

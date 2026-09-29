@@ -57,9 +57,9 @@ def panel(home, request):
             daemon._mcon.close()
 
 
-def _card(panel, workspace, *, status="done", title="T4 crossover"):
+def _card(panel, workspace, *, status="done", title="T4 crossover", assignee="10032"):
     con = panel._board()
-    task_id = cards.create(con, str(workspace), title, BODY, "10032")
+    task_id = cards.create(con, str(workspace), title, BODY, assignee)
     con.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
     tasks._mirror_status(con, task_id)
     con.commit()
@@ -281,76 +281,6 @@ def test_last_order_steers_the_pane_holding_the_claim(monkeypatch):
     assert network._pane_for_card("t_2") is None
 
 
-async def test_a_leftover_card_pane_can_be_closed_but_a_running_one_cannot():
-    """B22: `misaka_ally_close` refused every pane carrying a card, so Last Order used `kill`."""
-    from misaka.core.network.ally import extension as allies
-    from misaka.core.wiring import ToolCollector
-
-    collector = ToolCollector()
-    allies.register(collector)
-    close = next(t for t in collector.tools if t.name == "misaka_ally_close")
-    listing = {"panes": [
-        {"id": "p1", "title": "reader", "card": "t_1", "claimed": False},
-        {"id": "p2", "title": "runner", "card": "t_1", "claimed": True},
-        {"id": "p3", "title": "older daemon", "card": "t_1"},
-        {"id": "p4", "title": "a shell", "card": None},
-    ]}
-    calls = []
-
-    def request(method, params=None):
-        calls.append((method, params))
-        return listing if method == "panes.list" else {"closed": True}
-
-    from misaka.ui.panel import client
-    original, client.request = client.request, request
-    try:
-        with pytest.raises(ValueError, match="misaka_sister_stop"):
-            await close.execute("fixture", {"pane_id": "p2", "confirmed": True}, None, None,
-                                SimpleNamespace())
-        await close.execute("fixture", {"pane_id": "p1", "confirmed": True}, None, None,
-                            SimpleNamespace())
-        # An older daemon does not say which pane holds the claim; then no card pane is closed.
-        with pytest.raises(ValueError, match="misaka_sister_stop"):
-            await close.execute("fixture", {"pane_id": "p3", "confirmed": True}, None, None,
-                                SimpleNamespace())
-        await close.execute("fixture", {"pane_id": "p4", "confirmed": True}, None, None,
-                            SimpleNamespace())
-    finally:
-        client.request = original
-    assert ("pane.close", {"id": "p1"}) in calls
-    assert ("pane.close", {"id": "p4"}) in calls
-    assert ("pane.close", {"id": "p3"}) not in calls
-
-
-async def test_last_order_can_see_the_leftover_card_panes_it_may_close():
-    """A close it cannot aim is no use: the listing has to show a finished card's pane, and
-    which pane holds the claim (2026-09-18, review of B22)."""
-    import json as json_module
-
-    from misaka.core.network.ally import extension as allies
-    from misaka.core.wiring import ToolCollector
-
-    collector = ToolCollector()
-    allies.register(collector)
-    listing = next(t for t in collector.tools if t.name == "misaka_ally_list")
-    panes = {"panes": [
-        {"id": "p1", "title": "reader", "card": "t_1", "alive": True, "claimed": False},
-        {"id": "p2", "title": "runner", "card": "t_1", "alive": True, "claimed": True},
-        {"id": "p3", "title": "finished", "card": "t_2", "alive": False, "claimed": False},
-        {"id": "p4", "title": "dead shell", "card": None, "alive": False},
-    ]}
-    from misaka.ui.panel import client
-    original, client.request = client.request, lambda method, params=None: panes
-    try:
-        out = await listing.execute("fixture", {}, None, None, SimpleNamespace())
-    finally:
-        client.request = original
-    rows = {r["pane"]: r for r in json_module.loads(out["content"][0]["text"])}
-    assert set(rows) == {"p1", "p2", "p3"}, "a dead card pane is listed; a dead shell is not"
-    assert rows["p2"]["claimed"] and not rows["p1"]["claimed"]
-    assert rows["p3"]["alive"] is False and rows["p3"]["claimed"] is False
-
-
 async def test_two_requests_for_one_card_do_not_race_for_its_window(panel, home):
     """Stopping the program in a card's window happens before the board's claim decides who won
     it, so a second request must wait rather than replace the program a second time."""
@@ -424,3 +354,68 @@ async def test_a_card_with_a_transcript_is_still_resumed(panel, home):
     panel._mcon = None
     pane = await panel.continue_card(task_id, "carry on")
     assert "--resume" in pane.argv and pane.argv[-1] == "carry on"
+
+
+async def test_an_allys_card_runs_in_its_acp_runner_and_is_continued_with_a_message(panel, home, monkeypatch):
+    """Who runs a card is the one fork: an ally's attempt is its ACP runner (``misaka ally-card``),
+    claimed, hosted and continued exactly as a Sister's session is."""
+    monkeypatch.setattr(d, "ALLY_CARD", IDLE)
+    (home / "settings.json").write_text(json.dumps({"allies": {"codex": {}}}))
+    task_id, _ = _card(panel, home, status="ready", assignee="codex")
+    pane = await panel.run_card(task_id)
+    assert pane.argv == [*IDLE, task_id]
+    assert tasks.get(panel._board(), task_id)["status"] == "running"
+
+    done, _ = _card(panel, home, assignee="codex", title="settled")
+    pane = await panel.continue_card(done, "one more source")
+    assert pane.argv == [*IDLE, done, "--say", "one more source"]
+
+
+
+# ── Last Order's own tab ───────────────────────────────────────────────────────────────
+
+async def test_a_tab_lists_only_its_own_panes(panel, home):
+    lo = panel.create(IDLE, str(home), title="Last Order")
+    beside = panel.create(IDLE, str(home), place={"grid": lo.id})
+    elsewhere = panel.create(IDLE, str(home), place={"tab": lo.id})
+    listed = {p["id"] for p in panel._api("panes.list", {"tab_of": lo.id})["panes"]}
+    assert listed == {lo.id, beside.id} and elsewhere.id in panel.panes
+
+
+async def test_last_order_closes_what_finished_cards_left_in_her_tab_and_nothing_else(monkeypatch):
+    """B22: Last Order could not close the panes finished cards left beside her, and ended up killing
+    processes by PID. She closes those; the pane running a card is misaka_sister_stop's, a pane the
+    user opened waits for the user, and anything outside her tab is not hers at all."""
+    from misaka.core.network.wiring import network
+    from misaka.core.wiring import ToolCollector
+
+    collector = ToolCollector()
+    network._install(collector, SimpleNamespace())
+    tools = {tool.name: tool for tool in collector.tools}
+    monkeypatch.setenv("MISAKA_NET_PANE", "p0")
+    listing = {"panes": [
+        {"id": "p0", "title": "Last Order", "card": None, "alive": True},
+        {"id": "p1", "title": "reader", "card": "t_1", "alive": True, "claimed": False, "status": "done"},
+        {"id": "p2", "title": "runner", "card": "t_2", "alive": True, "claimed": True, "status": "running"},
+        {"id": "p3", "title": "finished", "card": "t_3", "alive": False, "claimed": False, "status": "done"},
+        {"id": "p4", "title": "shell", "card": None, "alive": True, "foreground": {"name": "zsh"}},
+    ]}
+    calls = []
+
+    def request(method, params=None, **kwargs):
+        calls.append((method, params))
+        return listing if method == "panes.list" else {"closed": True}
+
+    monkeypatch.setattr("misaka.ui.panel.client.request", request)
+    ctx = SimpleNamespace()
+    text = (await tools["misaka_pane_list"].execute("c", {}, None, None, ctx))["content"][0]["text"]
+    assert calls[0] == ("panes.list", {"tab_of": "p0"})
+    verdicts = {line.split()[0]: line.rsplit("close: ", 1)[1] for line in text.splitlines()}
+    assert verdicts == {"p0": "no", "p1": "yes", "p2": "no: stop the card with misaka_sister_stop",
+                        "p3": "yes", "p4": "only when the user asks"}
+
+    close = tools["misaka_pane_close"]
+    await close.execute("c", {"pane_ids": ["p0", "p1", "p2", "p3", "p4", "p9"]}, None, None, ctx)
+    assert [params["id"] for method, params in calls if method == "pane.close"] == ["p1", "p3"]
+    await close.execute("c", {"pane_ids": ["p4"], "confirmed": True}, None, None, ctx)
+    assert [params["id"] for method, params in calls if method == "pane.close"] == ["p1", "p3", "p4"]

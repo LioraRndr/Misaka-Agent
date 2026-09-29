@@ -138,6 +138,23 @@ def _assistant_end(event):
     return "", ""
 
 
+def _turn_failure(event):
+    """Why the run's last reply failed, for the stops a headless card fails on
+    (``platform.session.run_session``): a provider or runtime error, or a reply that spent the
+    whole output cap. ``aborted`` is not one: in a pane it is a person pressing Esc."""
+    for message in reversed(list(_field(event, "messages", []) or [])):
+        if _field(message, "role") != "assistant":
+            continue
+        stop = _field(message, "stopReason")
+        if stop == "error":
+            return "error", str(_field(message, "errorMessage", "") or "request error")
+        if stop == "length":
+            from misaka.ai.utils.overflow import output_limit_error
+            return "length", output_limit_error(message)
+        return None
+    return None
+
+
 PROGRESS_SECONDS = 60     # how often a busy Sister stamps progress on its card
 
 
@@ -168,8 +185,9 @@ class TodoPart:
         self._summary_token = None
         self._nudged_generation = None    # the generation already given its one extra turn
         self._held_generation = None      # the generation already told that a turn without misaka_card_complete leaves the card running
-        self._completion = None           # (generation, summary) recorded by misaka_card_complete; None = the card is not done
         self._turn_clean = False          # the last agent_end was a plain stop (not error/aborted/length)
+        self._failure = None              # (stop, reason) when the last agent_end was an error or a cut reply
+        self._continued_generation = None # the generation already given its one turn after a cut reply
         self._touched = 0.0
         self._in_flight = 0               # tool calls started and not yet answered
         self._stamper = None              # the task that stamps progress while one is
@@ -238,15 +256,23 @@ class TodoPart:
             return _text("\n".join(lines))
 
         from misaka.core.research import runs
-        from misaka.core.research.commands import Issue
+        from misaka.core.research.commands import Alternative, Issue
         from misaka.core.research.ledger import Finding
 
         class NoteParams(BaseModel):
+            # A field the tool does not know is refused, never dropped: findings sent flat beside
+            # `text` were ignored and every declaration of a run was lost (2026-09-27).
+            model_config = {"extra": "forbid"}
             text: str = Field(description="One line for the card's log: a decision, a change of course, a dead end.")
-            findings: list[Finding] = Field(default_factory=list, description="Append declarations; corrections do not erase earlier notes.")
-            uncertain: list[str] = Field(default_factory=list)
+            findings: list[Finding] = Field(default_factory=list, description=(
+                "Findings, each with its own text, claim_type and source. Append declarations; corrections do "
+                "not erase earlier notes."))
+            uncertain: list[str] = Field(default_factory=list, description="Concrete uncertainties, one per item.")
             issues: list[Issue] | None = Field(
                 None, description="Red-team cards: complete issue list for your node Last Order; [] means no issues."
+            )
+            alternatives: list[Alternative] | None = Field(
+                None, description="Divergence-review cards: the complete list of alternatives; [] means none."
             )
 
         async def note_exec(tool_call_id, raw, signal, on_update, ctx):
@@ -259,12 +285,12 @@ class TodoPart:
                 "uncertain": [item.strip() for item in p.uncertain if item.strip()],
             }
             link = None
-            if (p.findings or p.issues is not None) and c.execute(
+            if (p.findings or p.issues is not None or p.alternatives is not None) and c.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_run_tasks'"
             ).fetchone():
                 link = c.execute("SELECT run_id,kind FROM research_run_tasks WHERE task_id=?", (task_id,)).fetchone()
             if p.issues is not None:
-                if not link or link["kind"] not in runs.REVIEW_KINDS:
+                if not link or link["kind"] not in runs.CRITIQUE_KINDS:
                     raise ValueError("Only this node's red-team card may record critique issues.")
                 generation, claim_lock = self._ownership()
                 if generation is None or not bdb.add_event(
@@ -272,6 +298,15 @@ class TodoPart:
                     generation=generation, claim_lock=claim_lock,
                 ):
                     raise ValueError("Card ownership changed before its review was recorded.")
+            if p.alternatives is not None:
+                if not link or link["kind"] != "divergence":
+                    raise ValueError("Only this node's divergence-review card may record alternatives.")
+                generation, claim_lock = self._ownership()
+                if generation is None or not bdb.add_event(
+                    c, task_id, "research_divergence", {"alternatives": [item.model_dump() for item in p.alternatives]},
+                    generation=generation, claim_lock=claim_lock,
+                ):
+                    raise ValueError("Card ownership changed before its alternatives were recorded.")
             if {"findings", "uncertain"} & p.model_fields_set:
                 generation, claim_lock = self._ownership()
                 if generation is None or not bdb.add_event(
@@ -284,7 +319,12 @@ class TodoPart:
                 ):
                     raise ValueError("Card ownership changed before its research evidence was recorded.")
             cards.append_log(row["workspace"], task_id, sender, p.text)
-            return _text("Logged on the card.")
+            recorded = [f"{len(evidence['findings'])} finding(s)" if evidence["findings"] else "",
+                        f"{len(evidence['uncertain'])} uncertainty(ies)" if evidence["uncertain"] else "",
+                        f"{len(p.issues)} issue(s)" if p.issues is not None else "",
+                        f"{len(p.alternatives)} alternative(s)" if p.alternatives is not None else ""]
+            recorded = ", ".join(item for item in recorded if item)
+            return _text("Logged on the card" + (f"; recorded {recorded}." if recorded else "; nothing declared."))
 
         class CompleteParams(BaseModel):
             summary: str = Field(description="What the card delivered, for Last Order: the deliverable, the main "
@@ -303,7 +343,7 @@ class TodoPart:
             # The same checks the submission will make, so a red-team card without its issue
             # list hears it now rather than at the end of the turn.
             worker.build_submission(con(), row, p.summary.strip())
-            self._completion = (int(row["generation"]), p.summary.strip())
+            worker.declare_completion(con(), row, p.summary.strip())
             return _text("Completion recorded for this attempt. End the turn now with a short plain-text "
                          "summary; the card is submitted when the turn ends.")
 
@@ -350,7 +390,8 @@ class TodoPart:
             ToolDefinition(
                 name="misaka_card_note", label="Log a note on the card",
                 description="Append one line to this card's log (its `## log` section in the card file): a decision, a change "
-                            "of course, or a dead end. Research cards attach findings and uncertainty; red-team cards attach issues.",
+                            "of course, or a dead end. Research cards attach findings and uncertainty; red-team cards attach issues; "
+                            "divergence-review cards attach alternatives.",
                 parameters=NoteParams, execute=note_exec,
                 promptSnippet="Log a decision or change of course on this card",
                 promptGuidelines=["Append findings and uncertainty as work progresses; explain corrections in new notes. Earlier declarations remain visible for review."]),
@@ -372,30 +413,18 @@ class TodoPart:
         return self._con
 
     def _ownership(self):
-        task_id = (os.environ.get("MISAKA_SISTER_OWNER_TASK_ID")
-                   or os.environ.get("MISAKA_USAGE_TASK_ID"))
-        generation = (os.environ.get("MISAKA_SISTER_OWNER_GENERATION")
-                      or os.environ.get("MISAKA_USAGE_GENERATION"))
-        claim_lock = (os.environ.get("MISAKA_SISTER_OWNER_CLAIM_LOCK")
-                      or os.environ.get("MISAKA_USAGE_CLAIM_LOCK"))
-        if task_id != self.task_id or not generation or not claim_lock:
-            return None, None
-        try:
-            return int(generation), claim_lock
-        except ValueError:
-            return None, None
+        from misaka.core.network import worker
+        return worker.claim_env(self.task_id)
 
     def _owned_row(self):
-        generation, claim_lock = self._ownership()
-        row = self._bdb.get(self.con(), self.task_id)
-        if (generation is None or row is None or row["status"] != "running"
-                or int(row["generation"]) != generation or row["claim_lock"] != claim_lock):
-            return None
-        if not self._bdb.heartbeat(
-            self.con(), self.task_id, claim_lock, generation=generation, ttl_seconds=1800,
-        ):
-            return None
-        return row
+        from misaka.core.network import worker
+        return worker.owned_card(self.con(), self.task_id, *self._ownership())
+
+    def _declared(self):
+        """Whether this attempt has declared its work done with ``misaka_card_complete``."""
+        from misaka.core.network import worker
+        row = self._owned_row()
+        return row is not None and worker.declared_completion(self.con(), row) is not None
 
     def _completed_row(self):
         """The card this session completed and still sits in: done, at this attempt's
@@ -448,8 +477,7 @@ class TodoPart:
             self._bdb.add_event(con, self.task_id, "submitted", payload, generation=generation)
             self._bdb.add_event(con, self.task_id, "redeclared",
                                 {"artifacts": len(payload.get("artifacts") or [])}, generation=generation)
-        await asyncio.to_thread(dispatch.accept_side_effects, con, row, submission,
-                                generation=generation, workspace=row["workspace"])
+        await asyncio.to_thread(dispatch.accept_side_effects, con, row, submission, generation=generation)
         return True
 
     def get_permission_settings(self):
@@ -482,21 +510,26 @@ class TodoPart:
     async def agent_end(self, event, ctx=None):
         reason, text = _assistant_end(event)
         self._turn_clean = reason == "stop"
+        self._failure = _turn_failure(event)
         row = self._owned_row() if self._turn_clean else None
-        completion = self._completion if row is not None else None
-        if completion is not None and completion[0] != int(row["generation"]):
-            completion = self._completion = None      # recorded for an earlier attempt: void
-        # Only a turn that declared completion submits (2026-09-18, B27): before this, any
-        # turn ending in plain text completed the card, so every note Last Order sent a
-        # running Sister ended it -- even one whose reply said "not submitting yet".
-        self._summary = (completion[1] or text) if completion is not None else None
+        from misaka.core.network import worker
+        # A declaration is an event of this attempt's generation: one from an earlier attempt
+        # never counts. Only a turn that declared completion submits (2026-09-18, B27): before
+        # this, any turn ending in plain text completed the card, so every note Last Order sent
+        # a running Sister ended it -- even one whose reply said "not submitting yet".
+        completion = worker.declared_completion(self.con(), row) if row is not None else None
+        self._summary = (completion or text) if completion is not None else None
         self._summary_token = object() if self._summary is not None else None
 
     async def agent_settled(self, event=None, ctx=None):
         self._calls_settled()
+        failure, self._failure = self._failure, None
+        if failure is not None:
+            self._settle_failure(*failure)
+            return
         summary, token = self._summary, self._summary_token
         if summary is None or token is None:
-            if self._turn_clean and self._completion is None:
+            if self._turn_clean and not self._declared():
                 self._hold_if_running()
                 await self._redeclare_if_done()
             return
@@ -536,7 +569,6 @@ class TodoPart:
                     row,
                     submission,
                     generation=row["generation"],
-                    workspace=row["workspace"],
                 )
         except Exception as error:  # noqa: BLE001 - a finalizer error is a real system failure
             accepted = False
@@ -563,13 +595,35 @@ class TodoPart:
                 )
         if self._summary_token is token and (accepted or self._owned_row() is None):
             self._summary = self._summary_token = None
-            self._completion = None
+
+    def _settle_failure(self, stop, reason):
+        """A run that ended in an error or a cut reply, with nothing left to run automatically
+        (pi's retries and recovery are behind ``agent_settled``). A pane used to sit on it with
+        the card running, its claim heartbeated and nobody to type -- a headless card fails the
+        same attempt. A cut reply gets one more turn in this session first, told what happened,
+        as the research driver gives Last Order; the second cut fails like an error. The board's
+        failure model decides the rest: a backoff and a retry, or a card that stays failed."""
+        row = self._owned_row()
+        if row is None:
+            return
+        generation = int(row["generation"])
+        if stop == "length" and self._continued_generation != generation:
+            self._continued_generation = generation
+            self._prompt(f"Your last reply was cut off: {reason}. Continue the card from where it "
+                         "stopped, writing long material in several smaller steps.")
+            return
+        if self._bdb.add_event(self.con(), self.task_id, "failed", {"reason": reason},
+                               generation=generation, claim_lock=row["claim_lock"]):
+            self._bdb.mark_failed(self.con(), self.task_id, generation=generation,
+                                  claim_lock=row["claim_lock"], reason=reason)
 
     def _hold_if_running(self):
         """A clean turn end without ``misaka_card_complete``: the card stays running and the
         claim stays held. Not a failure -- a reply to Last Order or a progress report is
         supposed to end this way -- and said once per attempt so a long card is not nagged
-        on every turn."""
+        on every turn. The notice starts one more turn: a card nobody will write to again
+        would otherwise wait for ever (2026-09-27: a red team wrote its critique, ended the turn
+        without ``misaka_card_complete``, and its node waited forty minutes)."""
         row = self._owned_row()
         if row is None or self._held_generation == int(row["generation"]):
             return
@@ -609,12 +663,12 @@ class TodoPart:
             pass
 
     def _hold(self, text):
-        """The turn ended but the card did not: shown now, read by the model on its next turn."""
+        """The turn ended but the card did not: one more turn to finish it or to go on working."""
         try:
             self.session.moments.send_message(
                 {"customType": "submission-held", "display": True,
                  "content": "[Card still running] " + text, "details": {}},
-                {"deliverAs": "followUp", "triggerTurn": False})
+                {"deliverAs": "followUp", "triggerTurn": True})
         except Exception:  # noqa: BLE001, S110 - the hold itself is the safe state; the notice is best-effort
             pass
 
@@ -710,3 +764,11 @@ class TodoPart:
         if self._con is not None:
             self._con.close()
             self._con = None
+
+
+def card_tools(task_id, sender):
+    """A card's own tools for a worker that is not a misaka session (an ally, through its MCP
+    bridge): the same definitions a Sister's session carries. They need no session -- only the
+    board and the claim the process was handed -- and completion is a board event, which the
+    host reads when the worker's turn ends."""
+    return TodoPart(task_id, sender).tools

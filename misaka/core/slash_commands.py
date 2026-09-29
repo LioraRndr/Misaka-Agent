@@ -59,7 +59,7 @@ BUILTIN_SLASH_COMMANDS: tuple[BuiltinSlashCommand, ...] = (
         argumentHint="<provider> [--account NAME]",
     ),
     BuiltinSlashCommand("logout", "Remove provider authentication"),
-    BuiltinSlashCommand("new", "Start a new session (--carry keeps LCM summaries)"),
+    BuiltinSlashCommand("new", "Start a new session (--carry keeps the context engine's summaries)"),
     BuiltinSlashCommand("compact", "Manually compact the session context"),
     BuiltinSlashCommand("resume", "Resume a different session"),
     BuiltinSlashCommand("reload", "Reload keybindings, extensions, skills, prompts, and themes"),

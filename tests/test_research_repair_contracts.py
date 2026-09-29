@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+import json
 import os
 import threading
 from pathlib import Path
@@ -28,7 +29,6 @@ from misaka.core.research import bundle, commands, runs, workflow
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a, **k: None)
     monkeypatch.setattr(bundle.corpus, "docs", lambda **k: [])
     con = tasks.connect(str(tmp_path / "board.db"))
     run = runs.create(con, workspace=str(tmp_path), question="fixture")
@@ -351,9 +351,7 @@ def test_explicit_url_alias_collision_is_unresolved(state):
 @pytest.mark.parametrize("action", ["assign", "start", "withdraw", "skip"])
 async def test_real_approval_tools_fence_captured_owner(state, changed, action):
     con, run, root = state
-    branch = runs.create_node(
-        con, run["id"], trigger="fixture", parent_id=root["id"], depth=1
-    )
+    branch = runs.create_node(con, run["id"], question="fixture", parents=[root["id"]])
     assert runs.acquire_driver(con, run["id"], "old-driver")
     key = runs.prepare_runner(con, "research_branches", branch["id"])
     run = runs.get(con, run["id"])
@@ -450,6 +448,107 @@ async def test_spawn_cancellation_waits_for_and_reaps_late_handle(state):
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_level_starts_its_nodes_one_at_a_time(state, tmp_path):
+    """2026-09-27: eight forks of one 4.5 MB conversation started together and the provider refused
+    every first request (502 "Upstream access forbidden"), twice. The next node now starts only once
+    the last one started has had a model reply accepted."""
+    con, run, root = state
+    nodes = []
+    for index in range(3):
+        node = runs.create_node(con, run["id"], question=f"Q{index}", parents=[root["id"]])
+        conversation = tmp_path / f"node-{index}.jsonl"
+        conversation.write_text(_reply("stop"))          # inherited from the parent: not this node's reply
+        runs.set_node(con, node["id"], session_file=str(conversation))
+        nodes.append(runs.node(con, node["id"]))
+    handles, started = {}, []
+
+    async def start(node):
+        started.append(node["id"])
+        handles[node["id"]] = SimpleNamespace(pid=None)
+        return runs.prepare_runner(con, "research_branches", node["id"])
+
+    def answer(node, stop_reason):
+        with open(runs.node(con, node["id"])["session_file"], "a") as handle:
+            handle.write(_reply(stop_reason))
+
+    async def eventually(check):
+        for _ in range(400):
+            if check():
+                return True
+            await asyncio.sleep(0.0025)
+        return False
+
+    ids = [node["id"] for node in nodes]
+    task = asyncio.create_task(workflow._wait_level(
+        con, {}, SimpleNamespace(alive=lambda h: True), run, handles, poll_seconds=0.001, progress=None,
+        pending=nodes, width=10, start=start))
+    try:
+        assert await eventually(lambda: started == ids[:1])
+        await asyncio.sleep(0.02)
+        assert started == ids[:1]
+        answer(nodes[0], "error")                         # refused: the provider is not taking it yet
+        await asyncio.sleep(0.02)
+        assert started == ids[:1]
+        answer(nodes[0], "toolUse")
+        assert await eventually(lambda: started == ids[:2])
+        answer(nodes[1], "stop")
+        assert await eventually(lambda: started == ids)
+        for node in nodes:
+            runs.set_node(con, node["id"], status="closed")
+            runs.release_runner(con, "research_branches", node["id"], runs.node(con, node["id"])["runner_key"])
+        assert await asyncio.wait_for(task, 1) == "done"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_node_that_has_planned_does_not_hold_the_next_start(state, tmp_path):
+    """2026-09-29: nine nodes retried after a card failed each held the next start for the full
+    five-minute cap -- they had planned long before, share no prefix with the level's forks, and
+    were waiting on their cards. Only a node that has not planned is waited for."""
+    con, run, root = state
+    nodes = []
+    for index in range(4):
+        node = runs.create_node(con, run["id"], question=f"Q{index}", parents=[root["id"]])
+        conversation = tmp_path / f"node-{index}.jsonl"
+        conversation.write_text(_reply("stop"))
+        runs.set_node(con, node["id"], session_file=str(conversation))
+        nodes.append(runs.node(con, node["id"]))
+    for node in nodes[:2]:
+        runs.record_action(con, run, node, runs.plan_key(1), {"status": "ready"},
+                           session_file=str(tmp_path / "s.jsonl"), tool_call_id="plan")
+        runs.set_node(con, node["id"], status="planning")    # queued again by misaka_research_retry
+    handles, started = {}, []
+
+    async def start(node):
+        started.append(node["id"])
+        handles[node["id"]] = SimpleNamespace(pid=None)
+        return runs.prepare_runner(con, "research_branches", node["id"])
+
+    async def eventually(check):
+        for _ in range(400):
+            if check():
+                return True
+            await asyncio.sleep(0.0025)
+        return False
+
+    ids = [node["id"] for node in nodes]
+    task = asyncio.create_task(workflow._wait_level(
+        con, {}, SimpleNamespace(alive=lambda h: True), run, handles, poll_seconds=0.001, progress=None,
+        pending=nodes, width=10, start=start))
+    try:
+        assert await eventually(lambda: started == ids[:3])   # neither planned node waited for a reply
+        await asyncio.sleep(0.02)
+        assert started == ids[:3]                             # the unplanned one still holds the next start
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def _reply(stop_reason):
+    return json.dumps({"type": "message", "message": {"role": "assistant", "stopReason": stop_reason}}) + "\n"
 
 
 async def test_unclaimed_runner_is_not_completed_and_late_release_is_fenced(state):
@@ -696,7 +795,7 @@ async def test_clarification_drains_running_sibling_without_starting_pending_nod
 ):
     con, run, root = state
     level = [
-        runs.create_node(con, run["id"], trigger=name, parent_id=root["id"], depth=1)
+        runs.create_node(con, run["id"], question=name, parents=[root["id"]])
         for name in ["clarifies", "running", "queued"]
     ]
     handles, started, keys = {}, [], {}
@@ -844,7 +943,7 @@ async def test_stop_or_takeover_during_start_prevents_next_spawn(
     assert runs.acquire_driver(con, run["id"], "owner")
     run = runs.get(con, run["id"])
     pending = [
-        runs.create_node(con, run["id"], trigger=name, parent_id=root["id"], depth=1)
+        runs.create_node(con, run["id"], question=name, parents=[root["id"]])
         for name in ["first", "pending"]
     ]
     handles, started, stopped = {}, [], []
@@ -914,3 +1013,80 @@ def test_a_literal_command_is_still_allowed_everywhere():
         assert _command_touches(command, "/tmp/workspace", {"/tmp/live-skills"}) is None
         assert _command_touches(command, "/tmp/workspace", {"/tmp/live-skills"},
                                 unattended=False) is None
+
+
+def test_a_failed_node_is_retried_with_its_failed_cards_and_the_loop_is_capped(state, tmp_path):
+    """2026-09-28 (user): Last Order retries a failed node herself, without waiting for the level to
+    end and the run to be resumed. The retry does what a resume does for that node alone."""
+    con, run, root = state
+    node = runs.create_node(con, run["id"], question="Q", parents=[root["id"]])
+    tid = tasks.create_task(con, "Card", "## deliverable\nx.md\n", "10032", workspace=run["workspace"],
+                            output_dir=str(tmp_path / "out"))
+    runs.link_task(con, run["id"], tid, kind="research", node=node)
+    with pytest.raises(ValueError, match="not failed"):
+        runs.retry_node(con, run, node["id"], session_file=str(tmp_path / "s.jsonl"), tool_call_id="call-0")
+    for attempt in range(1, 4):
+        con.execute("UPDATE tasks SET status='failed' WHERE id=?", (tid,))
+        con.execute("UPDATE research_branches SET status='failed', last_error='provider refused' WHERE id=?", (node["id"],))
+        assert runs.retry_node(con, run, node["id"], session_file=str(tmp_path / "s.jsonl"),
+                               tool_call_id=f"call-{attempt}") == attempt
+        current = runs.node(con, node["id"])
+        assert (current["status"], current["last_error"]) == ("planning", None)
+        assert tasks.get(con, tid)["status"] == "ready"           # its failed card went back to its Sister
+    con.execute("UPDATE research_branches SET status='failed' WHERE id=?", (node["id"],))
+    with pytest.raises(ValueError, match="already retried 3 times"):
+        runs.retry_node(con, run, node["id"], session_file=str(tmp_path / "s.jsonl"), tool_call_id="call-4")
+
+
+async def test_a_retried_node_re_enters_its_level_without_a_resume(state, tmp_path):
+    con, run, root = state
+    runs.set_node(con, root["id"], status="closed")      # the level below the root is the frontier
+    nodes = []
+    for index in range(2):
+        node = runs.create_node(con, run["id"], question=f"Q{index}", parents=[root["id"]])
+        conversation = tmp_path / f"node-{index}.jsonl"
+        conversation.write_text(_reply("stop"))
+        runs.set_node(con, node["id"], session_file=str(conversation))
+        nodes.append(runs.node(con, node["id"]))
+    a, b = nodes
+    handles, started = {}, []
+
+    async def start(node):
+        started.append(node["id"])
+        handles[node["id"]] = SimpleNamespace(pid=None)
+        return runs.prepare_runner(con, "research_branches", node["id"])
+
+    def answer(node):
+        with open(runs.node(con, node["id"])["session_file"], "a") as handle:
+            handle.write(_reply("stop"))
+
+    async def eventually(check):
+        for _ in range(400):
+            if check():
+                return True
+            await asyncio.sleep(0.0025)
+        return False
+
+    task = asyncio.create_task(workflow._wait_level(
+        con, {}, SimpleNamespace(alive=lambda h: True), run, handles, poll_seconds=0.001, progress=None,
+        pending=nodes, width=10, start=start))
+    try:
+        assert await eventually(lambda: started == [a["id"]])
+        answer(a)
+        assert await eventually(lambda: started == [a["id"], b["id"]])
+        answer(b)
+        # a's process ends mid-plan: the level marks it failed and goes on without it.
+        runs.release_runner(con, "research_branches", a["id"], runs.node(con, a["id"])["runner_key"])
+        assert await eventually(lambda: runs.node(con, a["id"])["status"] == "failed")
+        assert "its process ended while queued" in runs.node(con, a["id"])["last_error"]
+        # Last Order retries it: it is queued again and started, no resume needed.
+        runs.retry_node(con, run, a["id"], session_file=str(tmp_path / "root.jsonl"), tool_call_id="call-1")
+        assert await eventually(lambda: started == [a["id"], b["id"], a["id"]])
+        assert runs.node(con, a["id"])["status"] == "planning"
+        for node in nodes:
+            runs.set_node(con, node["id"], status="closed")
+            runs.release_runner(con, "research_branches", node["id"], runs.node(con, node["id"])["runner_key"])
+        assert await asyncio.wait_for(task, 1) == "done"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

@@ -104,8 +104,7 @@ class PromptGovernanceTests(unittest.TestCase):
         run = {"id": "run", "root_session": "/fixture/session.jsonl",
                "workspace": "/fixture", "question": "Question", "limits_json": "{}"}
         for parent in (None, "parent"):
-            node = {"id": "node", "parent_id": parent, "depth": int(parent is not None),
-                    "trigger_text": "Question", "session_file": None}
+            node = {"id": "node", "depth": int(parent is not None), "question": "Question", "session_file": None}
             for enabled in (True, False):
                 for resident in (True, False):
                     cfg = {"research_plan_approval": enabled}
@@ -114,6 +113,7 @@ class PromptGovernanceTests(unittest.TestCase):
                     with self.subTest(parent=parent, enabled=enabled, resident=resident), \
                             patch.object(planner, "_roster", return_value=[]), \
                             patch.object(planner, "_lo_session", return_value="/fixture"), \
+                            patch.object(planner, "position", return_value="- fixture option"), \
                             patch.object(planner.runs, "limits", return_value={"max_depth": 3}), \
                             patch.object(planner, "_command", return_value=(
                                 {"payload": {}, "session_file": "/fixture/session.jsonl"}, "raw")) as command:
@@ -121,6 +121,8 @@ class PromptGovernanceTests(unittest.TestCase):
                         planner.plan(run, cfg, worker, node, con=object())
                         self.assertIn(expected, command.call_args.args[5])
                     with patch.object(planner, "_lo_session", return_value="/fixture"), \
+                            patch.object(planner, "position", return_value="- fixture option"), \
+                            patch.object(planner, "errata_above", return_value=""), \
                             patch.object(planner, "task_sources", return_value={}), \
                             patch.object(planner, "find_most_recent_session", return_value=None), \
                             patch.object(planner.runs, "plan_round", return_value=1), \
@@ -137,8 +139,11 @@ class PromptGovernanceTests(unittest.TestCase):
         self.assertNotIn("Every plan --", workflow.RESEARCH_DISCIPLINE)
         self.assertNotIn("lifts only at final", workflow.RESEARCH_DISCIPLINE)
         self.assertIn("Node synthesis produces a working conclusion", workflow.RESEARCH_DISCIPLINE)
-        for text in (planner.SYNTHESIS_CONTRACT, report.DRAFT_CONTRACT, report.FINAL_CONTRACT):
-            self.assertIn(planner.MARKDOWN_OUTPUT, text)
+        self.assertIn(planner.MARKDOWN_OUTPUT, planner.SYNTHESIS_CONTRACT)
+        for text in (report.DRAFT_CONTRACT, report.FINAL_CONTRACT):   # the report tool delivers these
+            self.assertNotIn(planner.MARKDOWN_OUTPUT, text)
+            self.assertIn(planner.SOURCES_FOOTER, text)
+        self.assertIn("doc_read", report.STAGE_OUTPUT)
         self.assertIn("without replanning the whole project", __import__("inspect").getsource(planner.plan))
         self.assertNotIn("one line naming", planner.task_body({"instructions": "Task"}))
 
@@ -157,7 +162,7 @@ class PromptGovernanceTests(unittest.TestCase):
 
     def test_synthesis_followup_keeps_the_existing_assignment_window(self):
         run = {"id": "run", "root_session": "/fixture/session.jsonl", "workspace": "/fixture", "limits_json": "{}"}
-        node = {"id": "node", "parent_id": None, "trigger_text": "Question"}
+        node = {"id": "node", "depth": 0, "question": "Question"}
         followup = object()
         for tool, round_number, left in ((followup, 1, 1), (None, 2, 0), (None, 1, 0)):
             with self.subTest(round=round_number, left=left), \
@@ -187,23 +192,40 @@ class PromptGovernanceTests(unittest.TestCase):
                     self.assertNotIn("# Round", prompt)
 
     def test_review_prompts_preserve_independence_and_terminal_boundaries(self):
-        node = {"trigger_text": "Question"}
-        node_review = planner.red_team_body(node, synthesis_path="node/conclusion.md", plan_path="node/plan.md")
+        node = {"question": "Question"}
+        node_review = planner.red_team_body(node, synthesis_path="node/conclusion.md", plan_path="node/plan.md",
+                                            graph_path="final/run-graph.md")
         self.assertIn("do not extend the report", node_review)
-        self.assertIn("does not start investigations on your behalf", node_review)
-        self.assertIn("Only material=true issues require investigation", node_review)
+        self.assertIn("Your review opens no node by itself", node_review)
+        self.assertIn("Only material=true issues require an answer from Last Order", node_review)
+        self.assertIn("final/run-graph.md", node_review)
+        self.assertIn("name that node's id", node_review)
         draft = {"path": "draft.md", "id": "draft-id", "sha256": "draft-hash"}
-        with patch.object(report, "materials", return_value="Full material map"):
+        with patch.object(report, "_checkpoint", return_value={"path": "survey.md"}), \
+                patch.object(report, "index_run", return_value={}), \
+                patch.object(report, "_catalog", return_value=["catalog entry"]):
             final_review = report.review_body(object(), {"question": "Question"}, draft)
         self.assertIn("artifact `draft-id`, sha256 `draft-hash`", final_review)
         self.assertIn("node critiques and full sources", final_review)
         self.assertIn("Do not edit the draft", final_review)
         self.assertIn("no new research branches\nare created", final_review)
-        self.assertTrue(final_review.endswith("Full material map"))
+        self.assertIn("## catalog", final_review)
+        self.assertIn("catalog entry", final_review)
         for review in (node_review, final_review):
             self.assertIn("critique.md", review)
             self.assertIn("Use issues=[] explicitly", review)
-        self.assertIn("not another research-tree expansion", report.FINAL_CONTRACT)
+        self.assertIn("it opens no new node of the graph", " ".join(report.FINAL_CONTRACT.split()))
+        # 2026-09-29 (user): the report is a humanities research article, complete and traceable.
+        draft, final = (" ".join(text.split()) for text in (report.DRAFT_CONTRACT, report.FINAL_CONTRACT))
+        self.assertIn("Write for a reader of the humanities and social sciences", draft)
+        self.assertIn("The body carries no run vocabulary or identifiers", draft)
+        for appendix in ("Appendix I, the lines of inquiry: every node of the catalog",
+                         "Appendix II, the record", "Appendix III, the materials"):
+            self.assertIn(appendix, draft)
+        self.assertIn("Every line's final conclusion has its place in the argument", draft)
+        self.assertIn("Appendix IV", final)
+        self.assertIn("in the draft's form", final)
+        self.assertIn("Appendix I lists every node", " ".join(final_review.split()))
         self.assertIn("Do not vote, rank nodes or adjudicate", report.SURVEY_CONTRACT)
 
     def test_skill_policy_has_one_owner_and_respects_read_only_sessions(self):

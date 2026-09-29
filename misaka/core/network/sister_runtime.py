@@ -631,6 +631,15 @@ class SisterRuntime:
                 return self.snapshot(task_id, launched=False, note="already running")
             if row["status"] != "ready":
                 raise ValueError(f"Card {task_id} is not ready (current status: {row['status']}).")
+            from misaka.core.network.ally import presets
+            if row["assignee"] in presets.names():
+                # An ally's runner is a program of its own, not a subagent of this session: the
+                # daemon hosts it in a pane, with or without a panel to show it.
+                from misaka.ui.panel import client as net
+                await asyncio.to_thread(net.ensure)
+                out = await asyncio.to_thread(net.request, "pane.run_card", {"task_id": task_id})
+                return {"task_id": task_id, "sister": row["assignee"], "status": "running",
+                        "pane": out["pane_id"]}
             profile = os.path.join(str(self.cfg["profiles_root"]), row["assignee"])
             if not os.path.isdir(profile):
                 raise ValueError(f"Sister {row['assignee']} is not in the roster.")
@@ -1299,10 +1308,8 @@ class SisterRuntime:
                     notifications.nack(self.con, subscription, event["id"], event["lease_token"], error)
                 delivery = {"_deliveryId": f"{subscription}:{event['id']}", "_onPersist": ack, "_onError": nack}
                 if progress:
-                    content = f"Research `{run_id}` | depth {payload['depth']} | node {payload['node_id']}"
-                    if payload.get("issue_id"):
-                        content += f" | issue {payload['issue_id']}"
-                    content += f" | {payload['message']}"
+                    content = (f"Research `{run_id}` | depth {payload['depth']} | node {payload['node_id']}"
+                               f" | {payload['message']}")
                     if payload.get("plan"):
                         content += "\n```json\n" + json.dumps(payload["plan"], ensure_ascii=False, indent=2) + "\n```"
                     for item in ([] if payload.get("plan") else payload.get("tasks") or []):
@@ -1477,8 +1484,7 @@ class SisterRuntime:
         con = messages.connect()
         try:
             messages.send(con, row["assignee"], text, summary=summary, sender="last-order",
-                          to_task=row["id"], generation=int(row["generation"]),
-                          workspace=row["workspace"])
+                          to_task=row["id"], generation=int(row["generation"]))
         finally:
             con.close()
 

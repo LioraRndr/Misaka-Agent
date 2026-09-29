@@ -5,6 +5,8 @@ import contextvars
 import os
 from contextlib import contextmanager
 
+from misaka.utils.values import read_field
+
 from ..vendor.config import LCMConfig
 from . import storage
 
@@ -80,6 +82,43 @@ def _session_host_config(ctx) -> dict:
     return {**config, "lcm": {**lcm, "context_threshold": float(threshold)}}
 
 
+# Upstream's leaf chunk (20,000 tokens) fits the ~128k windows it was tuned on. A MISAKA session
+# runs on 272k to 1M windows and a research Last Order reads eleven 25 KB memos in one phase, so
+# the upstream size summarised a leaf at every phase and pulled a 1M-window session down at 30%
+# (2026-09-27). Unset, it scales with the session's own window. The fresh tail stays upstream's
+# 32 messages: scaled to 250, it was a research Last Order's entire conversation -- nothing was
+# ever old enough to summarise, she reached 1M on overflow recovery alone, and a node forked from
+# her failed on "prompt is too long" (2026-09-28).
+REFERENCE_WINDOW = 128_000
+SUMMARISER_SHARE = 0.6    # a leaf chunk is summarised in one call: it must fit the summariser
+
+
+def scale_to_window(config, window, summariser_window=None):
+    """MISAKA's default for the leaf chunk, in proportion to ``window``; an explicit
+    ``LCM_LEAF_CHUNK_TOKENS`` is never replaced. Never below upstream's own size, and never above
+    what the summariser model can take in one call."""
+    scale = max(1.0, window / REFERENCE_WINDOW) if window > 0 else 1.0
+    if "LCM_LEAF_CHUNK_TOKENS" not in os.environ:
+        leaf = round(LCMConfig.leaf_chunk_tokens * scale)
+        if summariser_window:
+            leaf = min(leaf, int(summariser_window * SUMMARISER_SHARE))
+        config.leaf_chunk_tokens = max(LCMConfig.leaf_chunk_tokens, leaf)
+        config.config_sources["leaf_chunk_tokens"] = "misaka.default"
+
+
+def summariser_window(ctx, session_window):
+    """The window of the model that writes the summaries: ``auxiliary.compression`` when set,
+    else the session's own model."""
+    compression = load_auxiliary_config()["auxiliary"].get("compression")
+    compression = compression if isinstance(compression, dict) else {}
+    provider, model = str(compression.get("provider") or ""), str(compression.get("model") or "")
+    registry = read_field(ctx, "modelRegistry")
+    if not model or model.lower() == "auto" or registry is None:
+        return session_window
+    found = registry.find(provider, model) if provider and provider.lower() != "auto" else None
+    return int(read_field(found, "contextWindow", 0) or 0) or session_window
+
+
 def load_config(*, database=None, home=None, ctx=None) -> LCMConfig:
     """Keep upstream algorithm settings; the host owns all content paths."""
     from . import settings
@@ -100,6 +139,14 @@ def load_config(*, database=None, home=None, ctx=None) -> LCMConfig:
         # reserve is 16384 tokens; the knob is upstream's, only misaka's default differs.
         config.reserve_tokens_floor = 16_384
         config.config_sources["reserve_tokens_floor"] = "misaka.default"
+    if "LCM_DYNAMIC_LEAF_CHUNK_ENABLED" not in os.environ:
+        # Without upstream's chunked leaf passes, a compaction summarises the whole raw backlog
+        # outside the fresh tail as one leaf: a research Last Order's 600k-token backlog became a
+        # single 4k-token summary, read by a summariser whose window is 272k (2026-09-29). Upstream
+        # recommends the chunked passes for workloads dominated by huge raw backlogs; the knob is
+        # upstream's, only misaka's default differs.
+        config.dynamic_leaf_chunk_enabled = True
+        config.config_sources["dynamic_leaf_chunk_enabled"] = "misaka.default"
     config.database_path = str(database) if database is not None else database_path(ctx)
     directory = str(home) if home is not None else os.path.dirname(config.database_path)
     config.large_output_externalization_path = os.path.join(directory, "lcm-large-outputs")

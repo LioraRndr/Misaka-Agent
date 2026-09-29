@@ -1154,6 +1154,10 @@ class AgentSession:
     ) -> ThinkingLevel:
         if explicitLevel is not None:
             return explicitLevel
+        # MISAKA fork: the agent's own default comes before the shared per-model table.
+        own = self.settingsManager.getRoleThinkingLevel()
+        if own is not None:
+            return own
         if targetModel is not None:
             per_model = self.settingsManager.getModelThinkingLevel(targetModel.provider, targetModel.id)
             if per_model is not None:
@@ -1662,11 +1666,10 @@ class AgentSession:
     def _publish_compaction(self, result: SessionCompactionResult, from_hook: bool,
                             source: tuple[Any, ...]) -> Any:
         self._check_compaction_source(source)
-        options = ({"contextMessages": result.contextMessages}
-                   if result.contextMessages is not None else {})
         entry_id = self.sessionManager.appendCompaction(
             result.summary, result.firstKeptEntryId, result.tokensBefore,
-            result.details, from_hook, result.usage, **options,
+            result.details, from_hook, result.usage,
+            contextMessages=result.contextMessages, contextSummaries=result.contextSummaries,
         )
         # appendCompaction commits before changing either view. A failed write leaves
         # the previous archive, leaf and provider context intact.
@@ -1753,7 +1756,8 @@ class AgentSession:
                     firstKeptEntryId=_event_field(provided, "firstKeptEntryId"),
                     tokensBefore=int(_event_field(provided, "tokensBefore", 0)),
                     details=_event_field(provided, "details"), usage=_event_field(provided, "usage"),
-                    contextMessages=_event_field(provided, "contextMessages")), True
+                    contextMessages=_event_field(provided, "contextMessages"),
+                    contextSummaries=_event_field(provided, "contextSummaries")), True
             result = await run_compaction(
                 preparation, auth.get("model", self.model), auth.get("apiKey"), auth.get("headers"),
                 custom_instructions, signal, self.thinkingLevel, self.agent.streamFn,

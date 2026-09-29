@@ -22,7 +22,6 @@ from misaka.core.tools.web_fetch import create_web_fetch_tool_definition
 from misaka.core.web import extract
 from misaka.core.web import tool as web_search
 from misaka.core.wiring import ToolCollector
-from misaka.extensions import coverage
 
 
 class ToolPromptGovernanceTests(unittest.TestCase):
@@ -31,8 +30,7 @@ class ToolPromptGovernanceTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.workspace = self.directory.name
         collector = ToolCollector()
-        collector.on = lambda name, handler: None   # coverage also offers its maps through resources_discover
-        for register in (documents.register, extract.register, web_search.register, coverage.register):
+        for register in (documents.register, extract.register, web_search.register):
             register(collector)
         for factory in (create_office_tool_definition, create_download_file_tool_definition,
                         create_web_fetch_tool_definition):
@@ -83,11 +81,21 @@ class ToolPromptGovernanceTests(unittest.TestCase):
         self.assertIn("content (or rows/data)", definition.description)
         self.assertIn("rejects an existing path", definition.description)
 
-    def test_coverage_and_web_avoid_unconditional_work_or_evidence_promises(self):
-        scan = " ".join(self.tools["coverage_scan"].promptGuidelines)
-        self.assertNotIn("two or three", scan)
-        self.assertIn("not measures of relevance, quality, or completeness", scan)
-        self.assertIn("failed scan does not establish a research gap", scan)
+    def test_research_restores_every_tools_rules_only_where_a_custom_prompt_dropped_them(self):
+        """2026-09-29: research restored the rules of two tools it named, one of them an
+        extension's. Every tool in play gets its own rules back under SYSTEM.md; under the
+        default prompt they are all there already and none is repeated."""
+        from misaka.core.research.prompting import system_context
+
+        session = SimpleNamespace(getToolDefinition=self.tools.get)
+        names = list(self.tools)
+        rules = [rule for name in names for rule in (self.tools[name].promptGuidelines or ())]
+        default = system_context(session, names, self.prompt(names))
+        self.assertFalse([rule for rule in rules if rule in default])
+        custom = system_context(session, names, "USER SYSTEM")
+        self.assertFalse([rule for rule in rules if rule not in custom])
+
+    def test_web_tools_avoid_unconditional_work_or_evidence_promises(self):
         search = " ".join(self.tools["web_search"].promptGuidelines)
         self.assertNotIn("costs nothing", search)
         self.assertIn("not guaranteed to be free or fresh", search)

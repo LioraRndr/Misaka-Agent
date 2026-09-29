@@ -1,5 +1,6 @@
 """Browser/gateway protocol and permission contracts, with no real credentials."""
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -299,6 +300,21 @@ def test_recording_retention_excludes_active_and_unrelated_files(isolated):
     assert not (isolated / 'recording-old.webm').exists()
     assert (isolated / 'recording-other.partial.webm').exists() and (isolated / 'user.webm').exists()
 
+
+
+def test_recording_retention_always_keeps_the_finished_recording(isolated):
+    # Linux filesystems stamp files at the kernel clock's resolution, so an older recording can
+    # carry the same mtime as the one just finished, or (clock steps) a later one.
+    session = BrowserSession(str(isolated), {'recording_retention': 1}, 'local')
+    session.recording_path = isolated / f'recording-{session.id}.partial.webm'
+    old = isolated / 'recording-old.webm'
+    old.write_bytes(b'old')
+    session.recording_path.write_bytes(b'done')
+    os.utime(old, (2_000_000, 2_000_000))
+    os.utime(session.recording_path, (1_000_000, 1_000_000))
+    session._finish_recording()
+    assert (isolated / f'recording-{session.id}.webm').exists()
+    assert not old.exists()
 
 def test_cli_numeric_settings_have_real_consumers():
     config.update_config({'x_search.retries': '3', 'x_search.timeout_seconds': '210', 'browser.command_timeout': '20'})

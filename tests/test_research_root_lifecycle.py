@@ -14,7 +14,6 @@ from misaka.core.research import node, report, runs, window, workflow
 @pytest.fixture
 def root_run(tmp_path, monkeypatch):
     monkeypatch.delenv("MISAKA_NET_PANE", raising=False)
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     monkeypatch.setattr(workflow, "_bundle", lambda *a, **k: None)
     monkeypatch.setattr(workflow, "_try_refresh_workspace_index", lambda *a: None)
     monkeypatch.setattr(workflow, "settle_done_tasks", lambda *a, **k: None)
@@ -76,6 +75,7 @@ def root_run(tmp_path, monkeypatch):
 
     monkeypatch.setattr(workflow, "_expand", expand)
     monkeypatch.setattr(report, "prepare", prepare)
+    monkeypatch.setattr(report, "review_body", lambda *a: "## deliverable\n`critique.md`\n")
     monkeypatch.setattr(workflow, "_drive_tasks", review)
     monkeypatch.setattr(report, "finalize", finalize)
     try:
@@ -146,12 +146,12 @@ async def test_root_stays_alive_while_fork_level_runs(root_run, monkeypatch):
 
     async def expand(*args, **kwargs):
         await expand_root(*args, **kwargs)
-        runs.create_node(con, run["id"], trigger="Fixture issue", parent_id=root["id"], depth=1)
+        runs.create_node(con, run["id"], question="Fixture issue", parents=[root["id"]])
         return "closed"
 
     async def forks(db, cfg, active_spawner, current, level, **kwargs):
         assert active_spawner is spawner
-        assert all(n["parent_id"] == root["id"] for n in level)
+        assert all([p["id"] for p in runs.parents(con, n["id"])] == [root["id"]] for n in level)
         assert "dispose" not in events
         owner.close.assert_not_awaited()
         events.append("forks")
@@ -162,6 +162,7 @@ async def test_root_stays_alive_while_fork_level_runs(root_run, monkeypatch):
 
     monkeypatch.setattr(workflow, "_expand", expand)
     monkeypatch.setattr(workflow, "_expand_level", forks)
+    monkeypatch.setattr(workflow, "_prepare_sessions", lambda *a: None)   # the fixture root has no transcript to fork
     result = await workflow.run(con, {}, spawner, run_id=run["id"])
     assert result["reason"] == "done"
     assert events == ["open", "expand", "forks", "draft", "review", "final", "dispose", "runner-close"]

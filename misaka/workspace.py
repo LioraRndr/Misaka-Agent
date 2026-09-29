@@ -104,9 +104,10 @@ def _conversation_nodes(bcon, run, research_store):
     context store are this work: each node's Last Order session and each card's Sister session."""
     out = []
     for branch in research_store.nodes(bcon, run["id"]):
-        path = branch["session_file"] or (run["root_session"] if branch["parent_id"] is None else None)
+        root = research_store.is_root(branch)
+        path = branch["session_file"] or (run["root_session"] if root else None)
         node = _session_node(f"session:node:{branch['id']}",
-                             f"Node {branch['id']} · Last Order" + (" (root)" if branch["parent_id"] is None else ""), path)
+                             f"Node {branch['id']} · Last Order" + (" (root)" if root else ""), path)
         if node:
             out.append(node)
     for task in research_store.tasks(bcon, run["id"]):
@@ -165,14 +166,16 @@ def outline(bcon, task_id=None, *, workspace=None, run_id=None, research_store=N
     )
     for run in [r for r in selected_runs if r]:
         artifact_nodes = [_artifact_node(a) for a in research_store.artifacts(
-            bcon, run["id"], root_only=True) if a["kind"] not in {"workspace_index", "workspace_index_json"}]
+            bcon, run["id"], run_level=True) if a["kind"] not in {"workspace_index", "workspace_index_json"}]
         branch_nodes = []
         for branch in research_store.nodes(bcon, run["id"]):
             children = [_artifact_node(a) for a in research_store.artifacts(
                 bcon, run["id"], branch_id=branch["id"])]
+            parents = [row["id"] for row in research_store.parents(bcon, branch["id"])]
             branch_nodes.append({"node_id": f"branch:{branch['id']}",
-                                 "title": f"Node {branch['id']}",
-                                 "summary": f"{branch['status']} · depth {branch['depth']}",
+                                 "title": f"Node {branch['id']}" + (" (root)" if research_store.is_root(branch) else ""),
+                                 "summary": f"{branch['status']} · depth {branch['depth']}"
+                                            + (f" · parents {', '.join(parents)}" if parents else ""),
                                  "nodes": children})
         conversation_nodes = _conversation_nodes(bcon, run, research_store)
         run_nodes.append({"node_id": f"run:{run['id']}",

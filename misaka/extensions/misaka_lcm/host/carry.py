@@ -158,7 +158,7 @@ def rollover(target, transcript, ctx):
             'fromSession': old_id, 'conversation': old._conversation_id,
             'sources': refs,
         },
-    }}, contextMessages=context)
+    }}, contextMessages=context, contextSummaries=list(range(len(context))))
     target_path = Path(target.getSessionFile()) if target.getSessionFile() else None
     target_bytes = target_path.read_bytes() if target_path is not None and target_path.exists() else None
     originals = [message for group in ce._session_originals(transcript).values() for message in group]

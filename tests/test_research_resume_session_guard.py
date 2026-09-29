@@ -17,7 +17,6 @@ from misaka.core.research.wiring import research
 
 @pytest.fixture
 def board(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     monkeypatch.setattr(repo, "enabled", lambda *a: False)
     with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
         runs.init(con)

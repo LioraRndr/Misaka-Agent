@@ -108,3 +108,144 @@ class Selection:
         first = start_col if row == start_row else 0
         last = end_col + 1 if row == end_row else width
         return first, min(last, width)
+
+
+# ── Token under a double-click (herdr app/actions.rs word_bounds_at_column) ─────────────
+#
+# A row's text is mapped to display cells first, so wide characters and zero-width marks
+# use terminal columns; then the spans people expect to copy whole are preferred (a URL,
+# a quoted path), and only then a separator-delimited token, trimmed of wrapping
+# punctuation. The result is inclusive terminal columns, or None.
+
+_WORD_SEPARATORS = frozenset("|()[]{},;!（）：、。，")
+_LEADING_TOKEN_WRAPPERS = frozenset("([{<\"'`")
+_TRAILING_TOKEN_WRAPPERS = frozenset(")]}>\"'`.,;:!?")
+_TRAILING_URL_PUNCTUATION = frozenset("\"'`.,;:!?")
+_URL_CLOSERS = {")": "(", "]": "[", "}": "{"}
+
+
+def _is_word_separator(ch):
+    return ch.isspace() or ch in _WORD_SEPARATORS
+
+
+def _text_cells(row):
+    """text_cells: ``[(ch, start_col, end_col)]``; a zero-width mark shares the previous cell."""
+    from misaka.ui.panel import ghostty
+
+    cells, next_col = [], 0
+    for ch in row:
+        width = ghostty.codepoint_width(ord(ch))
+        start_col = max(0, next_col - 1) if width == 0 else next_col
+        if width > 0:
+            next_col += width
+        cells.append((ch, start_col, max(0, next_col - 1)))
+    return cells
+
+
+def _starts_with(cells, start, prefix):
+    return all(start + i < len(cells) and cells[start + i][0] == ch for i, ch in enumerate(prefix))
+
+
+def _trailing_url_closer_is_balanced(cells, start, end, opener, closer):
+    balance = 0
+    for ch, _s, _e in cells[start:end]:
+        if ch == opener:
+            balance += 1
+        elif ch == closer:
+            balance -= 1
+    return balance > 0
+
+
+def _trim_url_edges(cells, start, end):
+    while start <= end:
+        ch = cells[end][0]
+        if ch in _TRAILING_URL_PUNCTUATION:
+            trim = True
+        elif ch in _URL_CLOSERS:
+            trim = not _trailing_url_closer_is_balanced(cells, start, end, _URL_CLOSERS[ch], ch)
+        else:
+            trim = False
+        if not trim:
+            break
+        if end == 0:
+            return None
+        end -= 1
+    return (start, end) if start <= end else None
+
+
+def _url_span(cells, clicked):
+    start = 0
+    while start < len(cells):
+        if _starts_with(cells, start, "http://") or _starts_with(cells, start, "https://"):
+            end = start
+            while end + 1 < len(cells) and not cells[end + 1][0].isspace():
+                end += 1
+            if start <= clicked <= end:
+                span = _trim_url_edges(cells, start, end)
+                return span if span is not None and span[0] <= clicked <= span[1] else None
+            start = end + 1
+        else:
+            start += 1
+    return None
+
+
+def _is_escaped(cells, index):
+    slashes = 0
+    while index > 0 and cells[index - 1][0] == "\\":
+        slashes += 1
+        index -= 1
+    return slashes % 2 == 1
+
+
+def _quoted_path_span(cells, clicked):
+    if cells[clicked][0] in "\"'`":
+        return None
+    for quote in "\"'`":
+        opened = None
+        for index, (ch, _s, _e) in enumerate(cells):
+            if ch != quote or _is_escaped(cells, index):
+                continue
+            if opened is None:
+                opened = index
+                continue
+            if opened < clicked < index and any(c == "/" for c, _s2, _e2 in cells[opened + 1:index]):
+                return opened + 1, index - 1
+            opened = None
+    return None
+
+
+def _trim_token_edges(cells, start, end):
+    while start <= end and cells[start][0] in _LEADING_TOKEN_WRAPPERS:
+        start += 1
+    if start < end and cells[end][0] == "$" and cells[end - 1][0] in _TRAILING_TOKEN_WRAPPERS:
+        end -= 1
+    while start <= end and cells[end][0] in _TRAILING_TOKEN_WRAPPERS:
+        if end == 0:
+            return None
+        end -= 1
+    return (start, end) if start <= end else None
+
+
+def _token_span(cells, clicked):
+    if _is_word_separator(cells[clicked][0]):
+        return None
+    start = end = clicked
+    while start > 0 and not _is_word_separator(cells[start - 1][0]):
+        start -= 1
+    while end + 1 < len(cells) and not _is_word_separator(cells[end + 1][0]):
+        end += 1
+    span = _trim_token_edges(cells, start, end)
+    return span if span is not None and span[0] <= clicked <= span[1] else None
+
+
+def word_bounds_at_column(row, col):
+    """Inclusive terminal columns of the token under ``col`` in ``row`` (a row's text), or
+    None: a URL first, then a quoted path containing "/", then a separator-delimited token."""
+    cells = _text_cells(row)
+    clicked = next((index for index, (_ch, start, end) in enumerate(cells) if start <= col <= end), None)
+    if clicked is None:
+        return None
+    span = _url_span(cells, clicked) or _quoted_path_span(cells, clicked) or _token_span(cells, clicked)
+    if span is None:
+        return None
+    return cells[span[0]][1], cells[span[1]][2]

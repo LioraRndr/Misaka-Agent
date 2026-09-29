@@ -125,6 +125,26 @@ async def test_headless_menu_and_cancel_have_no_setting_side_effect(tmp_path):
     assert not settings.path().exists()
 
 
+def test_a_work_order_turn_asks_nothing_to_recall(tmp_path, monkeypatch):
+    """2026-09-29: a research phase opens its turn with a custom message marked moments.TURN, and
+    pre-answer recall took its 290 KB prompt for the user's question -- thousands of search terms,
+    "too many SQL variables" on every phase turn. Upstream recalls for the user's message only."""
+    from misaka.core.moments import TURN
+    from misaka.extensions.misaka_lcm.vendor import tools as upstream_tools
+    monkeypatch.setattr(settings, 'check', lambda config: 384)
+    monkeypatch.setattr(preanswer, '_local_index', lambda built: None)
+    settings.configure(True)
+    ctx = context(tmp_path)
+    ctx.sessionManager.appendMessage({'role': 'user', 'content': 'find evidence', 'timestamp': 1})
+    ctx.sessionManager.appendCustomMessageEntry('research-phase', '# Survey the node\n' + 'material ' * 5000, True,
+                                                {TURN: True})
+    ce.sync(ctx)
+    monkeypatch.setattr(upstream_tools, 'lcm_recall', lambda *a, **k: pytest.fail('recalled for a work order'))
+    messages = ctx.sessionManager.buildSessionContext().messages
+    assert preanswer.inject({'messages': messages}, ctx, active_tools=['lcm_recall']) is None
+    settings.configure(False)
+
+
 def test_native_request_reuses_original_recall_without_compaction_or_persistence(tmp_path, monkeypatch):
     from misaka.extensions.misaka_lcm.vendor import tools as upstream_tools
     monkeypatch.setattr(settings, 'check', lambda config: 384)

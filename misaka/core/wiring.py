@@ -82,7 +82,6 @@ TOOL_MODULES: tuple[str, ...] = (
     "misaka.core.ask_user",
     "misaka.core.documents.wiring.documents",
     "misaka.core.research.tools",
-    "misaka.core.network.ally",
 )
 
 
@@ -122,6 +121,7 @@ PART_MODULES: tuple[str, ...] = (
     "misaka.core.network.wiring.collaboration",
     "misaka.core.skills.wiring.skills",
     "misaka.core.platform.home_guard",
+    "misaka.core.platform.project_commit",
     "misaka.core.research.wiring.research",
     "misaka.core.research.wiring.node",
     "misaka.core.subagent",

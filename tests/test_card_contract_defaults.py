@@ -77,7 +77,9 @@ def test_research_generators_separate_filename_from_requirements(monkeypatch):
                               "deliverable": "findings.md：证据与反证"})
     assert "## deliverable\n`findings.md`\n证据与反证\n" in body
     assert worker.contract_deliverable({"body": body}) == "findings.md"
-    monkeypatch.setattr(report, "materials", lambda *args: "Fixture material map")
+    monkeypatch.setattr(report, "_checkpoint", lambda *args: {"path": "survey.md"})
+    monkeypatch.setattr(report, "index_run", lambda *args: {})
+    monkeypatch.setattr(report, "_catalog", lambda *args: [])
     review = report.review_body(None, {"question": "Question"},
                                 {"path": "draft.md", "id": "draft", "sha256": "fixture"})
     assert "## deliverable\n`critique.md`\n" in review
@@ -89,6 +91,18 @@ def test_plan_rejects_an_ambiguous_deliverable_before_dispatch():
             "deliverable": "Write a report about the sources.", "assignee": "10032"}
     with pytest.raises(ValueError, match="deliverable"):
         planner._validate_task(task, ["10032"], 1)
+
+
+def test_a_described_deliverable_is_told_to_lead_with_a_filename_and_names_its_task():
+    """2026-09-27: "方法论备忘录：……" was refused as "a directory or absolute path" -- the
+    full-width colon -- and the plan's author could not tell what to change."""
+    task = {"local_id": "T1", "title": "One", "question": "Question", "rationale": "Rationale",
+            "deliverable": "方法论备忘录：反事实推演合法性论证、置信度分级方案", "assignee": "10032"}
+    with pytest.raises(ValueError, match=r"^Task T1: .*first line must be the file's name, such as `memo.md`") as caught:
+        planner._validate_task(task, ["10032"], 1)
+    assert "方法论备忘录" in str(caught.value) and "directory" not in str(caught.value)
+    with pytest.raises(ValueError, match="not a directory or absolute path"):
+        planner._validate_task({**task, "deliverable": "notes/memo.md"}, ["10032"], 1)
 
 
 def card_flags(root, monkeypatch, model=None):

@@ -37,7 +37,7 @@ OPENCODE_HOST = "opencode.ai"
 # What MISAKA calls itself on the wire. Upstream sends "pi" and links to pi.dev; sending
 # either from MISAKA would attribute this traffic to somebody else's project.
 CLIENT_NAME = "misaka"
-CLIENT_URL = "https://github.com/nishikinokki/misaka"
+CLIENT_URL = "https://github.com/Luciole-Studio/Misaka-Agent"
 
 
 def _field(model: Any, name: str, default: str = "") -> str:

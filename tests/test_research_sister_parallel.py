@@ -14,7 +14,6 @@ from misaka.core.research.wiring import research
 
 @pytest.fixture
 def board(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     monkeypatch.setattr(repo, "enabled", lambda *a: False)
     monkeypatch.setattr(tasks, "task_state_dir", lambda tid: str(tmp_path / "state" / tid))
     with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
@@ -32,7 +31,7 @@ def test_concurrency_requires_positive_integer(key, value):
 @pytest.mark.parametrize("value", [8, "8"])
 def test_concurrency_settings_are_independent(value):
     assert runs.normalize_limits({"parallel": 1, "sister_parallel": value}) == {
-        "max_depth": 3, "parallel": 1, "sister_parallel": 8, "max_followups": 2}
+        "max_depth": 3, "parallel": 1, "sister_parallel": 8, "max_followups": 2, "max_revisions": 2, "max_nodes": 30}
     assert runs.normalize_limits({"parallel": value})["sister_parallel"] == 4
 
 
@@ -41,15 +40,17 @@ def test_old_run_defaults_without_rewriting_saved_limits(board, tmp_path):
     old = json.dumps({"max_depth": 2, "parallel": 8, "max_followups": 2})
     board.execute("UPDATE research_runs SET limits_json=? WHERE id=?", (old, run["id"]))
     restored = runs.get(board, run["id"])
-    assert runs.limits(restored) == {"max_depth": 2, "parallel": 8, "sister_parallel": 4, "max_followups": 2}
+    assert runs.limits(restored) == {"max_depth": 2, "parallel": 8, "sister_parallel": 4, "max_followups": 2,
+                                     "max_revisions": 2, "max_nodes": 30}
     assert restored["limits_json"] == old
 
 
 @pytest.mark.parametrize("option", ["--sister-parallel 8", "--sister-parallel=8"])
 def test_slash_parser_preserves_question_and_both_caps(option):
     spec = research.parse_command(f"start 2 --parallel 1 {option} --followups 0 What's changed --parallel 9?")
-    assert spec == {"action": "activate", "depth": 2, "parallel": 1, "sister_parallel": 8,
-                    "rounds": 0, "explicit": True, "question": "What's changed --parallel 9?"}
+    assert spec == {"action": "activate", "explicit": True, "question": "What's changed --parallel 9?",
+                    "limits": {"max_depth": 2, "parallel": 1, "sister_parallel": 8, "max_followups": 0,
+                               "max_revisions": 2, "max_nodes": 30}}
 
 
 @pytest.mark.parametrize("text", ["--sister-parallel", "--sister-parallel=", "--sister-parallel 0 Q",
@@ -114,10 +115,10 @@ async def test_chat_saves_and_displays_sister_limit(board, tmp_path, monkeypatch
         await asyncio.sleep(0)
         assert len(driven) == 1
         assert runs.limits(driven[0]) == {"max_depth": 2, "parallel": 1, "sister_parallel": 8, "max_followups": 0,
-                                         "plan_approval": True}
+                                         "max_revisions": 2, "max_nodes": 30, "plan_approval": True}
         assert "LO parallelism 1 | Sister cards per LO 8" in research._status(board, driven[0]["id"], str(tmp_path))
         if entry == "picker":
-            assert len(questions) == 7
+            assert len(questions) == 9
             question = next(q for q in questions if q["question"] == research._SISTER_PARALLEL_QUESTION)
             assert [o["label"] for o in question["options"]] == ["4", "1", "8"]
     finally:
@@ -162,7 +163,7 @@ async def test_restored_root_and_fork_dispatch_saved_width(board, tmp_path, save
     # Exercise genuinely old JSON as well as explicitly configured new runs.
     board.execute("UPDATE research_runs SET limits_json=? WHERE id=?", (json.dumps(saved), run["id"]))
     root = runs.nodes(board, run["id"])[0]
-    node = runs.create_node(board, run["id"], trigger="Child", parent_id=root["id"], depth=1) if fork else root
+    node = runs.create_node(board, run["id"], question="Child", parents=[root["id"]]) if fork else root
     ids = []
     for i in range(18):
         tid = tasks.create_task(board, f"Card {i}", assignee="10032", workspace=str(tmp_path))
@@ -252,4 +253,4 @@ async def test_sister_width_keeps_global_admission_and_dependencies(board, tmp_p
 ])
 def test_a_question_may_start_with_a_number(text, depth, question):
     spec = research.parse_command(text)
-    assert (spec["depth"], spec["question"]) == (depth, question)
+    assert (spec["limits"]["max_depth"], spec["question"]) == (depth, question)

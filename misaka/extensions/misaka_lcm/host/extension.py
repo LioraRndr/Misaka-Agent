@@ -116,6 +116,12 @@ def register(harn, *, kind: str, workspace: str):
         except Exception:
             logger.warning("LCM usage update failed; the next one repairs it.", exc_info=True)
 
+    async def subagent_start(event, ctx):
+        # A subagent runs in its own process with its own copy of this plugin, and joins the project
+        # store this session belongs to -- not the directory it runs in, which may be a worktree or
+        # the launch directory of a resumed session. ``ctx`` is already scoped to that project.
+        event["env"][storage.PROJECT_ENV] = str(storage.project(ctx))
+
     async def discover_resources(event, ctx):
         # hermes registers its bundled skill through the plugin's register_skill; pi's door
         # for a skill root an extension ships is resources_discover.
@@ -156,6 +162,7 @@ def register(harn, *, kind: str, workspace: str):
     on("session_shutdown", session_end)
     on("session_context_carry", session_carry)
     on("message_end", response_usage)
+    on("subagent_start", subagent_start)
     on("resources_discover", discover_resources)
     from ..vendor import _env_flag_enabled
     if _env_flag_enabled("LCM_ENABLE_SLASH_COMMAND", default=False):

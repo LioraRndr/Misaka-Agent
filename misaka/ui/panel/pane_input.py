@@ -179,11 +179,26 @@ def _modify_other_keys(key, state):
     return f"\x1b[27;{_xterm_modifier(mods)};{ord(key.code)}~".encode()
 
 
+def _legacy_chord_needs_csi_u(key):
+    """encode.rs legacy_chord_needs_csi_u: Super has no legacy character encoding, and
+    Ctrl+Shift+letter would collapse into the same C0 byte as Ctrl+letter."""
+    if not key.is_char:
+        return False
+    mods = _clean(key.mods)
+    return bool(mods & SUPER) or (key.code.isascii() and key.code.isalpha()
+                                  and mods & (CTRL | SHIFT) == CTRL | SHIFT)
+
+
 def encode_key(key, state):
-    """herdr ``encode_terminal_key``: generated text first; releases only under kitty
+    """herdr ``encode_terminal_key``: CSI u for the chords a legacy pane cannot tell apart
+    (Ghostty's legacy encoder does the same); generated text; releases only under kitty
     REPORT_EVENT_TYPES; CSI u for chords when the pane pushed kitty flags; else legacy."""
     flags = state.get("kitty_flags", 0)
     reports_events = bool(flags & KITTY_REPORT_EVENT_TYPES)
+    if not flags and key.kind != "release" and _legacy_chord_needs_csi_u(key):
+        encoded = _csi_u(key, 0)
+        if encoded is not None:
+            return encoded
     if key.code in ("modifier", "media") and not flags:
         return b""
     if key.kind != "release" and key.text:

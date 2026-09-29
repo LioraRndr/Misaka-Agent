@@ -1,6 +1,7 @@
 """Regressions from the independent Office acceptance audit."""
 import hashlib
 import os
+import tempfile
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -89,16 +90,20 @@ def test_simple_field_keeps_existing_display_text(tmp_path):
 def test_staging_cleanup_preserves_operation_outcome(tmp_path, monkeypatch, fail_operation):
     path = tmp_path / 'original.txt'
     path.write_text('before\n')
-    real_rmtree = _office.shutil.rmtree
 
-    def deny_staging_delete(name, *args, **kwargs):
-        if Path(name).name.startswith('.office-'):
+    class UndeletableStaging:
+        """A staging directory whose removal fails. Replacing shutil.rmtree does not reach every
+        Python build: Ubuntu's 3.12 binds rmtree inside tempfile when it is imported."""
+
+        def __init__(self, prefix=None, dir=None):
+            self.name = tempfile.mkdtemp(prefix=prefix, dir=dir)
+
+        def cleanup(self):
             raise PermissionError('injected staging cleanup failure')
-        return real_rmtree(name, *args, **kwargs)
 
     op = {'unknown': {}} if fail_operation else {'append': {'content': 'after\n'}}
     with monkeypatch.context() as patch:
-        patch.setattr(_office.shutil, 'rmtree', deny_staging_delete)
+        patch.setattr(_office.tempfile, 'TemporaryDirectory', UndeletableStaging)
         receipt = _office.run_ops(path, [op])
     assert receipt.startswith('✗' if fail_operation else '✓'), receipt
     assert 'cleanup failed' in receipt

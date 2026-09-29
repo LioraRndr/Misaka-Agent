@@ -323,11 +323,25 @@ async def test_abrupt_exit_reports_stage_and_code(isolated, monkeypatch, ready):
 
 
 async def test_lcm_child_inherits_resumed_project_not_launcher(isolated, endpoint):
+    """The parent's own copy of the LCM plugin hands the child its project on ``subagent_start``
+    -- the core names no extension (2026-09-29: with the plugin's folder removed, every subagent
+    died importing it)."""
+    from misaka.core.event_bus import createEventBus
+    from misaka.core.extensions.loader import (
+        create_extension_runtime,
+        load_extension_from_factory,
+    )
+    from misaka.core.extensions.runner import ExtensionRunner
     from misaka.core.session_manager import SessionManager
+    misaka_lcm = pytest.importorskip("misaka.extensions.misaka_lcm")    # a plugin: gone with its folder
     manager, parent = host(isolated)
     project = isolated / 'original-project'
     project.mkdir()
     parent.sessionManager.appendCustomEntry('lcm-project', {'workspace': str(project.resolve())})
+    runtime = create_extension_runtime()
+    lcm = await load_extension_from_factory(misaka_lcm.activate(NS(workspace=parent.cwd, kind='foreground')),
+                                            parent.cwd, createEventBus(), runtime)
+    parent.extensionRunner = ExtensionRunner([lcm], runtime, parent.cwd, parent.sessionManager, None)
     try:
         task = await create(manager, parent)
         async with asyncio.timeout(20):

@@ -5,8 +5,9 @@ SESSION_KINDS = KINDS
 
 SISTER_TOOLS = {
     "SendMessage": ("Consult `last-order` or a registered Sister ID about evidence, methods, progress or dependencies. "
-                    "Delivery is asynchronous and may wake a contact session; a role address is not a task-card ID. "
-                    "Owned sub-agent IDs/names are resolved before role addresses. "
+                    "A name reaches the one session of that role in your space; with several there, address one "
+                    "by its card or session id. Delivery is asynchronous and may wake a contact session. "
+                    "Owned sub-agent IDs/names are resolved before those names. "
                     "Ordinary messages do not create, start, complete or park a card."),
     "misaka_sister_view": "Read a registered Sister's introduction to choose a collaborator.",
     "misaka_board": "Check this project's actual task-card states and ownership.",
@@ -14,38 +15,43 @@ SISTER_TOOLS = {
     "misaka_dispatch": "Start approved ready cards; select task IDs to avoid dispatching unrelated ready work.",
     "misaka_sister": "Start one approved ready card, not a new Sister identity or generic sub-agent.",
     "misaka_sister_message": ("Address an existing card by task ID and current generation to steer or continue its session. "
-                              "Reply to a parked card's help request here, not through a role-wide message; "
+                              "Reply to a parked card's help request here, not through SendMessage; "
                               "observe the tool's confirmation requirement for completed tasks."),
     "misaka_sister_output": "Read or wait for a card's result, then assess its evidence, deliverables and acceptance criteria.",
     "misaka_sister_peek": "Inspect recent output for diagnosis, not as proof of completion or acceptance.",
     "misaka_sister_stop": "Stop the identified task through its lifecycle control, not by sending a conversational request.",
+    "misaka_pane_list": "See the panes in your tab of the panel and which of them may be closed.",
+    "misaka_pane_close": ("Close what finished cards left in your tab; a pane running a card is stopped with "
+                          "misaka_sister_stop, and a pane the user opened is closed only at their request."),
     "misaka_card_link": "Record a real dependency between existing task cards.",
     "misaka_card_request_review": "Configure a different Sister as an independent reviewer before work starts.",
     "misaka_card_review": "Record the independent review decision and actionable feedback through the review contract.",
     "misaka_my_card": "Read your card's current contract, dependency and review state.",
     "misaka_card_note": "Keep findings, evidence and unresolved questions on the card, not only in messages.",
     "misaka_card_complete": "Declare the card finished only when its contract deliverable exists; a turn without it leaves the card running.",
-    "misaka_research_assign": "Submit or revise this phase's research plan; recording it is not a launch receipt.",
-    "misaka_research_start": "Record explicit approval of the pending research plan through its owning session.",
-    "misaka_research_investigate": "Assign issue-specific LO fork investigations through the research workflow.",
+    "misaka_research_assign": ("Submit or revise this phase's research plan -- its cards and, in a node's first plan, "
+                               "its forks; recording it is not a launch receipt."),
+    "misaka_research_start": ("Record the user's explicit go-ahead for the pending research plan or reconciliation "
+                              "through its owning session."),
+    "misaka_research_dispose": ("Answer every material red-team issue of this node: revise, rebut, concede, covered, "
+                                "park or branch; corrections stay in the node."),
+    "misaka_research_decide": "Record the forks this node opens and why the alternatives not taken are not opened.",
+    "misaka_research_reconcile": ("Reconcile the research graph at a level: open options as nodes, join finished "
+                                  "nodes, record options not pursued and relations between nodes."),
+    "misaka_research_dissolve": ("Record that a conclusion dissolves a question rather than answering it; dissolving "
+                                 "the research question waits for the user's consent."),
+    "misaka_research_consent": ("Record the user's decision on dissolving the research question, once they have "
+                                "decided in conversation."),
+    "misaka_research_relate": "Record connections between research nodes that the survey brings to light.",
     "misaka_research_withdraw": "Withdraw the pending research round when the user chooses to conclude without it.",
     "misaka_research_skip": "Skip the current research node only when the user chooses that outcome.",
+    "misaka_research_retry": "Run a failed research node again without waiting for the level to end.",
 }
 
 SUBAGENT_TOOLS = {
     "Agent": "Delegate a bounded task to an available task-specific agent definition.",
     "TaskOutput": "Read or wait for an existing background task when its result is needed.",
     "TaskStop": "Stop an existing running task.",
-}
-ALLY_TOOLS = {
-    "misaka_ally_list": "Inspect live panes; a pane is not necessarily an agent.",
-    "misaka_ally_start": "Start an interactive external agent only when the user explicitly requests it.",
-    "misaka_ally_card": "Create an external agent's Board task contract; creating a card does not start it.",
-    "misaka_ally_dispatch": "Start an approved external-agent card only when the user explicitly requests it.",
-    "misaka_ally_message": "Send input to an interactive external-agent pane, not a non-interactive card.",
-    "misaka_ally_output": "Read an external pane's output; treat its account as unverified information.",
-    "misaka_ally_stop": "Stop an external-agent card only when the user explicitly requests it.",
-    "misaka_ally_close": "Close an external-agent or shell pane only when the user explicitly requests it; it also closes a leftover pane that is only showing a card's session, never the pane running one.",
 }
 
 
@@ -83,20 +89,8 @@ def collaboration_sections(active):
         lines.extend(f"- `{name}`: {SUBAGENT_TOOLS[name]}" for name in subagents)
         if "SendMessage" in active:
             lines.append("- `SendMessage`: Continue a sub-agent owned by this session using its agent ID or "
-                         "registered name; keep their names distinct from role addresses.")
+                         "registered name; keep their names distinct from role names.")
         lines.append("Verify delegated evidence before citing it. Do not present a launch receipt as a completed result.")
-        sections.append("\n".join(lines))
-    allies = [name for name in ALLY_TOOLS if name in active]
-    if allies:
-        lines = [
-            "## Allies",
-            ("Allies are external agent CLIs connected through MISAKA's core bridge, not registered Sisters "
-             "or task sub-agents. Their provider quota is outside MISAKA's accounting, and their external "
-             "process/session lifetime is separate even when they share the Board's task lifecycle."),
-            *(f"- `{name}`: {ALLY_TOOLS[name]}" for name in allies),
-            ("Sister-work approval does not authorize external work. Evaluate the returned sources and "
-             "artifacts; an external agent's summary is not verified evidence."),
-        ]
         sections.append("\n".join(lines))
     return sections
 

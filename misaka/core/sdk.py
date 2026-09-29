@@ -226,6 +226,10 @@ async def create_agent_session(options: CreateAgentSessionOptions | None = None)
             if has_thinking_entry
             else settings_manager.getDefaultThinkingLevel() or DEFAULT_THINKING_LEVEL
         )
+    if thinking_level is None:
+        # MISAKA fork: the agent's own default (her role's defaultThinkingLevel) comes before the
+        # shared per-model table.
+        thinking_level = settings_manager.getRoleThinkingLevel()
     if thinking_level is None and model is not None:
         thinking_level = settings_manager.getModelThinkingLevel(model.provider, model.id)
     if thinking_level is None:

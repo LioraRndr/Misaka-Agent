@@ -20,7 +20,7 @@ def board(tmp_path, monkeypatch):
     ordinary = cards.create(con, str(tmp_path), "Ordinary", "## deliverable\nnotes.md\n", "10032")
     research = cards.create(con, str(tmp_path), "Research", "## deliverable\nnotes.md\n", "10033")
     run = runs.create(con, workspace=str(tmp_path), question="Fixture research")
-    node = runs.create_node(con, run["id"], trigger="Fixture research", parent_id=None, depth=0)
+    node = runs.root(con, run["id"])
     runs.link_task(con, run["id"], research, kind="investigate", node=node)
     con.commit()
     runtime = SimpleNamespace(con=con, _closing=False, _sister_semaphore=SimpleNamespace(available=5),

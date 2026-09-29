@@ -1,28 +1,40 @@
 """``misaka uninstall``: remove what this install put on the machine, and nothing else.
 
-The counterpart to ``misaka setup``. Everything MISAKA owns lives under one directory, the
-home (:mod:`misaka.config.home`), so the honest form of this command is: show what it holds
-and what it costs, say plainly what is lost, and remove it on a yes.
+The counterpart to ``misaka setup``, shaped after Hermes's uninstaller in intent rather than detail:
 
-Two things it deliberately does not do:
+- **The program and your data are separate choices, and the default keeps the data**, so a
+  reinstall picks up where you left off. ``--full`` removes both; ``--data`` removes only the data.
+- **Everything that would go is listed first**, and ``--dry-run`` stops there. That includes what
+  MISAKA left outside its home: links on the PATH that point into it (tools an agent installed
+  under ``shared/``), and what a project's ``.misaka/`` holds that MISAKA derived (a plugin's store).
+- **Before data goes, a backup archive is offered** (``cli.backup``): the home less its caches,
+  logs and sockets, kept outside it.
+- **Running work is not cut off**: an active research run, a card, or a session open in the panel
+  refuses the command until it is finished or closed.
+- **The program is removed with the tool that installed it** (``uv tool``, pipx, pip), as the
+  last step, since it is the code this command runs from.
 
-- **Project folders are never touched.** They are the point of the product: research
-  products, their sources, and the git history that dates them. They live wherever the user
-  ran ``misaka init``, and the board knows where -- so they are listed, by way of promising
-  not to touch them.
-- **The package is not uninstalled.** A process cannot reliably remove the code it is
-  running from, and pip, uv and pipx each want their own command. The right one is printed.
+Never touched: a project's own content, the configuration a person wrote into its ``.misaka/``
+(``settings.json``, ``subagents/``, ...), and a source checkout, which is a repository of yours.
 """
 from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import sys
+import time
 from contextlib import closing
 from pathlib import Path
 
 from misaka.cli import setup_ui as ui
-from misaka.cli.setup_ui import SetupCancelled, prompt_choice
+from misaka.cli import update
+from misaka.cli.setup_ui import SetupCancelled, SetupGoBack, prompt_choice
 from misaka.config import home
+
+# A project's .misaka/ mirrors the half of the home a person edits; any other name in it was
+# written by MISAKA or one of its plugins for sessions and runs the home records.
+_USER_CONFIG = {entry.rel.split("/", 1)[0] for entry in home.LAYOUT.values() if entry.kind == "edit" and entry.rel}
 
 
 def _contents(root: str) -> list[tuple[str, str]]:
@@ -35,8 +47,8 @@ def _contents(root: str) -> list[tuple[str, str]]:
 
 
 def _size(path: str) -> int:
-    if os.path.isfile(path):
-        return os.path.getsize(path)
+    if os.path.islink(path) or os.path.isfile(path):
+        return os.lstat(path).st_size
     total = 0
     for here, _dirs, files in os.walk(path, onerror=lambda _error: None):
         for name in files:
@@ -56,10 +68,14 @@ def _projects(db_path: str) -> list[str]:
     import sqlite3
     if not os.path.isfile(db_path):
         return []
+    rows = []
     try:
         with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as con:
-            rows = con.execute(
-                "SELECT DISTINCT workspace FROM tasks WHERE workspace IS NOT NULL").fetchall()
+            for table in ("tasks", "research_runs"):
+                try:
+                    rows += con.execute(f"SELECT DISTINCT workspace FROM {table} WHERE workspace IS NOT NULL").fetchall()
+                except sqlite3.OperationalError:
+                    pass                         # a board that never held that table
     except sqlite3.Error:
         return []
     root = str(home.home())
@@ -76,15 +92,51 @@ def _projects(db_path: str) -> list[str]:
     return sorted(set(found))
 
 
-def _stop_daemon() -> None:
-    """Ask the panel daemon to stop, the way ``misaka net stop`` does. A daemon that is not
-    running raises on connect, which is the same outcome as stopping it."""
-    from misaka.ui.panel import client
-    try:
-        client.request("server.stop", timeout=3)
-    except (ConnectionError, FileNotFoundError, OSError, RuntimeError):
-        return
-    ui.print_success("Stopped the panel daemon.")
+def _derived(projects: list[str]) -> list[str]:
+    """What MISAKA wrote into each project's ``.misaka/`` that no person did."""
+    found = []
+    for project in projects:
+        config = home.project_dir(project)
+        if config is None or not config.is_dir() or config.is_symlink():
+            continue
+        found += [str(entry) for entry in sorted(config.iterdir())
+                  if entry.name not in _USER_CONFIG and entry.name != ".DS_Store"]
+    return found
+
+
+def _links_into(root: Path) -> list[str]:
+    """Links on the PATH (and in ``~/.local/bin``) that point into ``root``. They are tools an agent
+    installed under the home; removing the home would leave them dangling."""
+    folders = dict.fromkeys([*os.environ.get("PATH", "").split(os.pathsep), os.path.expanduser("~/.local/bin")])
+    found = []
+    for folder in folders:
+        if not folder or not os.path.isdir(folder) or Path(os.path.realpath(folder)).is_relative_to(root):
+            continue
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for name in names:
+            link = os.path.join(folder, name)
+            if os.path.islink(link) and Path(os.path.realpath(link)).is_relative_to(root):
+                found.append(link)
+    return found
+
+
+def _program_command(install: update.Install) -> list[str] | None:
+    """The command that removes the program, or None when this command must not: a source
+    checkout is a repository of yours, and a package of unknown origin has no known remover."""
+    if install.installer == "uv tool":
+        return ["uv", "tool", "uninstall", "misaka"]
+    if install.installer == "pipx":
+        return ["pipx", "uninstall", "misaka"]
+    if install.kind == "checkout":
+        return None
+    if install.installer == "uv":
+        return ["uv", "pip", "uninstall", "--python", sys.executable, "misaka"]
+    if install.installer == "pip":
+        return [sys.executable, "-m", "pip", "uninstall", "-y", "misaka"]
+    return None
 
 
 def _remove(path: str) -> tuple[bool, str]:
@@ -101,61 +153,144 @@ def _remove(path: str) -> tuple[bool, str]:
     return True, ""
 
 
-def run(*, assume_yes: bool = False, dry_run: bool = False) -> int:
+def _choose(mode: str | None, assume_yes: bool) -> str | None:
+    """``keep`` | ``full`` | ``data``, or None for no. ``--yes`` alone keeps the data, as Hermes's does."""
+    if mode or assume_yes:
+        return mode or "keep"
+    ui.print_info("")
+    choice = prompt_choice("What should go?", [
+        "Keep data - remove the program only; the home stays for a reinstall (recommended)",
+        "Full uninstall - the program, the home, and the MISAKA files listed outside it",
+        "Data only - the home and those files; the program stays installed",
+        "Cancel"], 0)
+    return ("keep", "full", "data", None)[choice]
+
+
+def _offer_backup(root: Path) -> bool:
+    """Offer the archive; False when one was wanted and could not be written."""
+    from misaka.cli import backup
+    target = Path.home() / f"misaka-backup-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    if prompt_choice(f"Save a backup of {ui.tilde(str(root))} first?",
+                     [f"Yes, to {ui.tilde(str(target))}", "No, delete it without one"], 0) != 0:
+        return True
+    try:
+        skipped = backup.archive(target)
+    except OSError as error:
+        ui.print_error(f"The backup could not be written ({error}); nothing was removed.")
+        return False
+    ui.print_success(f"Backed up to {ui.tilde(str(target))} (it holds your credentials: keep it private).")
+    for path in skipped:
+        ui.print_warning(f"not in the backup (unreadable): {ui.tilde(path)}")
+    return True
+
+
+def run(*, mode: str | None = None, assume_yes: bool = False, dry_run: bool = False) -> int:
     ui.print_header("Uninstall")
-    root = str(home.home())
-    if root in (os.path.realpath(os.path.expanduser("~")), os.path.dirname(root)):
+    root = home.home()
+    if str(root) in (os.path.realpath(os.path.expanduser("~")), os.path.dirname(str(root))):
         ui.print_error(f"{root} is your home directory or a filesystem root; refusing.")
         return 2
-    if not os.path.lexists(root):
-        ui.print_success("Nothing to remove: this machine has no MISAKA data.")
-        return 0
 
-    ui.print_info(f"Everything this install owns is under {ui.color(ui.tilde(root), ui.BOLD)}:", "")
-    for name, purpose in _contents(root):
-        ui.print_check(True, name, f"{_megabytes(_size(os.path.join(root, name))):>9}   {purpose}")
-    ui.print_info("", f"Total: {ui.color(_megabytes(_size(root)), ui.BOLD)}")
+    install = update.describe()
+    remover = _program_command(install)
+    ui.print_info(ui.color("The program", ui.BOLD))
+    ui.print_check(True, "misaka", f"v{install.version}" + (f", installed by {install.installer}" if install.installer else ""))
+    if remover:
+        ui.print_info(f"    removed with: {' '.join(remover)}")
+    elif install.kind == "checkout" and install.path:
+        ui.print_info(f"    a source checkout ({ui.tilde(str(install.path))}): yours to delete, never removed here")
+    else:
+        ui.print_info("    removed with the tool that installed it: `pip uninstall misaka`, `uv tool uninstall misaka`",
+                      "    or `pipx uninstall misaka`")
 
-    projects = _projects(str(home.path("db")))
+    has_home = os.path.lexists(root)
+    projects = _projects(str(home.path("db"))) if has_home else []
+    derived = _derived(projects)
+    links = _links_into(root) if has_home else []
+    ui.print_info("", ui.color(f"Your data, in {ui.tilde(str(root))}", ui.BOLD))
+    if has_home:
+        for name, purpose in _contents(str(root)):
+            ui.print_check(True, name, f"{_megabytes(_size(str(root / name))):>9}   {purpose}")
+        ui.print_info(f"    Total: {ui.color(_megabytes(_size(str(root))), ui.BOLD)}")
+    else:
+        ui.print_info("    none on this machine")
+    if derived:
+        ui.print_info("", ui.color(f"Derived in your projects' {home.DIR_NAME}/ (removed with the data; your settings there stay)", ui.BOLD),
+                      *[f"    {ui.tilde(path)}   {_megabytes(_size(path))}" for path in derived])
+    if links:
+        ui.print_info("", ui.color("Links into the home (removed with the data; they would dangle)", ui.BOLD),
+                      *[f"    {ui.tilde(path)} -> {ui.tilde(os.readlink(path))}" for path in links])
     ui.print_info("")
     if projects:
-        ui.print_success(f"Your {len(projects)} project folder(s) are NOT touched:")
+        ui.print_success(f"Your {len(projects)} project folder(s) keep everything you put in them:")
         for path in projects[:8]:
             ui.print_info(f"    {ui.tilde(path)}")
         if len(projects) > 8:
             ui.print_info(f"    ... and {len(projects) - 8} more")
         ui.print_info("  Research products, their sources and their git history stay where they are.")
     else:
-        ui.print_info("No project folder is recorded; anything you made with `misaka init` stays "
-                      "where it is either way.")
-
-    ui.print_info("")
-    ui.print_warning("This removes stored API keys, every Sister, and the record of every research run.")
-    ui.print_warning("The reports themselves live in your projects and survive; the board that indexes them does not.")
+        ui.print_info("No project folder is recorded; anything you made with `misaka init` stays where it is either way.")
 
     if dry_run:
-        ui.print_info("", "--dry-run: nothing was removed.")
+        ui.print_info("", "--dry-run: nothing was removed. By default the program goes and the data stays;",
+                      "--full removes both, --data only the data.")
         return 0
-    if not assume_yes:
-        ui.print_info("")
-        try:
-            if prompt_choice("Remove it?", ["No, leave everything alone", "Yes, remove it"], 0) != 1:
-                ui.print_info("Nothing was removed.")
-                return 1
-        except SetupCancelled:
-            print()
+
+    blocking, open_panes = update.running_work()
+    if blocking or open_panes:
+        ui.print_error("MISAKA is still running here:")
+        ui.print_info(*[f"    {item}" for item in blocking],
+                      *[f"    pane {pane.get('id')}: {pane.get('title') or 'a session'}" for pane in open_panes], "",
+                      "Let research runs and cards finish, or stop them (`/research stop` in the run's Last Order",
+                      "window). Then close the panel from a plain terminal with `misaka net stop`, and run this again.")
+        return 2
+
+    try:
+        mode = _choose(mode, assume_yes)
+        if mode is None:
             ui.print_info("Nothing was removed.")
             return 1
+        removes_data = mode in ("full", "data") and has_home
+        if removes_data:
+            ui.print_info("")
+            ui.print_warning("This removes stored API keys, every Sister, and the record of every research run.")
+            ui.print_warning("The reports themselves live in your projects and survive; the board that indexes them does not.")
+            if not assume_yes:
+                if prompt_choice("Remove the data?", ["No, leave everything alone", "Yes, remove it"], 0) != 1:
+                    ui.print_info("Nothing was removed.")
+                    return 1
+                if not _offer_backup(root):
+                    return 1
+    except (SetupCancelled, SetupGoBack):
+        print()
+        ui.print_info("Nothing was removed.")
+        return 1
 
-    _stop_daemon()
+    update.stop_daemon()
     failed = False
-    ok, note = _remove(root)
-    if ok:
-        ui.print_success(f"removed {ui.tilde(root)}" + (f" ({note})" if note else ""))
-    else:
-        ui.print_error(f"{root}: {note}")
-        failed = True
-
-    ui.print_info("", "The package itself is your installer's to remove:",
-                  "  pip uninstall misaka           (or `uv tool uninstall misaka`, `pipx uninstall misaka`)")
+    if removes_data:
+        for path in [*links, *derived, str(root)]:
+            ok, note = _remove(path)
+            if ok:
+                ui.print_success(f"removed {ui.tilde(path)}" + (f" ({note})" if note else ""))
+            else:
+                ui.print_error(f"{path}: {note}")
+                failed = True
+    if mode == "data":
+        return 1 if failed else 0
+    if remover is None:
+        ui.print_info("", "The program stays: " + (
+            f"{ui.tilde(str(install.path))} is a source checkout, yours to delete." if install.kind == "checkout" and install.path
+            else "remove it with the tool that installed it."))
+        return 1 if failed else 0
+    ui.print_info("", f"Removing the program: {' '.join(remover)}")
+    try:
+        result = subprocess.run(remover, check=False)
+    except OSError as error:
+        ui.print_error(f"{remover[0]} could not start: {error}")
+        return 1
+    if result.returncode != 0:
+        ui.print_error(f"{remover[0]} exited with {result.returncode}; the program is still installed.")
+        return 1
+    ui.print_success("MISAKA is uninstalled." + ("" if removes_data else f" Your data stays in {ui.tilde(str(root))}."))
     return 1 if failed else 0

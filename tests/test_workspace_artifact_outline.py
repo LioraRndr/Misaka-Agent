@@ -115,13 +115,11 @@ def test_unicode_at_scan_boundary_does_not_break_decoding(tmp_path):
 
 
 async def test_both_live_view_and_saved_index_preserve_binary_paths_without_payload(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, '_commit', lambda *a, **k: None)
     monkeypatch.setattr(workspace.corpus, 'docs', lambda **k: [])
     con = tasks.connect(str(tmp_path / 'board.db'))
     try:
         run = runs.create(con, workspace=str(tmp_path), question='fixture')
-        child = runs.create_node(con, run['id'], parent_id=runs.nodes(con, run['id'])[0]['id'],
-                                 trigger='child', depth=1)
+        child = runs.create_node(con, run['id'], question='child', parents=[runs.root(con, run['id'])['id']])
         for suffix,branch in [('.png', None), ('.pdf', child['id']), ('.md', None)]:
             row = artifact(tmp_path, suffix, b'# BINARY PAYLOAD\xc2\x85\n' if suffix != '.md' else b'# Real heading\n')
             runs.register_file(con, run['id'], 'task_output', 'Fixture '+suffix, row['path'],

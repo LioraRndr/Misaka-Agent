@@ -549,7 +549,8 @@ def test_the_research_flow_whitelists_name_the_tool():
 
     Which pass gets which list is pinned in tests/test_planner_tool_surface.py, against the kwargs
     the calls actually receive; what belongs here is that the flow still names the tool where its
-    job is to find sources.
+    job is to find sources. It names the core's own tools only: an extension's (coverage_scan)
+    reaches research as one of the session's active tools, and is gone with its folder.
     """
     import inspect
 
@@ -557,7 +558,7 @@ def test_the_research_flow_whitelists_name_the_tool():
     assert inspect.signature(planner._call).parameters["tools"].default == planner.RESEARCH_TOOLS
     assert inspect.signature(planner._command).parameters["tools"].default == planner.RESEARCH_TOOLS
     for surface in (planner.RESEARCH_TOOLS, report.SURVEY_TOOLS, report.FINAL_TOOLS):
-        assert {"read", "doc_read", "web_search", "web_fetch", "coverage_scan"} <= set(surface)
+        assert {"read", "doc_read", "web_search", "web_fetch"} <= set(surface)
 
 
 def test_the_explorer_subagent_can_reach_the_web():

@@ -61,7 +61,7 @@ def _branch(tmp_path):
     runs.init(con)
     run = runs.create(con, workspace=str(tmp_path), question="why does it drift?",
                       limits={"max_depth": 1, "parallel": 1}, token_start=0, origin_session=None)
-    node = runs.create_node(con, run["id"], trigger="why does it drift?", parent_id=None, depth=0)
+    node = runs.root(con, run["id"])
     return con, node["id"]
 
 
@@ -96,17 +96,17 @@ def test_a_successful_claim_has_nothing_to_explain_but_still_answers(tmp_path):
     assert "no visible reason" in runs.note_claim_failure(con, "research_branches", node_id, key)
 
 
-def test_runner_error_carries_the_pane_tail():
+def test_runner_failure_carries_the_pane_tail():
     row = {"status": "queued", "last_error": None}
-    plain = workflow._runner_error("Node b1's process", row)
-    assert "no exception was recorded" in str(plain) and "last output" not in str(plain)
+    plain = workflow._runner_failure(row)
+    assert "no exception was recorded" in plain and "last output" not in plain
 
     class Spawner:
         def tail(self, handle):
             return "node b1: superseded execution: claim refused: runner key mismatch"
 
-    with_tail = workflow._runner_error("Node b1's process", row, tail=workflow._pane_tail(Spawner(), object()))
-    assert "its last output: node b1: superseded execution: claim refused" in str(with_tail)
+    with_tail = workflow._runner_failure(row, tail=workflow._pane_tail(Spawner(), object()))
+    assert "its last output: node b1: superseded execution: claim refused" in with_tail
     assert workflow._pane_tail(object(), object()) is None
 
 

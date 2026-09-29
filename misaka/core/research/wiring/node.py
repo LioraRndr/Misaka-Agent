@@ -1,6 +1,6 @@
 """A research node's routine inside its own interactive window.
 
-``node.run_interactive`` opens a fork Last Order's conversation as a full chat in a pane of
+``node.run_interactive`` opens a node's Last Order conversation as a full chat in a pane of
 the panel and names the node in ``MISAKA_RESEARCH_NODE``; this part, present only then, runs
 the node's routine (``workflow.expand_node``) on that very session -- the way the root's
 ``/research`` driver runs the root's routine on the user's window. Her phase turns and the
@@ -78,7 +78,7 @@ class NodePart:
 
         def progress(event):
             branch = runs.node(con, self.node_id)
-            payload = {**event, "node_id": branch["id"], "depth": branch["depth"], "issue_id": None}
+            payload = {**event, "node_id": branch["id"], "depth": branch["depth"]}
             notifications.publish(con, "research", self.run_id, "progress", payload)   # the root window's feed
             content = f"Research `{self.run_id}` | {event['message']}"
             for item in event.get("tasks") or []:

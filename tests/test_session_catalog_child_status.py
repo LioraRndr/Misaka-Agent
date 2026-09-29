@@ -55,17 +55,36 @@ def test_child_lifecycle_is_not_the_parent_card_status(inventory, status):
     assert 'live_key' not in row
 
 
-def _gather(entries, cwd):
+def _gather(entries, cwd, side=None):
     # Execute the panel's real pure listing closure, without starting its TUI or daemon.
     path = Path(__file__).parents[1] / 'misaka/ui/panel/panel.py'
     tree = ast.parse(path.read_text())
     node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'gather_sessions')
-    scope = {'os': os, 'spaces': {}, 'listing': [], 'focused': None, 'side': {'ws': 0, 'sess_mode': 'all'},
-             'effective_space_folder': lambda *args: str(cwd), 'cards_cache': {'sessions': entries},
+    scope = {'os': os, 'spaces': {}, 'listing': [], 'focused': None, 'side': side or {'ws': 0, 'sess_mode': 'all'},
+             'cards_cache': {'sessions': entries},
              'session_meta': lambda path: {}, 'session_stamp': lambda stamp: 'saved', 'sess_folds': {},
              'folder_groups': lambda rows: rows, 'session_rows': lambda rows, folds: rows}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), scope)  # noqa: S102 - local source only
     return scope['gather_sessions']()
+
+
+def test_here_lists_the_active_space_sessions_not_the_folder(tmp_path):
+    """Two spaces on one folder: each lists only the sessions that belong to it (2026-09-29)."""
+    rows = []
+    for ident, space in (('in-a', 'w1111aaaa'), ('in-b', 'w2222bbbb'), ('nowhere', None)):
+        path = tmp_path / f'{ident}.jsonl'
+        _transcript(path, tmp_path, ident)
+        rows.append({'id': ident, 'path': str(path), 'cwd': str(tmp_path), 'workspace': str(tmp_path),
+                     'role': 'last-order', 'kind': 'foreground', 'state': 'saved', 'modified': 1, 'space': space})
+    def listed(ws, mode):
+        out = _gather(rows, tmp_path, {'ws': ws, 'sess_mode': mode})
+        # "here" hands session_rows its groups, "all" the flat items folder_groups got.
+        return sorted(item['id'] for element in out
+                      for item in (element[2] if isinstance(element, tuple) else [element]))
+    assert listed('w1111aaaa', 'here') == ['in-a']
+    assert listed('w2222bbbb', 'here') == ['in-b']
+    assert listed('w3333cccc', 'here') == []
+    assert listed('w1111aaaa', 'all') == ['in-a', 'in-b', 'nowhere']
 
 
 def test_panel_renders_child_status_independently_from_parent(inventory):

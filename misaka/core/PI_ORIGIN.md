@@ -41,6 +41,20 @@ pi 把全局文件放在 `~/.pi/agent/`，这一层的真实作用是让全局�
   `MISAKA_HOME`）、`config/migrations.py`（pi 的旧版迁移，misaka 从未发布过那些旧布局）。
 - `tests/test_home_governance.py` 会拦住带回来的字面量路径、`CONFIG_DIR_NAME` 和旧环境变量。
 
+## 每个 agent 各自的推理强度：和 pi 的有意分叉（2026-09-27，对齐 pi 时**不要**带回来）
+
+pi 只有一个全局 `defaultThinkingLevel`（加按模型的 `modelThinkingLevels`）。misaka 让 Last Order 和每个
+Sister 各有一档：
+
+- `settings_manager.ROLE_KEYS` 含 `defaultThinkingLevel`；`setDefaultThinkingLevel` 在角色会话里写该角色的
+  `settings.json`，角色之外写全局。`getRoleThinkingLevel` 读角色自己那一档。
+- 新会话与换模型时的取值顺序：显式（`--thinking`、卡片 model 的 `:level`）→ 会话自己记录的 → 角色自己的
+  → 全局 `modelThinkingLevels` → 全局 `defaultThinkingLevel`。第三步 pi 没有，`sdk.py` 与
+  `agent_session._get_thinking_level_for_model_switch` 各有一处 `# MISAKA fork:`。
+- `interactive_mode._apply_thinking_level` 先存默认值再切会话：角色文件写不进去时，文件和会话都不变
+  （pi 的全局写不会在这里失败）。设置面板的推理强度项也走这条路。
+- `tests/test_role_thinking_level.py` 钉住以上行为。
+
 ## misaka 新增
 
 ### 顶层文件
@@ -66,7 +80,7 @@ pi 把全局文件放在 `~/.pi/agent/`，这一层的真实作用是让全局�
 | 目录 | 原位置 | 内容 |
 |---|---|---|
 | `platform/` | `misaka/platform/` | 地板：board 的 SQLite、卡片、预算、进程树、会话适配器、提示围栏、工具注册接缝、管理工具名单 |
-| `network/` | `misaka/network/` + 5 个壳 + `extensions/last_order/ally/` + `misaka/observability/board.py` | board 的协调层；`wiring/` 是它的工具面（messages/todo/roster/roster_admin/network）；`ally/` 是把别人的 CLI 当 Sister 跑；`board.py` 是终端渲染（`misaka board` 与 `extensions/observe.py` 共用） |
+| `network/` | `misaka/network/` + 5 个壳 + `extensions/last_order/ally/` + `misaka/observability/board.py` | board 的协调层；`wiring/` 是它的工具面（messages/todo/roster/roster_admin/network）；`ally/` 是经 ACP 驱动别家的 agent 当执行者（运行器 `card`、MCP 桥 `bridge`）；`board.py` 是终端渲染（`misaka board` 与 `extensions/observe.py` 共用） |
 | `research/` | `misaka/research/` + `extensions/last_order/research.py` | 研究流程；`wiring/research.py` 是 Last Order 的 `misaka_research_view` |
 | `subagent/` | `extensions/sisters/subagent/` | 子代理运行时（runtime/child/policy/hooks/agents 与内置定义） |
 | `skills/` | `misaka/skills/` + `extensions/skills.py` | 分层技能索引，**整体替换**了 pi 的 `core/skills.ts`（审计 A-10）；`wiring/skills.py` 是三个工具与守卫 |
@@ -79,7 +93,7 @@ pi 把全局文件放在 `~/.pi/agent/`，这一层的真实作用是让全局�
 原 `misaka/extensions/` 里的每个模块只是一个入口，真代码在别的包里。迁入时壳跟着体走，
 放在体包的 `wiring/` 子目录、**basename 不变**。体包里已有同名模块（`network/messages.py` 与壳 `messages.py`）
 是子目录存在的原因。壳的入口是 `part(spec)`（只贡献工具的是 `register(harn)`，`harn` 是 `ToolCollector`）；
-自包含的（web、subagent、ally、ask_user）入口留在包的 `__init__.py`。
+自包含的（web、subagent、ask_user）入口留在包的 `__init__.py`。
 `part(spec)` 返回的对象：`tools`（`ToolDefinition` 列表）、`commands`（`CoreCommand` 列表）、可选的 `attach(session)`
 （拿到会话，之后直接调会话 API）、以及它需要的时刻方法 `async (event, ctx)`。`context` 是时刻名，part 不得拿它当属性名。
 
@@ -103,6 +117,15 @@ extensions/sisters/             其他角色的槽位（subagent 是 C 类，在
 `build_extensions(spec)` 把它的结果排在 core 条目之前——对应 pi `main.ts` 把 `builtInExtensions` 排在最前。
 pi 没有在 core 里起会话的进程，misaka 有（daemon 里的卡片、子代理子进程），所以需要这个注入点；这是此处唯一的创新。
 裸的内核入口（`engine.main()` 无 options，只有测试走）不装钩子，会话里没有捆绑扩展。
+这条零引用由 `tests/test_extension_boundary.py` 守住（2026-09-29 查出子代理运行时直接 import 了 LCM 的存储模块，
+拔掉 LCM 后所有子代理一启动就失败）。扩展若要让它在子进程里的那份副本知道只有父会话知道的事，就在父进程收
+`subagent_start` 事件（`core/subagent/runtime._extension_environment`，与 hermes 在父进程发的同名 hook 同位），
+把变量写进事件的 `env`；core 自己的变量随后写入，同名时以 core 为准。
+同一个测试还守着另外两条：core 自己的文字（提示词、帮助）不点名任何扩展的工具或功能——工具怎么用写在工具自己的
+`promptGuidelines` 里，研究模式在自定义 SYSTEM.md 下把在场所有工具的说明补回（`research/prompting.system_context`）；
+进程入口只用发现包本身（`discover`、`commands`），不 import 某个扩展（安装向导例外，用户 2026-09-29 认可）。
+扩展要提供顶层命令就在模块里定义 `COMMAND` 与 `command(argv)`（`misaka lcm` 即如此）；压缩结果里哪些是引擎自己
+写的摘要由 `CompactionResult.contextSummaries` 声明，core 不读任何扩展自己的 `details`。
 
 pi 的 `pi install npm:/git:` 与 `~/.pi/agent/extensions/` 安装通道 misaka 未暴露（审计 A-11、A-1），
 `docs/plans/install-uninstall-design-2026-09-03.md` 是那件事的设计稿。

@@ -10,12 +10,13 @@ import hashlib
 import json
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from misaka.core.research import runs
 
 
 class Finding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1)
     claim_type: Literal["fact", "inference", "interpretation", "normative"] = "fact"
     quote: str = ""

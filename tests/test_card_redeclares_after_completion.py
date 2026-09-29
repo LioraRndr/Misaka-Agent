@@ -76,7 +76,8 @@ def _submissions(con, tid):
 
 async def _complete(con, tid, out, part):
     (out / "report.md").write_text("first version\n")
-    part._completion = (1, "delivered")
+    from misaka.core.network import worker
+    worker.declare_completion(con, tasks.get(con, tid), "delivered")   # what misaka_card_complete records
     await _end_turn(part, "delivered")
     assert tasks.get(con, tid)["status"] == "done"
     assert len(_submissions(con, tid)) == 1

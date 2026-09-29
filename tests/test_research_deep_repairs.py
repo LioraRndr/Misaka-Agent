@@ -14,7 +14,6 @@ from misaka.core.research import bundle, planner, runs, window, workflow
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a, **k: None)
     con = tasks.connect(str(tmp_path / "board.db"))
     run = runs.create(
         con,
@@ -251,111 +250,6 @@ async def test_node_session_restores_environment_on_disposal_cancellation(
         if not owner.done():
             owner.cancel()
         await asyncio.gather(owner, return_exceptions=True)
-
-
-@pytest.mark.parametrize("git_enabled", [False, True])
-@pytest.mark.parametrize("separate_connection", [False, True])
-def test_accept_and_reopen_do_not_invert_database_and_card_locks(
-    state, monkeypatch, git_enabled, separate_connection
-):
-    import threading
-
-    import filelock
-
-    from misaka.core.network import dispatch
-    from misaka.core.platform import cards, repo
-
-    con, run, _root = state
-    peer = (
-        tasks.connect(str(Path(run["workspace"]) / "board.db"))
-        if separate_connection
-        else con
-    )
-    tid = cards.create(con, run["workspace"], "fixture card", "fixture body", "fixture")
-    con.execute("UPDATE tasks SET status='done' WHERE id=?", (tid,))
-    cards.set_fields(run["workspace"], tid, status="done")
-    row = tasks.get(con, tid)
-    card_held, db_held = threading.Event(), threading.Event()
-    errors = []
-    real_mirror = tasks._mirror_status
-
-    def mirror(*args, **kwargs):
-        if threading.current_thread().name == "reopen":
-            db_held.set()
-        return real_mirror(*args, **kwargs)
-
-    def enabled(workspace):
-        if threading.current_thread().name == "accept":
-            card_held.set()
-            assert db_held.wait(1)
-            return git_enabled
-        return False
-
-    real_lock = filelock.FileLock
-    # A finite diagnostic timeout breaks the deadlock; production defaults to no timeout.
-    monkeypatch.setattr(
-        filelock,
-        "FileLock",
-        lambda path, *a, **k: real_lock(path, *a, timeout=0.2, **k),
-    )
-    monkeypatch.setattr(tasks, "_mirror_status", mirror)
-    monkeypatch.setattr(repo, "enabled", enabled)
-    monkeypatch.setattr(repo, "commit_card", lambda *a, **k: True)
-    monkeypatch.setattr(dispatch, "index_artifacts", lambda *a, **k: None)
-
-    def accept():
-        try:
-            dispatch.accept_side_effects(
-                con, row, {"artifacts": []}, generation=1, workspace=run["workspace"]
-            )
-        except BaseException as e:  # noqa: BLE001 - forward every test-thread failure to the assertion
-            errors.append(("accept", type(e).__name__, str(e)))
-
-    def reopen():
-        try:
-            assert card_held.wait(1)
-            tasks.reopen_task(peer, tid, target_status="ready", expected_generation=1)
-        except BaseException as e:  # noqa: BLE001 - forward every test-thread failure to the assertion
-            errors.append(("reopen", type(e).__name__, str(e)))
-
-    threads = [
-        threading.Thread(target=accept, name="accept", daemon=True),
-        threading.Thread(target=reopen, name="reopen", daemon=True),
-    ]
-    try:
-        for thread in threads:
-            thread.start()
-        if git_enabled:
-            import json
-            import sys
-            import time
-            import traceback
-
-            assert db_held.wait(1)
-            time.sleep(0.05)
-            frames = sys._current_frames()
-            stacks = {
-                t.name: [
-                    {"file": f.filename, "line": f.lineno, "function": f.name}
-                    for f in traceback.extract_stack(frames[t.ident])
-                ]
-                for t in threads
-                if t.ident in frames
-            }
-            (Path(run["workspace"]) / "lock-order-stacks.json").write_text(
-                json.dumps(stacks, indent=2)
-            )
-        for thread in threads:
-            thread.join(2)
-        assert not any(thread.is_alive() for thread in threads)
-        assert not errors, errors
-    finally:
-        card_held.set()
-        db_held.set()
-        for thread in threads:
-            thread.join(1)
-        if separate_connection:
-            peer.close()
 
 
 @pytest.mark.parametrize("collision", [False, True])

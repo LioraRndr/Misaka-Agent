@@ -145,6 +145,16 @@ def _load_ops(raw, cwd):
     return parsed, ""
 
 
+def _looks_like_ops(text):
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    items = value if isinstance(value, list) else [value]
+    return bool(items) and all(isinstance(item, dict) and len(item) == 1 and isinstance(next(iter(item.values())), dict)
+                               for item in items)
+
+
 def _desugar(parsed):
     """The ops to run, or ``(None, error)``.
 
@@ -154,6 +164,11 @@ def _desugar(parsed):
     """
     shorthand = {name: getattr(parsed, name) for name in _SHORTHAND
                  if getattr(parsed, name) is not None}
+    # The ops grammar sent in `content` -- '{"create": {"content": "..."}}' -- would land in the
+    # file as that JSON text and pass every "file exists" gate (2026-09-28, a 38-byte deliverable).
+    if parsed.ops is None and isinstance(parsed.content, str) and _looks_like_ops(parsed.content):
+        return None, ("content holds the ops grammar; pass that JSON as ops (an array of single-key "
+                      "objects), or pass the file's text itself as content")
     if parsed.ops is not None and shorthand:
         return None, ("pass either ops or content/rows/data, not both: they describe the "
                       "same file two different ways")

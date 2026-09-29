@@ -1,18 +1,22 @@
 """Persistent research-run state and file artifacts.
 
-A run is a tree of nodes (``research_branches``): the root is the first conclusion, every
-other node investigates a material issue raised against its parent's conclusion. Research prose
-lives directly in the project from its first write: ``<workspace>/nodes/<node>/`` per node (its cards
-under ``cards/``) and ``<workspace>/final/`` for run-level products.
-Session transcripts share the existing ``~/.misaka/sessions`` store. SQLite stores only workflow state and relationships, so a
-Last Order process that died can resume the same run.
+A run is a directed acyclic graph of nodes (``research_branches`` joined by ``research_edges``).
+The root (depth 0) is the question as asked; every other node pursues an option of a decision
+some node made -- a possibility (another hypothesis, method, reading, perspective, decomposition,
+or a critique of the question itself), never a correction: corrections stay in their node as
+revision rounds. A node reached by options of several nodes, or opened to carry several finished
+nodes forward together, has several parents. Research prose lives directly in the project from
+its first write: ``<workspace>/nodes/<node>/`` per node (its cards under ``cards/``) and
+``<workspace>/final/`` for run-level products. Session transcripts share the existing
+``~/.misaka/sessions`` store. SQLite is the only authority on the graph; the graph files in the
+project are views written from it and never read back.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
+import re
 import secrets
 import socket
 import sqlite3
@@ -24,9 +28,10 @@ from misaka.config import home
 from misaka.core.platform import tasks as task_store
 from misaka.utils import atomic
 
-_LOG = logging.getLogger(__name__)
-
-REVIEW_KINDS = {"red_team", "final_review"}
+# Cards that review rather than research: a critique records issues, a divergence review records
+# alternatives. Neither feeds the evidence ledger.
+CRITIQUE_KINDS = frozenset({"red_team", "final_review"})
+REVIEW_KINDS = CRITIQUE_KINDS | {"divergence"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS research_actions (
@@ -42,7 +47,6 @@ CREATE TABLE IF NOT EXISTS research_actions (
 CREATE TABLE IF NOT EXISTS research_runs (
   id              TEXT PRIMARY KEY,
   workspace       TEXT NOT NULL,
-  artifact_layout TEXT,
   question        TEXT NOT NULL,
   phase           TEXT NOT NULL,
   status          TEXT NOT NULL,
@@ -62,11 +66,11 @@ CREATE TABLE IF NOT EXISTS research_runs (
 CREATE TABLE IF NOT EXISTS research_branches (
   id              TEXT PRIMARY KEY,
   run_id          TEXT NOT NULL,
-  parent_id       TEXT,
-  trigger_text    TEXT NOT NULL,
+  question        TEXT NOT NULL,
   depth           INTEGER NOT NULL,
   status          TEXT NOT NULL DEFAULT 'queued',
   session_file    TEXT,
+  fork_entry      TEXT,
   context_artifact TEXT,
   runner_pid      INTEGER,
   runner_identity TEXT,
@@ -75,14 +79,64 @@ CREATE TABLE IF NOT EXISTS research_branches (
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS research_edges (
+  run_id          TEXT NOT NULL,
+  child_id        TEXT NOT NULL,
+  parent_id       TEXT NOT NULL,
+  PRIMARY KEY(child_id,parent_id)
+);
+CREATE TABLE IF NOT EXISTS research_decisions (
+  id              TEXT PRIMARY KEY,
+  run_id          TEXT NOT NULL,
+  node_id         TEXT NOT NULL,
+  round           INTEGER NOT NULL,
+  origin          TEXT NOT NULL,
+  question        TEXT NOT NULL,
+  stakes          TEXT NOT NULL,
+  created_at      INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_options (
+  id              TEXT PRIMARY KEY,
+  run_id          TEXT NOT NULL,
+  decision_id     TEXT NOT NULL,
+  label           TEXT NOT NULL,
+  premise         TEXT NOT NULL,
+  node_id         TEXT,
+  reason          TEXT,
+  created_at      INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_relations (
+  id              TEXT PRIMARY KEY,
+  run_id          TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  note            TEXT NOT NULL,
+  created_at      INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_relation_nodes (
+  relation_id     TEXT NOT NULL,
+  node_id         TEXT NOT NULL,
+  position        INTEGER NOT NULL,
+  PRIMARY KEY(relation_id,node_id)
+);
+CREATE TABLE IF NOT EXISTS research_reconciles (
+  run_id          TEXT NOT NULL,
+  round           INTEGER NOT NULL,
+  payload_json    TEXT NOT NULL,
+  session_file    TEXT NOT NULL,
+  tool_call_id    TEXT NOT NULL,
+  approved_call_id TEXT,
+  receipt_json    TEXT,
+  applied_at      INTEGER,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY(run_id,round)
+);
 CREATE TABLE IF NOT EXISTS research_run_tasks (
   task_id         TEXT PRIMARY KEY,
   run_id          TEXT NOT NULL,
   branch_id       TEXT NOT NULL,
   kind            TEXT NOT NULL,
-  wave            INTEGER NOT NULL DEFAULT 0,
+  round           INTEGER NOT NULL DEFAULT 1,
   local_id        TEXT,
-  issue_id        TEXT,
   depends_json    TEXT NOT NULL DEFAULT '[]',
   created_at      INTEGER NOT NULL
 );
@@ -90,14 +144,17 @@ CREATE TABLE IF NOT EXISTS research_issues (
   id              TEXT PRIMARY KEY,
   run_id          TEXT NOT NULL,
   branch_id       TEXT NOT NULL,
-  wave            INTEGER NOT NULL,
+  task_id         TEXT NOT NULL,
+  round           INTEGER NOT NULL,
+  origin          TEXT NOT NULL,
   kind            TEXT NOT NULL,
   question        TEXT NOT NULL,
   rationale       TEXT NOT NULL,
   priority        INTEGER NOT NULL DEFAULT 0,
-  status          TEXT NOT NULL DEFAULT 'open',
+  disposition     TEXT,
+  option_id       TEXT,
+  covered_by      TEXT,
   reason          TEXT,
-  child_branch_id TEXT,
   created_at      INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS research_artifacts (
@@ -135,8 +192,15 @@ CREATE TABLE IF NOT EXISTS research_claims (
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS research_branches_run ON research_branches(run_id,depth);
+CREATE INDEX IF NOT EXISTS research_edges_parent ON research_edges(parent_id);
+CREATE INDEX IF NOT EXISTS research_edges_run ON research_edges(run_id);
+CREATE INDEX IF NOT EXISTS research_decisions_run ON research_decisions(run_id,node_id);
+CREATE INDEX IF NOT EXISTS research_options_run ON research_options(run_id,decision_id);
+CREATE INDEX IF NOT EXISTS research_relations_run ON research_relations(run_id);
+CREATE INDEX IF NOT EXISTS research_relation_nodes_node ON research_relation_nodes(node_id);
 CREATE INDEX IF NOT EXISTS research_tasks_run ON research_run_tasks(run_id,branch_id,kind);
-CREATE INDEX IF NOT EXISTS research_issues_run ON research_issues(run_id,branch_id,status);
+CREATE INDEX IF NOT EXISTS research_issues_run ON research_issues(run_id,branch_id,round);
+CREATE INDEX IF NOT EXISTS research_issues_option ON research_issues(option_id);
 CREATE INDEX IF NOT EXISTS research_artifacts_run ON research_artifacts(run_id,branch_id,kind);
 CREATE UNIQUE INDEX IF NOT EXISTS research_artifacts_generated ON research_artifacts(run_id,path) WHERE task_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS research_artifacts_task ON research_artifacts(run_id,task_id,path) WHERE task_id IS NOT NULL;
@@ -146,19 +210,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS research_tasks_local ON research_run_tasks(run
 """
 
 ACTIVE = ("active", "waiting_input", "stopping")
+# closed = the node's own work is done. Its options wait for the level's reconciliation and its
+# children run on their own: neither is the node's status.
 NODE_TERMINAL = ("closed", "failed", "parked")
-# closing = own research complete, waiting for child nodes; no filesystem merge
-DEFAULT_LIMITS = {"max_depth": 3, "parallel": 4, "sister_parallel": 4, "max_followups": 2}
+DEFAULT_LIMITS = {"max_depth": 3, "parallel": 4, "sister_parallel": 4, "max_followups": 2,
+                  "max_revisions": 2, "max_nodes": 30}
+MAX_NODES_CEILING = 500
 # A run's own compaction threshold, as a share of the context window: below a tenth a session would
 # compact on nearly every turn, above 0.95 there is no room left to compact into.
 MIN_CONTEXT_THRESHOLD, MAX_CONTEXT_THRESHOLD = 0.1, 0.95
-RESEARCH_SCHEMA_VERSION = 16   # task planning stays in the card session; no separate plan-artifact link
+RESEARCH_SCHEMA_VERSION = 18   # typed issue destinations (option_id, covered_by); relation members as rows
 DRIVER_TTL_SECONDS = 300
 RESEARCH_TABLES = (
-    "research_actions",
+    "research_actions", "research_reconciles",
     "research_claims", "research_findings", "research_artifacts",
-    "research_issues", "research_run_tasks", "research_branches", "research_runs",
+    "research_issues", "research_relation_nodes", "research_relations", "research_options", "research_decisions",
+    "research_run_tasks", "research_edges", "research_branches", "research_runs",
 )
+# What Last Order may answer a red-team issue with; one she took to her decision ends as ``branch``
+# (``option_id`` = the option that takes it up) or, not opened, as ``covered`` (``covered_by``, or the
+# ``option_id`` of an option waiting to be opened) or ``decline``.
+CRITIQUE_DISPOSITIONS = ("revise", "correct", "rebut", "concede", "covered", "park", "branch")
+# What becomes of a divergence proposal at the node's decision. A gap is not a proposal: the
+# divergence review's gaps join the node's own review, to be filled before it forks.
+PROPOSAL_DISPOSITIONS = ("branch", "covered", "decline")
+RELATION_KINDS = ("converge", "diverge", "resonates", "appropriates", "displaces")
 
 
 def _execute_script(con, source):
@@ -189,14 +265,13 @@ def _savepoint(con):
 
 
 def _schema_state(con):
-    """One read snapshot of the table, current marker and newest marker."""
+    """One read snapshot of the table and the current marker."""
     row = con.execute(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_runs'),"
-        "EXISTS(SELECT 1 FROM schema_migrations WHERE component='research' AND version=?),"
-        "(SELECT MAX(version) FROM schema_migrations WHERE component='research')",
+        "EXISTS(SELECT 1 FROM schema_migrations WHERE component='research' AND version=?)",
         (RESEARCH_SCHEMA_VERSION,),
     ).fetchone()
-    return bool(row[0]), bool(row[1]), row[2]
+    return bool(row[0]), bool(row[1])
 
 
 def _matches_current_schema(con):
@@ -236,7 +311,7 @@ def _validate_current_schema(con):
 
 
 def init(con):
-    has_runs, current, _newest = _schema_state(con)
+    has_runs, current = _schema_state(con)
     if has_runs and current:
         _validate_current_schema(con)
         return                               # the normal read path takes no SQLite write lock
@@ -244,7 +319,7 @@ def init(con):
     # tables, indexes and the version marker under one explicit transaction.
     with task_store.write_txn(con), _savepoint(con):
         # Another process may have created the schema while this one waited for BEGIN IMMEDIATE.
-        has_runs, current, _newest = _schema_state(con)
+        has_runs, current = _schema_state(con)
         if has_runs and current:
             _validate_current_schema(con)
             return
@@ -314,24 +389,24 @@ def release_driver(con, run_id, lock):
 SETTLED_TASK_STATUSES = frozenset({"running", "review", "done", "failed", "stopped", "archived"})
 
 
-ARTIFACT_LAYOUT = "by-node"
-LAYOUTS = frozenset({"project-flat", ARTIFACT_LAYOUT})
+def node_dir(node_id):
+    """The folder a node owns: ``nodes/<node id>``, the root included. Flat on purpose: a node
+    with several parents has no single place in a nested tree."""
+    return os.path.join("nodes", node_id)
 
 
-def _by_node(run):
-    return run["artifact_layout"] == ARTIFACT_LAYOUT
-
-
-def require_layout(run):
-    if run["artifact_layout"] not in LAYOUTS:
-        raise ValueError("This run used the removed worktree layout; start a new run. "
-                         "Its artifacts and sessions are preserved.")
-
-
-def node_dir(run, branch_id=None):
-    """The folder a node owns under the by-node layout: ``nodes/<branch id>``, the root's named
-    by the run id (it has no branch id of its own in artifact scopes)."""
-    return os.path.join("nodes", branch_id or run["id"])
+def _bounded_int(raw, key, low, high):
+    value = raw.get(key, DEFAULT_LIMITS[key])
+    message = f"{key} must be an integer between {low} and {high}"
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(message)  # noqa: TRY004 - startup callers surface ValueError
+    try:
+        value = int(value)
+    except ValueError as error:
+        raise ValueError(message) from error
+    if not low <= value <= high:
+        raise ValueError(message)
+    return value
 
 
 def normalize_limits(raw=None):
@@ -357,18 +432,18 @@ def normalize_limits(raw=None):
         if value < 1:
             raise ValueError(f"{key} must be a positive integer")
         concurrency[key] = value
-    # How many more times a node may send its Sisters out after its first cards are back,
-    # before it must conclude. Conversation with the user is never counted.
-    followups = raw.get("max_followups", DEFAULT_LIMITS["max_followups"])
-    if isinstance(followups, bool) or not isinstance(followups, (int, str)):
-        raise ValueError("max_followups must be an integer between 0 and 6")  # noqa: TRY004 - startup callers surface ValueError
-    try:
-        followups = int(followups)
-    except ValueError as error:
-        raise ValueError("max_followups must be an integer between 0 and 6") from error
-    if not 0 <= followups <= 6:
-        raise ValueError("max_followups must be an integer between 0 and 6")
-    result = {"max_depth": depth, **concurrency, "max_followups": followups}
+    result = {
+        "max_depth": depth, **concurrency,
+        # How many more times a node may send its Sisters out after its first cards are back, over
+        # its whole life (before its first conclusion and while revising one). Conversation with
+        # the user is never counted.
+        "max_followups": _bounded_int(raw, "max_followups", 0, 6),
+        # How many times a node may revise its conclusion after a red-team review; each revision
+        # is reviewed again. 0 = the first conclusion is final and every issue is answered otherwise.
+        "max_revisions": _bounded_int(raw, "max_revisions", 0, 6),
+        # How many nodes the whole graph may hold, the root included; checked when options open.
+        "max_nodes": _bounded_int(raw, "max_nodes", 1, MAX_NODES_CEILING),
+    }
     if "plan_approval" in raw:
         if not isinstance(raw["plan_approval"], bool):
             raise ValueError("plan_approval must be a boolean")
@@ -486,10 +561,10 @@ def task_contexts(con):
         return {}
     init(con)
     return {row["task_id"]: dict(row) for row in con.execute(
-        "SELECT t.task_id,t.run_id,t.branch_id AS node_id,b.depth,t.issue_id,t.kind,"
-        "r.workspace,r.origin_session,b.trigger_text AS node_question,i.question AS issue_question "
+        "SELECT t.task_id,t.run_id,t.branch_id AS node_id,b.depth,t.kind,t.round,"
+        "r.workspace,r.origin_session,b.question AS node_question "
         "FROM research_run_tasks t JOIN research_runs r ON r.id=t.run_id "
-        "JOIN research_branches b ON b.id=t.branch_id LEFT JOIN research_issues i ON i.id=t.issue_id")}
+        "JOIN research_branches b ON b.id=t.branch_id")}
 
 
 def project_name(run):
@@ -517,7 +592,7 @@ def is_active(con, run_id):
 
 def ensure_layout(run):
     root = Path(run["workspace"])
-    for rel in (("nodes", "final") if _by_node(run) else ("root", "forks")):
+    for rel in ("nodes", "final"):
         (root / rel).resolve().relative_to(root.resolve())
         (root / rel).mkdir(parents=True, exist_ok=True)
     return str(root)
@@ -527,64 +602,39 @@ def _atomic_write(path, content):
     atomic.write_text(path, content)
 
 
-def _output_pathspec(workspace, row):
-    """A card's output folder for git, minus the derived bundle rebuilt at every settle
-    (``SOURCES.md`` and the hard-linked ``sources/``): the originals it points at are what
-    the commit records."""
-    output_dir = row["output_dir"] if "output_dir" in row.keys() else None  # noqa: SIM118 - sqlite3.Row has no key membership
-    if not output_dir:
-        return []
-    real = os.path.realpath(output_dir)
-    if not real.startswith(workspace + os.sep):
-        return []
-    rel = os.path.relpath(real, workspace)
-    bundle = [f":(exclude){os.path.join(rel, name)}" for name in ("sources", "SOURCES.md")]
-    # Sisters run scripts in their folders and Finder visits them; neither leaves history.
-    junk = [f":(exclude,glob){rel}/**/{pattern}" for pattern in ("__pycache__/**", "*.pyc", ".DS_Store")]
-    return [rel, *bundle, *junk]
-
-
-def _commit(con, run, message):
-    """Commit project-local artifacts; Git is history, not a delivery mechanism.
-
-    Research cards are not committed one by one at acceptance, so the node and run commits carry
-    each card's contract (``cards/<id>.md``), attachment folder and output folder along with the
-    artifacts. Under the by-node layout the output folder is ``nodes/<node>/cards/<id>``; the
-    project-flat ``cards/<id>`` entry was the only one until 2026-09-24, and a whole run's
-    Sister work stayed outside git."""
-    from misaka.core.platform import repo
-    workspace = os.path.realpath(run["workspace"])
-    paths = [os.path.relpath(a["path"], workspace) for a in artifacts(con, run["id"])]
-    for row in tasks(con, run["id"]):
-        paths += [os.path.join("cards", f"{row['id']}.md"), os.path.join("cards", str(row["id"]))]
-        paths += _output_pathspec(workspace, row)
-    if not repo.commit(workspace, [*paths, "PROJECT.md"], message) and repo.enabled(workspace):
-        _LOG.warning("Research %s: git recorded nothing for %r (%d path(s))", run["id"], message, len(paths))
-
-
 def _artifact_name(name):
     if not name or Path(name).name != name or name in {".", ".."} or "\\" in name:
         raise ValueError("Generated research artifacts need a filename, not a directory path.")
     return name
 
 
-def generated_path(run, name, *, branch_id=None):
-    """A node's artifact, relative to the project: ``nodes/<node>/<name>`` under the by-node
-    layout; ``root/<run>-<name>`` or ``forks/<node>-<name>`` under project-flat."""
-    name = _artifact_name(name)
-    if _by_node(run):
-        return os.path.join(node_dir(run, branch_id), name)
-    return os.path.join("forks" if branch_id else "root", f"{branch_id or run['id']}-{name}")
+def versioned(name, version):
+    """``synthesis.md`` for version 1, ``synthesis-<n>.md`` after: how every per-version product of a
+    node is named (plans, conclusions, deliberations, a red team's critique of each version)."""
+    stem, ext = os.path.splitext(name)
+    return name if int(version) <= 1 else f"{stem}-{int(version)}{ext}"
+
+
+def version_of(path, name):
+    """The version ``versioned(name, n)`` put in ``path``'s file name, or None for another file."""
+    stem, ext = os.path.splitext(name)
+    base = os.path.basename(str(path))
+    if base == name:
+        return 1
+    match = re.fullmatch(re.escape(stem) + r"-(\d+)" + re.escape(ext), base)
+    return int(match.group(1)) if match else None
+
+
+def generated_path(name, *, node_id):
+    """A node's artifact, relative to the project: ``nodes/<node>/<name>``."""
+    return os.path.join(node_dir(node_id), _artifact_name(name))
 
 
 def run_path(run, name):
     """A run-level product (question, clarifications, survey, draft, final, partial, workspace
-    index): ``final/<run>-<name>`` under the by-node layout, so the run's deliverables and the
-    sources they cite sit in one folder; project-flat keeps them beside the root artifacts."""
-    name = _artifact_name(name)
-    if _by_node(run):
-        return os.path.join("final", f"{run['id']}-{name}")
-    return generated_path(run, name)
+    index, graph views): ``final/<run>-<name>``, so the run's deliverables and the sources they
+    cite sit in one folder and two runs of one project never overwrite each other."""
+    return os.path.join("final", f"{run['id']}-{_artifact_name(name)}")
 
 
 def create(con, *, workspace, question, limits=None, token_start=0, origin_session=None):
@@ -604,9 +654,9 @@ def create(con, *, workspace, question, limits=None, token_start=0, origin_sessi
     with task_store.write_txn(con):
         con.execute(
             "INSERT INTO research_runs "
-            "(id,workspace,artifact_layout,question,phase,status,limits_json,token_start,origin_session,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, workspace, ARTIFACT_LAYOUT, question, "created", "active",
+            "(id,workspace,question,phase,status,limits_json,token_start,origin_session,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (run_id, workspace, question, "created", "active",
              json.dumps(spec, ensure_ascii=False), int(token_start), origin_session, now, now),
         )
         row = get(con, run_id)
@@ -616,7 +666,7 @@ def create(con, *, workspace, question, limits=None, token_start=0, origin_sessi
 
 {question}
 """)
-        create_node(con, run_id, trigger=question, parent_id=None, depth=0)
+        create_node(con, run_id, question=question, parents=())
     return get(con, run_id)
 
 
@@ -675,8 +725,6 @@ def set_state(con, run_id, *, phase=None, status=None, error=None,
     cur = con.execute(f"UPDATE research_runs SET {','.join(fields)} WHERE {where}", values)
     if driver_lock is not None and cur.rowcount != 1:
         raise RuntimeError(f"Research run {run_id}: driver lease lost.")
-    # No commit per phase: Git records a node when it reaches a terminal state (set_node) and
-    # the run when it ends (workflow), not every step in between.
     return get(con, run_id)
 
 
@@ -699,7 +747,6 @@ def _resume(con, run_id, *, driver_lock, clarification):
     current = get(con, run_id)
     if current is None:
         raise ValueError(f"Research run not found: {run_id}")
-    require_layout(current)
     if current["status"] == "done":
         raise ValueError(f"Research run {run_id} is done; start a new run instead of resuming it.")
     if (current["driver_lock"] and current["driver_lock"] != driver_lock
@@ -715,9 +762,29 @@ def _resume(con, run_id, *, driver_lock, clarification):
         round, previous = current_plan(con, run_id, branch["id"])
         if previous and previous["payload"].get("status") == "clarify":
             delete_action(con, run_id, branch["id"], plan_key(round))
-    # A failed card is retried like a stopped one: without this the node it killed replays the
-    # identical failure on every resume, and the only way out is editing this database by hand.
-    for row in tasks(con, run_id):
+    reopen_cards(con, run_id)
+    # A failed node replans: every phase of ``_expand`` is idempotent over what it already
+    # produced (saved plans, cards and project-local artifacts), so it picks up its own work.
+    con.execute(
+        "UPDATE research_branches SET status='planning',updated_at=? "
+        "WHERE run_id=? AND status IN ('waiting_input','awaiting_approval','failed')", (int(time.time()), run_id),
+    )
+    con.execute(
+        "UPDATE research_runs SET stop_requested=0,status='active',phase='active',last_error='',"
+        "updated_at=? WHERE id=?", (int(time.time()), run_id),
+    )
+    return get(con, run_id)
+
+
+def reopen_cards(con, run_id, node_id=None):
+    """Send the run's (or one node's) stopped, failed and unusable cards back to their Sisters.
+    A failed card is retried like a stopped one: without this the node it killed replays the
+    identical failure on every resume, and the only way out is editing this database by hand.
+    A card its node went on without stays as it is."""
+    given_up = given_up_cards(con, run_id, node_id)
+    for row in tasks(con, run_id, node_id=node_id):
+        if row["id"] in given_up:
+            continue
         unusable = row["status"] == "done" and (
             task_store.latest_payload(con, row["id"], "research_review_missing", generation=row["generation"])
             or _drift_after_declaration(con, row["id"], int(row["generation"])))
@@ -732,17 +799,34 @@ def _resume(con, run_id, *, driver_lock, clarification):
                 con, row["id"], "research_resumed",
                 {"from_generation": row["generation"]}, generation=int(row["generation"]) + 1,
             )
-    # A failed node replans: every phase of ``_expand`` is idempotent over what it already
-    # produced (saved plans, cards and project-local artifacts), so it picks up its own work.
-    con.execute(
-        "UPDATE research_branches SET status='planning',updated_at=? "
-        "WHERE run_id=? AND status IN ('waiting_input','awaiting_approval','failed')", (int(time.time()), run_id),
-    )
-    con.execute(
-        "UPDATE research_runs SET stop_requested=0,status='active',phase='active',last_error='',"
-        "updated_at=? WHERE id=?", (int(time.time()), run_id),
-    )
-    return get(con, run_id)
+
+
+RETRY_LIMIT = 3     # ponytail: a fixed cap; a node that fails a fourth time needs a person, not a loop
+
+
+def retry_node(con, run, node_id, *, session_file, tool_call_id):
+    """Last Order's retry of a failed node, without waiting for the level to end and the run to
+    be resumed: its failed cards go back to their Sisters and it replans -- every phase picks up
+    what it already produced, as on a resume. While the level still runs, its driver starts the
+    node again as soon as a slot is free; after the level, the resume does. Each retry is the
+    node's command ``retry:<call>``; ``RETRY_LIMIT`` of them end the loop."""
+    current = node(con, node_id)
+    if current is None or current["run_id"] != run["id"]:
+        raise ValueError(f"No node {node_id} in run {run['id']}.")
+    if current["status"] != "failed":
+        raise ValueError(f"Node {node_id} is {current['status']}, not failed; only a failed node is retried.")
+    tried = con.execute("SELECT COUNT(*) FROM research_actions WHERE branch_id=? AND action_key LIKE 'retry:%'",
+                        (node_id,)).fetchone()[0]
+    if tried >= RETRY_LIMIT:
+        raise ValueError(f"Node {node_id} was already retried {tried} times; its failure needs the user.")
+    with task_store.write_txn(con):
+        reopen_cards(con, run["id"], node_id)
+        con.execute("UPDATE research_branches SET status='planning',last_error=NULL,updated_at=? WHERE id=?",
+                    (int(time.time()), node_id))
+        con.execute("INSERT INTO research_actions VALUES (?,?,?,?,?,?,?)",
+                    (run["id"], node_id, f"retry:{tool_call_id}", json.dumps({"attempt": tried + 1}),
+                     home.stored(session_file), tool_call_id, int(time.time())))
+    return tried + 1
 
 
 def _drift_after_declaration(con, task_id, generation):
@@ -766,31 +850,25 @@ def task_count(con, run_id):
     ).fetchone()[0]
 
 
-def link_task(con, run_id, task_id, *, kind, node,
-              local_id=None, issue_id=None, dependencies=(), round=1):
+def link_task(con, run_id, task_id, *, kind, node, local_id=None, dependencies=(), round=1):
     """Attach a card to a node; one project-local output directory protects concurrent cards.
-    ``round`` is the planning round the card belongs to (a node may plan more than once)."""
+    ``round`` is the card's round within its kind: a research card's planning round, a red-team
+    card's review round (a node may plan, and be reviewed, more than once)."""
     run = get(con, run_id)
     if not run:
         raise ValueError(f"Research run not found: {run_id}")
     task = task_store.get(con, task_id)
     if task is None or os.path.realpath(task["workspace"]) != run["workspace"]:
         raise ValueError("Research cards must execute in the run's project folder.")
-    if _by_node(run):
-        # The card lives inside its node's folder: nodes/<node>/cards/<card>.
-        output_dir = Path(run["workspace"], node_dir(run, node["id"] if node["parent_id"] else None), "cards", task_id)
-    else:
-        output_dir = Path(run["workspace"], "forks" if node["parent_id"] else "root", task_id)
+    # The card lives inside its node's folder: nodes/<node>/cards/<card>.
+    output_dir = Path(run["workspace"], node_dir(node["id"]), "cards", task_id)
     output_dir.resolve().relative_to(Path(run["workspace"]).resolve())
-    if issue_id is None:
-        origin = con.execute("SELECT id FROM research_issues WHERE child_branch_id=?", (node["id"],)).fetchone()
-        issue_id = origin["id"] if origin else None
     dependencies = list(dependencies)
     con.execute(
         "INSERT INTO research_run_tasks "
-        "(task_id,run_id,branch_id,kind,wave,local_id,issue_id,depends_json,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (task_id, run_id, node["id"], kind, int(round), local_id, issue_id,
+        "(task_id,run_id,branch_id,kind,round,local_id,depends_json,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (task_id, run_id, node["id"], kind, int(round), local_id,
          json.dumps(dependencies, ensure_ascii=False), int(time.time())),
     )
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -821,11 +899,10 @@ def link_task(con, run_id, task_id, *, kind, node,
             raise RuntimeError(f"Research dependency could not be linked onto {task_id}: {error}") from error
 
 
-def tasks(con, run_id, *, kind=None, node_id=None, issue_id=None, round=None):
+def tasks(con, run_id, *, kind=None, node_id=None, round=None):
     q, args = (
-        ("SELECT t.*,rt.branch_id,rt.kind AS research_kind,rt.wave,"
-        "rt.local_id,rt.issue_id,rt.depends_json "
-        "FROM research_run_tasks rt JOIN tasks t ON t.id=rt.task_id WHERE rt.run_id=?"),
+        ("SELECT t.*,rt.branch_id,rt.kind AS research_kind,rt.round,rt.local_id,rt.depends_json "
+         "FROM research_run_tasks rt JOIN tasks t ON t.id=rt.task_id WHERE rt.run_id=?"),
         [run_id],
     )
     if kind:
@@ -834,63 +911,84 @@ def tasks(con, run_id, *, kind=None, node_id=None, issue_id=None, round=None):
     if node_id is not None:
         q += " AND rt.branch_id=?"
         args.append(node_id)
-    if issue_id is not None:
-        q += " AND rt.issue_id=?"
-        args.append(issue_id)
     if round is not None:
-        q += " AND rt.wave=?"
+        q += " AND rt.round=?"
         args.append(int(round))
     return con.execute(q + " ORDER BY rt.created_at", args).fetchall()
 
 
-# --- nodes: the research tree ---------------------------------------------------------
+# --- nodes: the research graph --------------------------------------------------------
 
-def create_node(con, run_id, *, trigger, parent_id, depth):
+def create_node(con, run_id, *, question, parents):
+    """A node and its edges, in the caller's transaction. Its depth is one more than its deepest
+    parent's (0 for the root, the only node without parents). Every parent already exists when
+    its child is written and edges never change, so the graph stays acyclic without a cycle check."""
     run = get(con, run_id)
     if not run:
         raise ValueError(f"Research run not found: {run_id}")
-    if int(depth) > limits(run)["max_depth"]:
+    parent_ids = list(dict.fromkeys(parents))
+    rows = [node(con, parent_id) for parent_id in parent_ids]
+    if any(row is None or row["run_id"] != run_id for row in rows):
+        raise ValueError("A node's parents must be nodes of the same run.")
+    existing = con.execute("SELECT COUNT(*) FROM research_branches WHERE run_id=?", (run_id,)).fetchone()[0]
+    if not rows and existing:
+        raise ValueError("A run has one root; every later node has parents.")
+    depth = max(int(row["depth"]) for row in rows) + 1 if rows else 0
+    chosen = limits(run)
+    if depth > chosen["max_depth"]:
         raise RuntimeError("The research run has reached its depth limit.")
+    if existing >= chosen["max_nodes"]:
+        raise RuntimeError("The research run has reached its node limit.")
     bid = "b_" + secrets.token_hex(5)
     now = int(time.time())
     con.execute(
-        "INSERT INTO research_branches "
-        "(id,run_id,parent_id,trigger_text,depth,status,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,'queued',?,?)",
-        (bid, run_id, parent_id, str(trigger), int(depth), now, now),
+        "INSERT INTO research_branches (id,run_id,question,depth,status,created_at,updated_at) "
+        "VALUES (?,?,?,?,'queued',?,?)",
+        (bid, run_id, " ".join(str(question).split()), depth, now, now),
     )
+    con.executemany("INSERT INTO research_edges (run_id,child_id,parent_id) VALUES (?,?,?)",
+                    [(run_id, bid, parent_id) for parent_id in parent_ids])
     return node(con, bid)
-
-
-def assign_child(con, run_id, parent, issue_id):
-    """One accepted issue assignment creates exactly one depth+1 node, including on replay."""
-    with task_store.write_txn(con):
-        item = issue(con, issue_id)
-        if item is None or item["run_id"] != run_id or item["branch_id"] != parent["id"]:
-            raise ValueError("Child assignment must reference this node's material issue.")
-        if item["child_branch_id"]:
-            return node(con, item["child_branch_id"])
-        child = create_node(con, run_id, trigger=item["question"], parent_id=parent["id"], depth=parent["depth"] + 1)
-        set_issue(con, issue_id, "assigned", child_branch_id=child["id"])
-        return child
 
 
 def node(con, node_id):
     return con.execute("SELECT * FROM research_branches WHERE id=?", (node_id,)).fetchone()
 
 
-def nodes(con, run_id, *, parent_id=None):
-    q, args = "SELECT * FROM research_branches WHERE run_id=?", [run_id]
-    if parent_id is not None:
-        q += " AND parent_id=?"
-        args.append(parent_id)
-    return con.execute(q + " ORDER BY depth,created_at", args).fetchall()
+def nodes(con, run_id):
+    return con.execute("SELECT * FROM research_branches WHERE run_id=? ORDER BY depth,created_at,rowid",
+                       (run_id,)).fetchall()
+
+
+def is_root(node):
+    return int(node["depth"]) == 0
+
+
+def root(con, run_id):
+    return con.execute("SELECT * FROM research_branches WHERE run_id=? AND depth=0", (run_id,)).fetchone()
+
+
+def parents(con, node_id):
+    return con.execute(
+        "SELECT b.* FROM research_edges e JOIN research_branches b ON b.id=e.parent_id "
+        "WHERE e.child_id=? ORDER BY b.depth,b.created_at,b.rowid", (node_id,)).fetchall()
+
+
+def children(con, node_id):
+    return con.execute(
+        "SELECT b.* FROM research_edges e JOIN research_branches b ON b.id=e.child_id "
+        "WHERE e.parent_id=? ORDER BY b.depth,b.created_at,b.rowid", (node_id,)).fetchall()
+
+
+def edges(con, run_id):
+    return con.execute("SELECT child_id,parent_id FROM research_edges WHERE run_id=? ORDER BY rowid",
+                       (run_id,)).fetchall()
 
 
 def next_level(con, run_id):
     """The BFS frontier: every node still expanding at the shallowest such depth, oldest first.
-    Closing nodes wait for their children, not another model process."""
-    rows = [n for n in nodes(con, run_id) if n["status"] not in ("closing", *NODE_TERMINAL)]
+    A node deeper than all its parents never runs before them."""
+    rows = [n for n in nodes(con, run_id) if n["status"] not in NODE_TERMINAL]
     return [n for n in rows if n["depth"] == rows[0]["depth"]] if rows else []
 
 
@@ -907,54 +1005,269 @@ def set_node(con, node_id, *, status=None, session_file=None, context_artifact=N
         if owner is not None:
             check_owner(con, *owner)
         con.execute(f"UPDATE research_branches SET {','.join(fields)} WHERE id=?", values)
-        if status is not None:
-            # Lifecycle only, never a scientific verdict.
-            issue_status = "researched" if status == "closed" else "parked" if status in NODE_TERMINAL else "assigned"
-            con.execute("UPDATE research_issues SET status=? WHERE child_branch_id=?", (issue_status, node_id))
-    row = node(con, node_id)
-    if status in NODE_TERMINAL:
-        # One commit per node, once its work is over and the row already says so: the history
-        # records what the node delivered, not each phase it passed through.
-        _commit(con, get(con, row["run_id"]), f"research {row['run_id']}/{node_id}: {status}")
-    return row
+    return node(con, node_id)
 
 
-def add_issue(con, run_id, *, node, kind, question, rationale, priority=0):
+def set_fork_entry(con, node_id, entry):
+    """Where the node's own conversation begins in its session: the last entry it inherited (a
+    fork's parent turns, or the root window's turns before the run). None = the whole session."""
+    con.execute("UPDATE research_branches SET fork_entry=?,updated_at=? WHERE id=?",
+                (entry, int(time.time()), node_id))
+
+
+# --- issues: what review cards raised, and what Last Order did with each ------------------
+
+def add_issue(con, run_id, *, node, task_id, round, origin, kind, question, rationale, priority=0):
+    """One issue a review card raised: a red-team issue (``origin='critique'``) or a divergence
+    proposal (``origin='divergence'``). Only an exact repeat inside the same card, case and
+    whitespace aside, is the same issue: the same question from another card or another node is
+    its own, answered by its own Last Order. Semantic judgement is Last Order's, never a match here."""
     question = str(question or "").strip()
     if not question:
         return None
-    # Only exact matches after case/whitespace normalization, and only inside the same node, count
-    # as duplicates: another node raising the same question keeps its own issue so its Last Order sees
-    # it. Semantic merging is Last Order's job.
     normalized = " ".join(question.casefold().split())
-    for row in con.execute("SELECT id,question FROM research_issues WHERE run_id=? AND branch_id=?",
-                           (run_id, node["id"])):
+    for row in con.execute("SELECT id,question FROM research_issues WHERE task_id=?", (task_id,)):
         if " ".join(row["question"].casefold().split()) == normalized:
             return row["id"]
     iid = "i_" + secrets.token_hex(5)
     con.execute(
         "INSERT INTO research_issues "
-        "(id,run_id,branch_id,wave,kind,question,rationale,priority,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (iid, run_id, node["id"], int(node["depth"]), str(kind or "unclassified"), question,
+        "(id,run_id,branch_id,task_id,round,origin,kind,question,rationale,priority,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (iid, run_id, node["id"], task_id, int(round), origin, str(kind or "unclassified"), question,
          str(rationale or ""), int(priority or 0), int(time.time())),
     )
     return iid
 
 
-def issues(con, run_id, *, node_id=None, status=None):
+def issues(con, run_id, *, node_id=None, round=None, origin=None, option_id=None):
     q, args = "SELECT * FROM research_issues WHERE run_id=?", [run_id]
-    if node_id is not None:
-        q += " AND branch_id=?"
-        args.append(node_id)
-    if status is not None:
-        q += " AND status=?"
-        args.append(status)
-    return con.execute(q + " ORDER BY priority DESC,created_at", args).fetchall()
+    for column, value in (("branch_id", node_id), ("round", round), ("origin", origin), ("option_id", option_id)):
+        if value is not None:
+            q += f" AND {column}=?"
+            args.append(value)
+    return con.execute(q + " ORDER BY round,priority DESC,created_at,rowid", args).fetchall()
 
 
 def issue(con, issue_id):
     return con.execute("SELECT * FROM research_issues WHERE id=?", (issue_id,)).fetchone()
+
+
+def dispose(con, issue_id, disposition, *, option=None, covered_by=None, reason=None):
+    """What Last Order did with one issue. Recorded from her accepted command, never inferred:
+    ``option`` is the option that takes the issue up -- a ``branch`` issue's own, or the option
+    waiting to be opened that a ``covered`` one falls under -- ``covered_by`` the node that already
+    pursues a ``covered`` one."""
+    con.execute("UPDATE research_issues SET disposition=?,option_id=?,covered_by=?,reason=? WHERE id=?",
+                (disposition, option, covered_by, reason, issue_id))
+
+
+def destination(issue):
+    """Where an issue went, in words: the option that takes it up or the node that covers it."""
+    if issue["option_id"]:
+        return f"option {issue['option_id']}"
+    if issue["covered_by"]:
+        return f"node {issue['covered_by']}"
+    return None
+
+
+def errata(con, run_id):
+    """Corrections recorded against conclusions of this run, oldest first. Each is a node's command
+    (``erratum:<call>``): ``raised_by`` is that node, ``node`` the one corrected."""
+    return [{"raised_by": row["branch_id"], **json.loads(row["payload_json"])} for row in con.execute(
+        "SELECT branch_id,payload_json FROM research_actions WHERE run_id=? AND action_key LIKE 'erratum:%' "
+        "ORDER BY created_at,rowid", (run_id,))]
+
+
+# --- decisions and options -------------------------------------------------------------
+
+def _derived_id(prefix, *parts):
+    """An id fixed by where the record came from, so recording it again changes nothing."""
+    return prefix + hashlib.sha256("\x1f".join(str(part) for part in parts).encode()).hexdigest()[:12]
+
+
+def add_decision(con, run_id, *, node, round, origin, index, question, stakes, options):
+    """One decision a node made -- in its first plan (``origin='plan'``) or after its divergence
+    review (``origin='decide'``) -- with its options. An option marked ``own`` is the node's own
+    line and is pursued by the node itself; every other option waits for the level's
+    reconciliation, which opens it as a node or records why not. Replays are idempotent."""
+    did = _derived_id("d_", node["id"], origin, round, index)
+    now = int(time.time())
+    con.execute(
+        "INSERT OR IGNORE INTO research_decisions (id,run_id,node_id,round,origin,question,stakes,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)", (did, run_id, node["id"], int(round), origin, question, stakes, now))
+    for position, option in enumerate(options):
+        con.execute(
+            "INSERT OR IGNORE INTO research_options (id,run_id,decision_id,label,premise,node_id,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (_derived_id("o_", did, position), run_id, did, option["label"], option["premise"],
+             node["id"] if option.get("own") else None, now))
+    return did
+
+
+def decisions(con, run_id, *, node_id=None):
+    q, args = "SELECT * FROM research_decisions WHERE run_id=?", [run_id]
+    if node_id is not None:
+        q += " AND node_id=?"
+        args.append(node_id)
+    return con.execute(q + " ORDER BY created_at,rowid", args).fetchall()
+
+
+def options(con, run_id, *, decision_id=None):
+    q, args = "SELECT * FROM research_options WHERE run_id=?", [run_id]
+    if decision_id is not None:
+        q += " AND decision_id=?"
+        args.append(decision_id)
+    return con.execute(q + " ORDER BY rowid", args).fetchall()
+
+
+def option(con, option_id):
+    return con.execute("SELECT * FROM research_options WHERE id=?", (option_id,)).fetchone()
+
+
+_OPTION_WITH_DECISION = (
+    "SELECT o.*,d.node_id AS decided_at,d.question AS decision_question,d.stakes AS decision_stakes,"
+    "d.origin AS decision_origin FROM research_options o JOIN research_decisions d ON d.id=o.decision_id ")
+
+
+def pending_options(con, run_id):
+    """Options no reconciliation has given an outcome yet: neither a node nor a reason."""
+    return con.execute(_OPTION_WITH_DECISION + "WHERE o.run_id=? AND o.node_id IS NULL AND o.reason IS NULL "
+                       "ORDER BY d.created_at,d.rowid,o.rowid", (run_id,)).fetchall()
+
+
+def origin_options(con, node_id):
+    """The options that led to this node: decided at another node and pursued here."""
+    return con.execute(_OPTION_WITH_DECISION + "WHERE o.node_id=? AND d.node_id!=? ORDER BY d.created_at,o.rowid",
+                       (node_id, node_id)).fetchall()
+
+
+def set_option(con, option_id, *, node_id=None, reason=None):
+    con.execute("UPDATE research_options SET node_id=?,reason=? WHERE id=?", (node_id, reason, option_id))
+
+
+# --- relations: what links nodes without scheduling anything ------------------------------
+
+def relations(con, run_id):
+    members = {}
+    for row in con.execute(
+            "SELECT m.relation_id,m.node_id FROM research_relation_nodes m JOIN research_relations r "
+            "ON r.id=m.relation_id WHERE r.run_id=? ORDER BY m.relation_id,m.position", (run_id,)):
+        members.setdefault(row["relation_id"], []).append(row["node_id"])
+    return [{**dict(row), "nodes": members.get(row["id"], [])} for row in con.execute(
+        "SELECT * FROM research_relations WHERE run_id=? ORDER BY created_at,rowid", (run_id,))]
+
+
+def _add_relation(con, relation_id, run_id, kind, note, members, now):
+    """One relation and its member nodes, in order; recording the same id again changes nothing."""
+    con.execute("INSERT OR IGNORE INTO research_relations (id,run_id,kind,note,created_at) VALUES (?,?,?,?,?)",
+                (relation_id, run_id, kind, note, now))
+    con.executemany("INSERT OR IGNORE INTO research_relation_nodes (relation_id,node_id,position) VALUES (?,?,?)",
+                    [(relation_id, node_id, position) for position, node_id in enumerate(members)])
+
+
+def add_relations(con, run, items):
+    """Record relations seen outside a reconciliation (the survey of a finished run). Each is
+    identified by what it says, so recording it again changes nothing. Returns how many are new."""
+    with task_store.write_txn(con):
+        _owned_run(con, run)
+        known = {row["id"] for row in relations(con, run["id"])}
+        added = 0
+        for item in items:
+            members = list(dict.fromkeys(item["nodes"]))
+            relation_id = _derived_id("rel_", run["id"], item["kind"], *sorted(members), item["note"])
+            added += relation_id not in known
+            known.add(relation_id)
+            _add_relation(con, relation_id, run["id"], item["kind"], item["note"], members, int(time.time()))
+        return added
+
+
+# --- reconciliation: the level barrier's run-level command -------------------------------
+
+def reconcile(con, run_id, round):
+    row = con.execute("SELECT * FROM research_reconciles WHERE run_id=? AND round=?", (run_id, int(round))).fetchone()
+    if row is None:
+        return None
+    return {**dict(row), "payload": json.loads(row["payload_json"]),
+            "receipt": json.loads(row["receipt_json"]) if row["receipt_json"] else None}
+
+
+def reconcile_rounds(con, run_id):
+    """Every reconciliation of the run, oldest first."""
+    return [reconcile(con, run_id, row[0]) for row in con.execute(
+        "SELECT round FROM research_reconciles WHERE run_id=? ORDER BY round", (run_id,))]
+
+
+def _owned_run(con, run):
+    check_owner(con, run, None, allow_stop=True)
+    current = get(con, run["id"])
+    if current["stop_requested"] or current["status"] != "active":
+        raise ValueError("Research command belongs to a stopped or superseded run.")
+
+
+def record_reconcile(con, run, round, payload, *, session_file, tool_call_id):
+    """Accept the root Last Order's reconciliation for ``round``. A second call before it is
+    applied replaces the first, and the user's go-ahead for the earlier one no longer counts."""
+    with task_store.write_txn(con):
+        _owned_run(con, run)
+        prior = reconcile(con, run["id"], round)
+        if prior is not None and prior["applied_at"] is not None:
+            raise ValueError(f"Reconciliation {round} is already applied; the graph has moved on.")
+        con.execute(
+            "INSERT OR REPLACE INTO research_reconciles "
+            "(run_id,round,payload_json,session_file,tool_call_id,approved_call_id,receipt_json,applied_at,created_at) "
+            "VALUES (?,?,?,?,?,NULL,NULL,NULL,?)",
+            (run["id"], int(round), json.dumps(payload, ensure_ascii=False), home.stored(session_file),
+             tool_call_id, int(time.time())))
+    return reconcile(con, run["id"], round)
+
+
+def approve_reconcile(con, run, round):
+    """The user's go-ahead, recorded by the root Last Order, for the reconciliation as it stands."""
+    with task_store.write_txn(con):
+        _owned_run(con, run)
+        current = reconcile(con, run["id"], round)
+        if current is None:
+            raise ValueError("There is no recorded reconciliation to start; record one with misaka_research_reconcile first.")
+        con.execute("UPDATE research_reconciles SET approved_call_id=tool_call_id WHERE run_id=? AND round=?",
+                    (run["id"], int(round)))
+    return reconcile(con, run["id"], round)
+
+
+def reconcile_approved(con, run_id, round):
+    current = reconcile(con, run_id, round)
+    return bool(current and current["approved_call_id"] == current["tool_call_id"])
+
+
+def apply_reconcile(con, run, round, resolved, *, considered):
+    """Open what a reconciliation decided, in one transaction: its nodes and their edges, the
+    outcome of every option it answered, its relations, and the receipt. Returns the receipt; a
+    reconciliation already applied is returned as it was, never applied twice."""
+    with task_store.write_txn(con):
+        _owned_run(con, run)
+        current = reconcile(con, run["id"], round)
+        if current is None:
+            raise ValueError(f"Reconciliation {round} was never recorded.")
+        if current["applied_at"] is not None:
+            return current["receipt"]
+        opened = {"nodes": [], "joins": []}
+        for item in resolved["nodes"]:
+            child = create_node(con, run["id"], question=item["question"], parents=item["parents"])
+            for option_id in item["options"]:
+                set_option(con, option_id, node_id=child["id"])
+            opened["nodes"].append(child["id"])
+        for item in resolved["joins"]:
+            opened["joins"].append(create_node(con, run["id"], question=item["question"], parents=item["parents"])["id"])
+        for item in resolved["not_pursued"]:
+            set_option(con, item["option"], reason=item["reason"])
+        now = int(time.time())
+        for position, item in enumerate(resolved["relations"]):
+            _add_relation(con, _derived_id("rel_", run["id"], round, position), run["id"], item["kind"], item["note"],
+                          item["nodes"], now)
+        receipt = {"considered": list(considered), **opened}
+        con.execute("UPDATE research_reconciles SET receipt_json=?,applied_at=? WHERE run_id=? AND round=?",
+                    (json.dumps(receipt), now, run["id"], int(round)))
+    return receipt
 
 
 def action(con, run_id, node_id, key):
@@ -988,8 +1301,7 @@ def owned_txn(con, run, branch=None, *, allow_stop=False):
 def _owned(con, run, branch):
     check_owner(con, run, branch, allow_stop=True)
     current, owner = get(con, run["id"]), node(con, branch["id"])
-    if (current["stop_requested"] or current["status"] != "active"
-            or owner["status"] in (*NODE_TERMINAL, "closing")):
+    if current["stop_requested"] or current["status"] != "active" or owner["status"] in NODE_TERMINAL:
         raise ValueError("Research command belongs to a stopped or superseded node.")
 
 
@@ -1026,6 +1338,29 @@ def replace_action(con, run, branch, key, payload, *, session_file, tool_call_id
 
 
 SKIP_KEY = "skip"
+DECIDE_KEY = "decide"
+# The user's decision on a dissolution of the research question, recorded on the root node.
+CONSENT_KEY = "consent:dissolution"
+
+
+def cards_failed_key(cards):
+    """The action key of a node Last Order's decision on ``cards`` that failed for good: the same
+    failure is decided once, a card that fails again after a retry is a new decision."""
+    return "cards_failed:" + ",".join(f"{card['id']}@{card['generation']}" for card in cards)
+
+
+def failed_card_decisions(con, run_id, node_id=None):
+    """What node Last Orders decided about cards that failed for good, oldest first: each names
+    its ``decision`` and the ``cards`` it covers."""
+    return [json.loads(row["payload_json"]) for row in con.execute(
+        "SELECT payload_json FROM research_actions WHERE run_id=? AND (? IS NULL OR branch_id=?) "
+        "AND action_key LIKE 'cards_failed:%' ORDER BY created_at,rowid", (run_id, node_id, node_id))]
+
+
+def given_up_cards(con, run_id, node_id=None):
+    """Cards a node's Last Order went on without: never reopened, never driven again."""
+    return {card for decision in failed_card_decisions(con, run_id, node_id) if decision["decision"] == "conclude"
+            for card in decision["cards"]}
 
 
 def skipped(con, run_id, node_id):
@@ -1039,12 +1374,37 @@ def delete_action(con, run_id, node_id, key):
 
 
 def plan_key(round):
-    """The action key of a round's plan: the first round keeps the bare ``plan`` (older runs)."""
+    """The action key of a round's plan: the first round is the bare ``plan``."""
     return "plan" if int(round) <= 1 else f"plan:{int(round)}"
 
 
 def start_key(round):
     return "start" if int(round) <= 1 else f"start:{int(round)}"
+
+
+def dispose_key(round):
+    """The action key of Last Order's dispositions for review round ``round``."""
+    return f"dispose:{int(round)}"
+
+
+def dissolve_key(version):
+    """The action key saying that conclusion version ``version`` dissolves a question."""
+    return f"dissolve:{int(version)}"
+
+
+def record_run_action(con, run, key, payload, *, session_file, tool_call_id):
+    """A run-level command of the root Last Order -- the user's consent to a dissolution, a part of
+    the final report -- kept with the root node, whose question it answers. The root has finished its
+    own work by then, so ownership is the run's. A later call for the same key replaces the earlier."""
+    with task_store.write_txn(con):
+        _owned_run(con, run)
+        node = root(con, run["id"])
+        con.execute("DELETE FROM research_actions WHERE run_id=? AND branch_id=? AND action_key=?",
+                    (run["id"], node["id"], key))
+        con.execute("INSERT INTO research_actions VALUES (?,?,?,?,?,?,?)",
+                    (run["id"], node["id"], key, json.dumps(payload, ensure_ascii=False),
+                     home.stored(session_file), tool_call_id, int(time.time())))
+    return action(con, run["id"], node["id"], key)
 
 
 def plan_round(con, run_id, node_id):
@@ -1062,6 +1422,13 @@ def current_plan(con, run_id, node_id):
     return (round, action(con, run_id, node_id, plan_key(round))) if round else (0, None)
 
 
+def red_team(con, run_id, node_id):
+    """The node's red team as its first plan named her (``{"assignee", "reason"}``), or None
+    before a plan does: the same Sister reviews every version and runs the divergence review."""
+    plan = action(con, run_id, node_id, plan_key(1)) or current_plan(con, run_id, node_id)[1]
+    return (plan["payload"].get("red_team") if plan else None) or None
+
+
 def plan_started(con, run_id, node_id):
     """True once Last Order has recorded the user's go-ahead for the plan as it stands now: a
     start names the plan it was given for, so a revision after it needs a new start, and each
@@ -1072,25 +1439,16 @@ def plan_started(con, run_id, node_id):
 
 
 def reframe(con, run_id, node, question):
-    """The user agreed to Last Order's reframed question: the root's is the run's question (its
-    root node's trigger too); a fork's is the issue that node investigates."""
+    """The user agreed to Last Order's reframed question: the root's is the run's question too."""
     question = " ".join(str(question or "").split())
     if not question:
         return
     with task_store.write_txn(con):
-        con.execute("UPDATE research_branches SET trigger_text=?,updated_at=? WHERE id=?",
+        con.execute("UPDATE research_branches SET question=?,updated_at=? WHERE id=?",
                     (question, int(time.time()), node["id"]))
-        if node["parent_id"] is None:
+        if is_root(node):
             con.execute("UPDATE research_runs SET question=?,updated_at=? WHERE id=?",
                         (question, int(time.time()), run_id))
-
-
-def set_issue(con, issue_id, status, *, child_branch_id=None, reason=None):
-    con.execute(
-        "UPDATE research_issues SET status=?,child_branch_id=COALESCE(?,child_branch_id),"
-        "reason=COALESCE(?,reason) WHERE id=?",
-        (status, child_branch_id, reason, issue_id),
-    )
 
 
 # --- artifacts -------------------------------------------------------------------------
@@ -1192,12 +1550,15 @@ def artifact_path(row):
     return row["path"]
 
 
-def artifacts(con, run_id, *, branch_id=None, kind=None, task_id=None, root_only=False):
+def artifacts(con, run_id, *, branch_id=None, kind=None, task_id=None, run_level=False):
+    """Registered files of the run: one node's (``branch_id``), the run's own products
+    (``run_level``: question, clarifications, survey, draft, final, partial, workspace index),
+    or all of them."""
     q, args = "SELECT * FROM research_artifacts WHERE run_id=?", [run_id]
     if branch_id is not None:
         q += " AND branch_id=?"
         args.append(branch_id)
-    elif root_only:
+    elif run_level:
         q += " AND branch_id IS NULL"
     if kind:
         q += " AND kind=?"
@@ -1205,7 +1566,7 @@ def artifacts(con, run_id, *, branch_id=None, kind=None, task_id=None, root_only
     if task_id:
         q += " AND task_id=?"
         args.append(task_id)
-    return con.execute(q + " ORDER BY created_at", args).fetchall()
+    return con.execute(q + " ORDER BY created_at,rowid", args).fetchall()
 
 
 def artifact(con, artifact_id):
@@ -1220,9 +1581,7 @@ def recover_publications(con, run):
     paths = {Path(row["path"]) for row in artifacts(con, run["id"])}
     # Include an interrupted first write whose registration rolled back completely.
     for branch in nodes(con, run["id"]):
-        sample = root / generated_path(run, "checkpoint", branch_id=branch["id"] if branch["parent_id"] else None)
-        prefix = "" if _by_node(run) else f"{branch['id'] if branch['parent_id'] else run['id']}-"
-        for journal in sample.parent.glob(f".{prefix}*.research-publish.json"):
+        for journal in (root / node_dir(branch["id"])).glob(".*.research-publish.json"):
             paths.add(journal.with_name(journal.name[1:-len(".research-publish.json")]))
     sample = root / run_path(run, "checkpoint")
     for journal in sample.parent.glob(f".{run['id']}-*.research-publish.json"):
@@ -1251,7 +1610,9 @@ def summary(con, run_id):
         "id": run["id"], "workspace": run["workspace"], "phase": run["phase"],
         "status": run["status"], "wave": run["wave"], "limits": limits(run),
         "tasks": task_count(con, run_id), "nodes": len(nodes(con, run_id)),
-        "open_issues": len(issues(con, run_id, status="open")),
+        "undisposed_issues": con.execute("SELECT COUNT(*) FROM research_issues WHERE run_id=? "
+                                         "AND disposition IS NULL", (run_id,)).fetchone()[0],
+        "pending_options": len(pending_options(con, run_id)),
         "stop_requested": bool(run["stop_requested"]),
         "final_artifact": run["final_artifact"], "last_error": run["last_error"],
     }

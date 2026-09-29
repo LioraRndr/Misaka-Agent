@@ -213,8 +213,8 @@ async def test_lo_thinking_defaults_and_native_research_fork(local_models, model
         session.setThinkingLevel("low")
         await prompt(session, "THINKING_FORK_MARKER")
         source = session.sessionFile
-    fork = fork_session(source, str(root / "research-fork"))
-    assert fork and fork != source
+    fork, entry = fork_session(source, str(root / "research-fork"))
+    assert fork and fork != source and entry
     for path in (source, fork):
         async with opened(root, "last_order", "headless", ["--session", path]) as (_, session):
             assert session.agent.state.thinkingLevel == "low"

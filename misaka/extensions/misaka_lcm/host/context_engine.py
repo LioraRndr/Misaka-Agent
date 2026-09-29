@@ -61,6 +61,9 @@ def engine(ctx=None):
     """One independent upstream runtime per session; the empty key is CLI-only."""
     with operation(ctx), _REGISTRY_LOCK:
         key = _key(ctx)
+        project = storage.project(ctx)
+        if key in _ENGINES and _ENGINES[key]._misaka_cache != storage.current(project):
+            _retire(key)
         if key not in _ENGINES:
             from ..vendor.engine import LCMEngine
 
@@ -105,10 +108,11 @@ def engine(ctx=None):
                                     native_session_catalog_contains="session-identifiers-not-conversation-content")
                     return identity
 
-            storage.acquire(storage.project(ctx))
+            storage.acquire(project)
             built = NativeLCMEngine(config=config_bridge.load_config(ctx=ctx), hermes_home="")
             try:
-                built._misaka_project = str(storage.project(ctx))
+                built._misaka_project = str(project)
+                built._misaka_cache = storage.current(project)
                 storage.namespace_ids(built._store._conn)
                 from .native import session_ids
                 built._dag.before_publish = execution.check_cancelled
@@ -121,6 +125,32 @@ def engine(ctx=None):
                 raise
             _ENGINES[key] = built
         return _ENGINES[key]
+
+
+def _retire(key) -> None:
+    """Drop an engine whose project cache was deleted or replaced under it (``storage.current``):
+    it would go on writing into the folder that was moved away while every path-level open
+    recreated the directory beside it. The next bind builds one on the project's current cache
+    and ``start`` rebinds the session from its transcript, the durable archive."""
+    built = _ENGINES.pop(key)
+    try:
+        _shutdown(built)
+    except Exception:
+        logger.warning("MISAKA LCM could not settle the workers of a replaced cache; dropping it anyway.",
+                       exc_info=True)
+    _close_readers(key[0])
+
+
+def _close_readers(database) -> None:
+    """Upstream pools semantic readers beyond a tool/engine's lifetime. Retire only this
+    project's; do not close another project's readers."""
+    from ..vendor import retrieval_core
+    with retrieval_core._pool_lock:
+        for key, entry in list(retrieval_core._vector_store_pool.items()):
+            if key[0] == database:
+                with entry["lock"]:
+                    entry["store"].close()
+                del retrieval_core._vector_store_pool[key]
 
 
 def close(ctx=None) -> None:
@@ -157,15 +187,7 @@ def _shutdown(built, timeout=25):
 def release_project(ctx=None):
     with _REGISTRY_LOCK:
         if not any(path == config_bridge.database_path(ctx) for path, _ in _ENGINES):
-            # Upstream pools semantic readers beyond a tool/engine's lifetime.
-            # Retire only this project; do not close another project's readers.
-            from ..vendor import retrieval_core
-            with retrieval_core._pool_lock:
-                for key, entry in list(retrieval_core._vector_store_pool.items()):
-                    if key[0] == config_bridge.database_path(ctx):
-                        with entry["lock"]:
-                            entry["store"].close()
-                        del retrieval_core._vector_store_pool[key]
+            _close_readers(config_bridge.database_path(ctx))
             storage.release(storage.project(ctx))
 
 
@@ -204,6 +226,8 @@ def update_model(ctx) -> None:
         built._usage_anchor = None
         name, window, base_url, provider, api = values
         built.update_model(name, window, base_url=base_url, provider=provider, api_mode=api)
+        config_bridge.scale_to_window(built._config, built.context_length,
+                                      config_bridge.summariser_window(ctx, built.context_length))
 
 
 def bound_engine(ctx):
@@ -763,4 +787,4 @@ def compact(prepared):
             details['lcm']['nativeMetadata'] = native_metadata
     rollups.nudge(built)
     return CompactionResult('LCM ' + (built.last_compression_status if prepared.compress else 'replay update'), '', prepared.tokens,
-                            details=details, contextMessages=messages)
+                            details=details, contextMessages=messages, contextSummaries=scaffolds)

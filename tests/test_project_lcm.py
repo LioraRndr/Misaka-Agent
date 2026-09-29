@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import select
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -99,6 +100,19 @@ def test_misaka_arms_upstream_overflow_recovery_with_a_reserve_floor(tmp_path, m
     conf = config_bridge.load_config(ctx=session(tmp_path / "project"))
     assert conf.reserve_tokens_floor == 30000
     assert conf.config_sources.get("reserve_tokens_floor") != "misaka.default"
+
+
+def test_misaka_turns_on_upstream_chunked_leaf_passes(tmp_path, monkeypatch):
+    """2026-09-29: with upstream's chunked passes off, a compaction summarised a research Last
+    Order's whole 600k-token raw backlog as one 4k-token leaf. The knob stays upstream's."""
+    monkeypatch.delenv("LCM_DYNAMIC_LEAF_CHUNK_ENABLED", raising=False)
+    conf = config_bridge.load_config(ctx=session(tmp_path / "project"))
+    assert conf.dynamic_leaf_chunk_enabled is True
+    assert conf.config_sources["dynamic_leaf_chunk_enabled"] == "misaka.default"
+    monkeypatch.setenv("LCM_DYNAMIC_LEAF_CHUNK_ENABLED", "false")
+    conf = config_bridge.load_config(ctx=session(tmp_path / "project"))
+    assert conf.dynamic_leaf_chunk_enabled is False
+    assert conf.config_sources.get("dynamic_leaf_chunk_enabled") != "misaka.default"
 
 
 def test_project_isolation_shared_roles_and_session_switch(tmp_path):
@@ -221,20 +235,104 @@ def test_core_tool_schemas_unchanged_and_product_guidance(tmp_path):
     assert "Hermes-LCM" not in tools.recall_guideline()
 
 
-def test_cleanup_refuses_unknown_directory_and_symlinks(tmp_path):
+def _model(window, model_id="big-model"):
+    return SimpleNamespace(id=model_id, contextWindow=window, provider="test", api="anthropic-messages", baseUrl="")
+
+
+def test_the_leaf_chunk_follows_the_session_s_window_and_the_tail_stays_upstream_s(tmp_path, monkeypatch):
+    """2026-09-27: upstream's 20k leaf chunk, tuned on ~128k windows, summarised a leaf at every
+    phase of a 1M-window Last Order and pulled her down at 30%. The tail stays upstream's 32
+    messages (2026-09-28: scaled to 250 it held her whole conversation)."""
+    for name in ("LCM_LEAF_CHUNK_TOKENS", "LCM_FRESH_TAIL_COUNT"):
+        monkeypatch.delenv(name, raising=False)
+    ctx = session(tmp_path / "project")
+    ctx._ctx.model = _model(1_000_000)
+    built = ce.bound_engine(ctx)
+    assert (built._config.fresh_tail_count, built._config.leaf_chunk_tokens) == (32, 156_250)
+    assert built._config.config_sources["leaf_chunk_tokens"] == "misaka.default"
+    ctx._ctx.model = _model(128_000, "small-model")          # a model switch re-sizes them
+    ce.bound_engine(ctx)
+    assert (built._config.fresh_tail_count, built._config.leaf_chunk_tokens) == (32, 20_000)
+
+
+def test_the_summariser_is_the_compression_model_else_the_session_s(monkeypatch):
+    registry = SimpleNamespace(find=lambda provider, model: SimpleNamespace(contextWindow=272_000)
+                               if (provider, model) == ("openai-codex", "gpt-6-astra") else None)
+    ctx = SimpleNamespace(modelRegistry=registry)
+    monkeypatch.setattr(config_bridge, "load_auxiliary_config", lambda: {"auxiliary": {
+        "compression": {"provider": "openai-codex", "model": "gpt-6-astra"}}})
+    assert config_bridge.summariser_window(ctx, 1_000_000) == 272_000
+    monkeypatch.setattr(config_bridge, "load_auxiliary_config", lambda: {"auxiliary": {}})
+    assert config_bridge.summariser_window(ctx, 1_000_000) == 1_000_000
+
+
+def test_the_leaf_chunk_fits_the_summariser_and_an_explicit_setting_stands(monkeypatch):
+    from misaka.extensions.misaka_lcm.vendor.config import LCMConfig
+    for name in ("LCM_LEAF_CHUNK_TOKENS", "LCM_FRESH_TAIL_COUNT", "LCM_FRESH_TAIL_MAX_TOKENS"):
+        monkeypatch.delenv(name, raising=False)
+    config = LCMConfig()
+    config_bridge.scale_to_window(config, 1_000_000, summariser_window=200_000)
+    assert config.leaf_chunk_tokens == 120_000
+    assert (config.fresh_tail_count, config.fresh_tail_max_tokens) == (32, 0)    # upstream's tail
+    monkeypatch.setenv("LCM_LEAF_CHUNK_TOKENS", "90000")
+    config = LCMConfig(leaf_chunk_tokens=90_000)
+    config_bridge.scale_to_window(config, 1_000_000, summariser_window=1_000_000)
+    assert config.leaf_chunk_tokens == 90_000
+
+
+def test_unknown_files_are_set_aside_intact_and_symlinks_refused(tmp_path):
+    """Files this plugin did not mark are never deleted, and never block the project either: a
+    refusal failed every turn of every session there (2026-09-27)."""
     project = tmp_path / "project"
     root = storage.directory(project)
     root.mkdir(parents=True)
     (root / "valuable").write_text("keep")
-    with pytest.raises(ValueError, match="Not a MISAKA"):
-        storage.acquire(project)
-    assert (root / "valuable").read_text() == "keep"
+    storage.acquire(project)
+    [aside] = root.parent.glob("lcm.unrecognized-*")
+    assert (aside / "valuable").read_text() == "keep"
+    assert (root / storage._MARKER).read_text() == "misaka-lcm\n"
+    storage.release(project)
+    assert not root.exists() and (aside / "valuable").exists()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    root.rename(project / "saved")
     root.symlink_to(elsewhere, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         storage.acquire(project)
+
+
+def test_a_cache_deleted_under_a_running_session_is_rebuilt_from_its_transcript(tmp_path):
+    """2026-09-27: a project's `.misaka` went to the Trash while Last Order's session ran. Her
+    engine kept writing into the moved folder, a path-level open recreated the directory without
+    its marker, and every Sister started after that failed on it. The session notices, lets go of
+    the dead lease and rebinds on a fresh, marked cache."""
+    ctx = session(tmp_path / "project")
+    say(ctx, "before the folder went away")
+    ce.sync(ctx)
+    old = ce.bound_engine(ctx)
+    root = storage.directory(storage.project(ctx))
+    trash = tmp_path / "Trash"
+    root.parent.rename(trash)
+    say(ctx, "after the folder went away", tick=1)
+    ce.sync(ctx)
+    new = ce.bound_engine(ctx)
+    assert new is not old
+    assert (root / storage._MARKER).read_text() == "misaka-lcm\n"
+    assert new._store.db_path == root / "lcm.db"
+    assert count(new) == 2                      # both turns, re-ingested from the transcript
+    assert storage.current(storage.project(ctx)) == new._misaka_cache
+
+
+def test_a_joiner_restores_a_cache_that_is_missing_or_unmarked(tmp_path):
+    project = (tmp_path / "project").resolve()
+    proc = child(project)                       # a live owner holds the lease
+    try:
+        root = storage.directory(project)
+        shutil.rmtree(root)
+        storage.acquire(project)                # cannot take the exclusive lease, restores anyway
+        assert (root / storage._MARKER).read_text() == "misaka-lcm\n"
+        storage.release(project)
+    finally:
+        proc.communicate("finish\n", timeout=20)
 
 
 def test_interrupted_marker_initialization_and_failed_engine_retry(tmp_path, monkeypatch):
@@ -368,6 +466,51 @@ async def test_extension_new_reload_and_quit_lifetime(tmp_path):
     await events["session_shutdown"]({"reason": "quit"}, ctx)
     assert not storage.directory(storage.project(ctx)).exists()
     assert source.read_bytes() == before
+
+
+async def test_a_subagent_is_handed_the_project_of_the_session_that_starts_it(tmp_path):
+    """``subagent_start``: the child's own copy of the plugin joins this session's project store,
+    not the directory the child runs in (here a worktree). The core adds nothing of LCM's."""
+    from misaka.extensions.misaka_lcm.host.extension import register
+    ctx = session(tmp_path / "project", execution=tmp_path / "worktree")
+    events = {}
+    harn = SimpleNamespace(registerProvider=lambda *_: None, registerTool=lambda *_: None,
+                           registerCommand=lambda *_: None,
+                           on=lambda name, callback: events.__setitem__(name, callback),
+                           appendEntry=ctx.sessionManager.appendCustomEntry, getActiveTools=list)
+    register(harn, kind="foreground", workspace=str(tmp_path / "worktree"))
+    env = {"PATH": "/usr/bin"}
+    await events["subagent_start"]({"type": "subagent_start", "subagentId": "a1", "env": env}, ctx)
+    assert env == {"PATH": "/usr/bin", storage.PROJECT_ENV: str((tmp_path / "project").resolve())}
+
+
+def test_research_restores_the_recall_rules_without_repeating_them(tmp_path):
+    """The research delta gives an extension's tools their rules back where a custom SYSTEM.md
+    dropped them, and repeats none under the default prompt -- this long multi-paragraph one too."""
+    from misaka.core.agent_session import AgentSession
+    from misaka.core.research.prompting import system_context
+    from misaka.core.system_prompt import build_system_prompt
+    from misaka.core.wiring import ToolCollector
+    from misaka.extensions.misaka_lcm.host import tools
+
+    collector = ToolCollector()
+    tools.register(collector)
+    definitions = {definition.name: definition for definition in collector.tools}
+    loader = SimpleNamespace(getSystemPrompt=lambda: None, getAppendSystemPrompt=list,
+                             getAgentsFiles=lambda: {"agentsFiles": []})
+    host = SimpleNamespace(_cwd=str(tmp_path), _resourceLoader=loader,
+                           _toolRegistry=definitions, _toolDefinitions=definitions)
+    AgentSession._rebuild_system_prompt(host, list(definitions))
+    prompt = build_system_prompt(host._baseSystemPromptOptions)
+    session = SimpleNamespace(getToolDefinition=definitions.get)
+    rule = tools.recall_guideline()
+    assert rule in prompt and rule not in system_context(session, list(definitions), prompt)
+    assert rule in system_context(session, list(definitions), "USER SYSTEM")
+    # 2026-09-29 (user): products first, the conversation only as their context -- said by the
+    # plugin with its tools, not written into the prompts of whatever uses the sessions.
+    text = " ".join(rule.split())
+    assert "Work products come before conversations." in text
+    assert "a conversation supplements its products, never replaces them" in text
 
 
 def test_operator_database_paths_cannot_escape_project(tmp_path):
@@ -786,3 +929,21 @@ def test_status_separates_native_catalog_from_loaded_lcm_history(tmp_path, monke
     assert 'Tool availability is not evidence' in guideline
     assert 'state_only_sessions' in guideline
     assert 'final project owner exits' in guideline
+
+
+def test_a_research_conversation_is_not_all_fresh_tail(monkeypatch):
+    """2026-09-28: a Last Order's 84 turns of ~12k tokens each sat inside a 250-message tail, so
+    LCM never summarised anything and she reached 1M on overflow recovery alone."""
+    from misaka.extensions.misaka_lcm.vendor.config import LCMConfig
+    from misaka.extensions.misaka_lcm.vendor.fresh_tail import (
+        resolve_fresh_tail_boundary,
+    )
+    for name in ("LCM_FRESH_TAIL_COUNT", "LCM_FRESH_TAIL_MAX_TOKENS"):
+        monkeypatch.delenv(name, raising=False)
+    config = LCMConfig()
+    config_bridge.scale_to_window(config, 1_000_000)
+    memo = "The Continental System failed for reasons of supply. " * 1_000
+    messages = [{"role": "user" if i % 2 else "assistant", "content": memo} for i in range(84)]
+    tail = resolve_fresh_tail_boundary(messages, fresh_tail_count=config.fresh_tail_count,
+                                       fresh_tail_max_tokens=config.fresh_tail_max_tokens)
+    assert tail.start == 84 - 32                               # the older 52 can be summarised

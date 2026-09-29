@@ -1,19 +1,8 @@
-"""Allies: third-party agent CLIs (codex / claude / gemini / ...) running in panes.
+"""Allies: other vendors' agents (Claude Code, Codex, ...) working the board as Sisters do.
 
-How allies differ from Sisters: a Sister is a MISAKA agent running in the MISAKA engine
-and speaks SendMessage natively. An ally is someone else's CLI and knows none of
-MISAKA's protocols, so MISAKA does the one thing it cannot: start the process
-asynchronously, collect its stdout, and drop the reply into messages.db. Last Order
-then reads ally replies from the same mailbox it uses for Sisters.
-
-No vendor knowledge lives here: Last Order supplies the full command line each time
-and reads any session ID it needs out of the reply; MISAKA only executes.
+A Sister is a misaka agent in the misaka engine. An ally is someone else's agent, driven over the
+Agent Client Protocol: it is assigned cards, started, messaged and stopped with the same tools, and
+its attempt is claimed, settled and reported by the same board. Only the program running the
+attempt differs -- ``card`` (the ACP runner) instead of a Sister's session -- and the card's tools
+reach the ally through an MCP server, ``bridge``. ``presets`` says which allies this home enables.
 """
-
-SESSION_KINDS = {"foreground", "dm"}
-ROLES = {"last_order"}
-
-
-def activate(spec):
-    from .extension import register
-    return register

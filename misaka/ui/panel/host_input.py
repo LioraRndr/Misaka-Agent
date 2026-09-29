@@ -1,24 +1,42 @@
 """Host terminal bytes -> input events: keys, mouse, paste, focus.
 
 Port of herdr ``src/input/parse.rs`` (key sequences: kitty CSI u, modifyOtherKeys, xterm
-modified specials, legacy) on top of the sequence splitting crossterm does for herdr
-(SGR/X10 mouse reports, bracketed paste, focus events, the lone-ESC timeout). The panel
-never looks at raw bytes again: every mode handler receives ``Key``/``Mouse``/``Paste``/
-``Focus`` values, and the pane encoder (``pane_input``) turns a ``Key`` back into bytes
-for the protocol the pane negotiated.
+modified specials, legacy) and of the host-input framer in ``src/raw_input.rs``
+(``RawInputByteFramer``: sequence boundaries, bracketed paste, the idle flush with its
+mouse-report recovery, control strings discarded after a timeout) plus the flush timing
+of ``src/client/input.rs`` (``idle_flush_timeout_ms``). The panel never looks at raw bytes
+again: every mode handler receives ``Key``/``Mouse``/``Paste``/``Focus`` values, and the
+pane encoder (``pane_input``) turns a ``Key`` back into bytes for the protocol the pane
+negotiated.
+
+The framer works on decoded text instead of bytes: every sequence it has to recognise is
+ASCII, so character counts equal byte counts there, and an incomplete UTF-8 character
+simply stays inside the incremental decoder (herdr's "waiting for UTF-8 continuation
+bytes"). The host-reply families herdr also frames (OSC 10/11 palette replies, cell-size
+and colour-scheme reports) are not ported: the panel sends none of those queries while
+it runs.
 """
 import codecs
-import os
-import re
+import sys
 import time
 from dataclasses import dataclass
 
 SHIFT, ALT, CTRL, SUPER, HYPER, META = 1, 2, 4, 8, 16, 32
 LOCK_MASK = 64 | 128                 # caps / num lock bits (kitty): never part of a binding
 
-ESCAPE_TIMEOUT = 0.010               # a lone ESC waits this long for an Alt+key second byte
-SSH_ESCAPE_TIMEOUT = 0.100
-SEQUENCE_TIMEOUT = 0.050             # a longer partial sequence gets the wider window
+# raw_input.rs RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS / MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
+RAW_INPUT_IDLE_FLUSH_TIMEOUT = 0.010
+MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT = 0.150
+MAX_DISCARDED_CONTROL_TAIL_BYTES = 128
+MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES = 32
+# platform::capabilities().preserve_legacy_doubled_escape_input: macOS keeps ``ESC ESC ...``
+# together (Option-as-Meta sends Alt+Esc / Alt+arrow that way); elsewhere a doubled ESC is
+# two events.
+PRESERVE_LEGACY_DOUBLED_ESCAPE_INPUT = sys.platform == "darwin"
+# terminal_setup.rs query_host_escape_disambiguation
+KEYBOARD_PROBE = b"\x1b[?u\x1b[c"
+KEYBOARD_PROBE_TIMEOUT = 0.250
+MAX_BUFFERED_HOST_INPUT = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,8 +63,9 @@ class Key:
 @dataclass(frozen=True, slots=True)
 class Mouse:
     """``kind``: press, release, drag (motion with a button held), move, wheel_up,
-    wheel_down, wheel_left, wheel_right. ``button``: 0 left, 1 middle, 2 right; 3 when the
-    report carries no button (an X10 release). ``x``/``y`` are zero-based screen cells."""
+    wheel_down, wheel_left, wheel_right. ``button``: 0 left, 1 middle, 2 right (a report
+    that names no button -- an X10 release -- is a left release, as herdr reads it).
+    ``x``/``y`` are zero-based screen cells."""
     kind: str
     button: int
     x: int
@@ -64,13 +83,12 @@ class Focus:
     gained: bool
 
 
+_ESC = "\x1b"
 _PASTE_START, _PASTE_END = "\x1b[200~", "\x1b[201~"
-_SGR_MOUSE = re.compile(r"^\x1b\[<(\d+);(\d+);(\d+)([Mm])$")
-_KITTY = re.compile(r"^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d*)(?::(\d+))?)?(?:;([\d:]+))?u$")
-_MODIFY_OTHER = re.compile(r"^\x1b\[27;(\d+);(\d+)~$")
-_XTERM_LETTER = re.compile(r"^\x1b\[1;(\d+)(?::(\d+))?([A-Z])$")
-_XTERM_TILDE = re.compile(r"^\x1b\[(\d+);(\d+)(?::(\d+))?~$")
+_CSI_FINALS = frozenset(chr(code) for code in range(0x40, 0x7F))
 
+# parse.rs parse_legacy_special_sequence (the Alt+arrow rows are covered by parse_key's
+# generic ESC-prefix rule).
 _LEGACY = {
     "\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down",
     "\x1b[C": "right", "\x1bOC": "right", "\x1b[D": "left", "\x1bOD": "left",
@@ -88,7 +106,8 @@ _SS3_KEYPAD = {"p": "0", "q": "1", "r": "2", "s": "3", "t": "4", "u": "5", "v": 
                "j": "*", "o": "/"}
 _XTERM_LETTERS = {"A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "end",
                   "P": "f1", "Q": "f2", "R": "f3", "S": "f4"}
-_XTERM_TILDES = {"2": "insert", "3": "delete", "5": "pageup", "6": "pagedown", "15": "f5",
+_XTERM_TILDES = {"2": "insert", "3": "delete", "5": "pageup", "6": "pagedown",
+                 "11": "f1", "12": "f2", "13": "f3", "14": "f4", "15": "f5",
                  "17": "f6", "18": "f7", "19": "f8", "20": "f9", "21": "f10", "23": "f11",
                  "24": "f12"}
 _KITTY_NAMED = {8: "backspace", 127: "backspace", 9: "tab", 13: "enter", 57414: "enter", 27: "esc",
@@ -101,82 +120,175 @@ _KITTY_KEYPAD = {57399: "0", 57400: "1", 57401: "2", 57402: "3", 57403: "4", 574
                  57411: "*", 57412: "-", 57413: "+", 57415: "=", 57416: ","}
 _EVENT_KINDS = {"1": "press", "2": "repeat", "3": "release"}
 _CTRL_PUNCT = {0: " ", 27: "[", 28: "\\", 29: "]", 30: "^", 31: "_"}
+# parse.rs matching_control_associated_text: WezTerm's report-all mode attaches the key's own
+# legacy control code as associated text.
+_MATCHING_CONTROL_TEXT = {("enter", "13"), ("backspace", "8"), ("tab", "9"), ("esc", "27")}
 
 
-def escape_timeout():
-    """A lone ESC's disambiguation window; ssh adds enough latency to need a wider one."""
-    return SSH_ESCAPE_TIMEOUT if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY") else ESCAPE_TIMEOUT
+# ── One sequence -> one event (parse.rs) ──────────────────────────────────────────────
+
+def _u8(text):
+    """``text.parse::<u8>()``: decimal digits only, 0..255, else None."""
+    if not text or not text.isascii() or not text.isdigit():
+        return None
+    value = int(text)
+    return value if value <= 255 else None
 
 
-# ── One sequence -> one event ─────────────────────────────────────────────────────────
+def _u32(text):
+    if not text or not text.isascii() or not text.isdigit():
+        return None
+    value = int(text)
+    return value if value <= 0xFFFFFFFF else None
 
-def _mods_from_kitty(value):
-    return value - 1 if value >= 1 else 0
+
+def _char(codepoint):
+    """``char::from_u32``: no surrogates, nothing past U+10FFFF."""
+    if codepoint is None or codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+        return None
+    return chr(codepoint)
+
+
+def is_control(ch):
+    """Rust ``char::is_control``: the Cc category (C0, DEL, C1)."""
+    code = ord(ch)
+    return code < 0x20 or 0x7F <= code <= 0x9F
+
+
+def _modifiers(text):
+    """``modifier_text.parse::<u8>().ok()?.checked_sub(1)?`` as kitty modifier bits."""
+    value = _u8(text)
+    if value is None or value == 0:
+        return None
+    return value - 1
+
+
+def _split_modifier_and_event(part):
+    modifier, sep, event = part.partition(":")
+    if sep and modifier:
+        return modifier, event
+    return part, None
+
+
+def _event_kind(value):
+    return _EVENT_KINDS.get("1" if value is None else value)
 
 
 def _kitty_code(codepoint):
+    """kitty_codepoint_to_keycode."""
     if codepoint in _KITTY_NAMED:
         return _KITTY_NAMED[codepoint]
     if codepoint in _KITTY_KEYPAD:
         return _KITTY_KEYPAD[codepoint]
+    if 57364 <= codepoint <= 57375:
+        return f"f{codepoint - 57364 + 1}"
     if 57376 <= codepoint <= 57398:
         return f"f{codepoint - 57376 + 13}"
     if 57428 <= codepoint <= 57440:
         return "media"
     if 57441 <= codepoint <= 57454:
         return "modifier"
-    if 57358 <= codepoint <= 57454:
-        return None
-    try:
-        return chr(codepoint)
-    except ValueError:
-        return None
+    return _char(codepoint)
+
+
+def _associated_text(value):
+    """parse_kitty_associated_text: colon-separated codepoints, none of them a control."""
+    text = []
+    for part in value.split(":"):
+        ch = _char(_u32(part))
+        if ch is None or is_control(ch):
+            return None
+        text.append(ch)
+    return "".join(text) or None
 
 
 def _parse_kitty(seq):
-    match = _KITTY.match(seq)
-    if not match:
+    if not (seq.startswith("\x1b[") and seq.endswith("u")) or len(seq) < 4:
         return None
-    codepoint = int(match.group(1))
+    fields = seq[2:-1].split(";")
+    if len(fields) > 3:
+        return None
+    key_part = fields[0]
+    modifier_part = fields[1] if len(fields) > 1 and fields[1] else "1"
+    raw_text = fields[2] if len(fields) > 2 else None
+    modifier_text, event_type = _split_modifier_and_event(modifier_part)
+    mods = _modifiers(modifier_text)
+    if mods is None:
+        return None
+    key_fields = key_part.split(":")
+    codepoint = _u32(key_fields[0])
+    if codepoint is None:
+        return None
+    shifted = _u32(key_fields[1]) if len(key_fields) > 1 and key_fields[1] else None
     code = _kitty_code(codepoint)
     if code is None:
         return None
-    shifted = int(match.group(2)) if match.group(2) else None
-    mods = _mods_from_kitty(int(match.group(4))) if match.group(4) else 0
-    kind = _EVENT_KINDS.get(match.group(5) or "1")
+    text = None
+    if raw_text is not None:
+        text = _associated_text(raw_text)
+        if text is None and (code, raw_text) not in _MATCHING_CONTROL_TEXT:
+            return None
+    kind = _event_kind(event_type)
     if kind is None:
         return None
-    text = None
-    if match.group(6):
-        try:
-            text = "".join(chr(int(part)) for part in match.group(6).split(":"))
-        except ValueError:
-            return None
-        if any(ch.isspace() is False and ord(ch) < 32 for ch in text):
-            return None
-    if len(code) == 1 and shifted is not None and shifted != codepoint:
-        mods |= SHIFT           # kitty permits the shifted alternate only while Shift is down
+    # Kitty permits the shifted alternate only while Shift is active.
+    if len(code) == 1 and shifted is not None and shifted != codepoint and _char(shifted) is not None:
+        mods |= SHIFT
     return Key(code, mods, kind, shifted, text)
 
 
 def _parse_modify_other(seq):
-    match = _MODIFY_OTHER.match(seq)
-    if not match:
+    if not (seq.startswith("\x1b[27;") and seq.endswith("~")):
         return None
-    code = _kitty_code(int(match.group(2)))
-    return Key(code, _mods_from_kitty(int(match.group(1)))) if code else None
+    modifier_part, sep, codepoint_part = seq[5:-1].partition(";")
+    if not sep:
+        return None
+    mods = _modifiers(modifier_part)
+    codepoint = _u32(codepoint_part)
+    if mods is None or codepoint is None:
+        return None
+    code = _kitty_code(codepoint)
+    return Key(code, mods) if code else None
+
+
+def _split_xterm_modifier_and_event(part):
+    """split_xterm_modifier_and_event: a third field is associated text (Alacritty on macOS
+    reports Cocoa function-key markers there); it must be valid and is then ignored."""
+    modifier_and_event, sep, associated = part.partition(";")
+    if sep and _associated_text(associated) is None:
+        return None
+    return _split_modifier_and_event(modifier_and_event if sep else part)
 
 
 def _parse_xterm_modified(seq):
-    match = _XTERM_LETTER.match(seq)
-    if match and match.group(3) in _XTERM_LETTERS:
-        kind = _EVENT_KINDS.get(match.group(2) or "1")
-        return Key(_XTERM_LETTERS[match.group(3)], _mods_from_kitty(int(match.group(1))), kind) if kind else None
-    match = _XTERM_TILDE.match(seq)
-    if match and match.group(1) in _XTERM_TILDES:
-        kind = _EVENT_KINDS.get(match.group(3) or "1")
-        return Key(_XTERM_TILDES[match.group(1)], _mods_from_kitty(int(match.group(2))), kind) if kind else None
-    return None
+    """parse_xterm_modified_special_sequence."""
+    if not seq.startswith("\x1b["):
+        return None
+    body = seq[2:]
+    if body.startswith("1;") and body[-1:].isascii() and body[-1:].isalpha():
+        split = _split_xterm_modifier_and_event(body[2:-1])
+        if split is None:
+            return None
+        mods = _modifiers(split[0])
+        code = _XTERM_LETTERS.get(body[-1])
+        if mods is None or code is None:
+            return None
+        kind = _event_kind(split[1])
+        return Key(code, mods, kind) if kind else None
+    if not body.endswith("~"):
+        return None
+    code_part, sep, modifier_part = body[:-1].partition(";")
+    if not sep:
+        return None
+    split = _split_xterm_modifier_and_event(modifier_part)
+    if split is None:
+        return None
+    mods = _modifiers(split[0])
+    code = _XTERM_TILDES.get(code_part)
+    if mods is None or code is None:
+        return None
+    kind = _event_kind(split[1])
+    return Key(code, mods, kind) if kind else None
 
 
 def _parse_ctrl_char(ch):
@@ -211,7 +323,9 @@ def parse_key(seq):
     if seq == "\x1b\x7f":
         return Key("backspace", ALT)
     if seq.startswith("\x1b") and len(seq) >= 2:
-        inner = parse_key(seq[1:])          # Alt + key: ESC prefix (\x1b\x1b[A is Alt+Up)
+        # Alt + key: ESC prefix. herdr takes ESC + one character; MISAKA also reads ESC + a
+        # whole sequence (\x1b\x1b[5~ is Alt+PageUp), which terminals using Option-as-Meta send.
+        inner = parse_key(seq[1:])
         if inner is None or len(seq) > 2 and not seq[1:].startswith("\x1b["):
             return None
         return Key(inner.code, inner.mods | ALT, inner.kind, inner.shifted)
@@ -219,30 +333,63 @@ def parse_key(seq):
         ctrl = _parse_ctrl_char(seq)
         if ctrl is not None:
             return ctrl
-        return Key(seq, SHIFT if seq.isupper() else 0)
+        return Key(seq, SHIFT if "A" <= seq <= "Z" else 0)
     return None
+
+
+def _mouse_cb(cb):
+    """raw_input.rs parse_mouse_cb: ``(kind, button, mods)`` or None."""
+    button_number = (cb & 0b11) | ((cb & 0b1100_0000) >> 4)
+    dragging = bool(cb & 0b10_0000)
+    if button_number <= 2:
+        kind, button = ("drag" if dragging else "press"), button_number
+    elif button_number == 3 and not dragging:
+        kind, button = "release", 0
+    elif dragging and button_number in (3, 4, 5, 8, 9):
+        kind, button = "move", 3        # extended-button drags keep their position as motion
+    elif button_number in (4, 5, 6, 7) and not dragging:
+        kind, button = ("wheel_up", "wheel_down", "wheel_left", "wheel_right")[button_number - 4], button_number - 4
+    else:
+        return None
+    mods = (SHIFT if cb & 4 else 0) | (ALT if cb & 8 else 0) | (CTRL if cb & 16 else 0)
+    return kind, button, mods
+
+
+def _parse_sgr_mouse(seq):
+    if not seq.startswith("\x1b[<") or seq[-1:] not in ("M", "m"):
+        return None
+    parts = seq[3:-1].split(";")
+    if len(parts) < 3:
+        return None
+    cb = _u8(parts[0])
+    column, row = _u32(parts[1]), _u32(parts[2])
+    if cb is None or column is None or row is None or not 1 <= column <= 0xFFFF or not 1 <= row <= 0xFFFF:
+        return None
+    decoded = _mouse_cb(cb)
+    if decoded is None:
+        return None
+    kind, button, mods = decoded
+    if seq[-1] == "m" and kind == "press":
+        kind = "release"
+    return Mouse(kind, button, column - 1, row - 1, mods)
+
+
+def _parse_default_mouse(seq):
+    if len(seq) != 6 or not seq.startswith("\x1b[M"):
+        return None
+    cb, column, row = ord(seq[3]) - 32, ord(seq[4]) - 33, ord(seq[5]) - 33
+    if not 0 <= cb <= 255 or column < 0 or row < 0:
+        return None
+    decoded = _mouse_cb(cb)
+    if decoded is None:
+        return None
+    kind, button, mods = decoded
+    return Mouse(kind, button, column, row, mods)
 
 
 def parse_mouse(seq):
     """An SGR (1006) or X10 mouse report to a Mouse, or None."""
-    match = _SGR_MOUSE.match(seq)
-    if match:
-        raw, x, y, suffix = int(match.group(1)), int(match.group(2)) - 1, int(match.group(3)) - 1, match.group(4)
-        release = suffix == "m"
-    elif len(seq) == 6 and seq.startswith("\x1b[M"):
-        raw = ord(seq[3]) - 32
-        x, y = ord(seq[4]) - 33, ord(seq[5]) - 33
-        release = raw & 3 == 3 and not raw & 64
-    else:
-        return None
-    mods = (SHIFT if raw & 4 else 0) | (ALT if raw & 8 else 0) | (CTRL if raw & 16 else 0)
-    button = raw & 3
-    if raw & 64:
-        kind = ("wheel_up", "wheel_down", "wheel_left", "wheel_right")[button]
-        return Mouse(kind, button, x, y, mods)
-    if raw & 32:
-        return Mouse("move" if button == 3 else "drag", button, x, y, mods)
-    return Mouse("release" if release else "press", button, x, y, mods)
+    return _parse_sgr_mouse(seq) or _parse_default_mouse(seq)
 
 
 def parse_sequence(seq):
@@ -254,116 +401,404 @@ def parse_sequence(seq):
     return parse_mouse(seq) or parse_key(seq)
 
 
-# ── Byte stream -> complete sequences ─────────────────────────────────────────────────
+# ── Sequence boundaries (raw_input.rs) ────────────────────────────────────────────────
 
-def _complete(data):
-    """'complete' | 'incomplete' for a buffer starting with ESC (crossterm's split rules)."""
-    if len(data) == 1:
-        return "incomplete"
-    rest = data[1:]
-    if rest.startswith("["):
-        if rest.startswith("[M"):
-            return "complete" if len(data) >= 6 else "incomplete"
-        if len(data) < 3:
-            return "incomplete"
-        final = data[-1]
-        if not 0x40 <= ord(final) <= 0x7E:
-            return "incomplete"
-        if rest.startswith("[<") and final not in "Mm":
-            return "incomplete"          # an SGR mouse report ends only in M/m
-        return "complete"
-    if rest.startswith("]"):
-        return "complete" if data.endswith(("\x1b\\", "\x07")) else "incomplete"
-    if rest.startswith(("P", "_")):
-        return "complete" if data.endswith("\x1b\\") else "incomplete"
-    if rest.startswith("O"):
-        return "complete" if len(rest) >= 2 else "incomplete"
-    return "complete"                    # ESC + one character: Alt+key
+def _find_csi_final(buffer, finals):
+    for index in range(2, len(buffer)):
+        if buffer[index] in finals:
+            return index + 1
+    return None
 
 
-def split_sequences(buffer):
-    """Split decoded input into complete sequences; returns (sequences, remainder)."""
-    out, pos = [], 0
-    while pos < len(buffer):
-        if buffer[pos] != "\x1b":
-            out.append(buffer[pos])
-            pos += 1
-            continue
-        end = pos + 1
-        while end <= len(buffer):
-            candidate = buffer[pos:end]
-            if _complete(candidate) == "complete":
-                if candidate == "\x1b\x1b" and end < len(buffer) and buffer[end] in "[]OP_":
-                    out.append("\x1b")           # ESC, then a sequence: two events
-                    pos += 1
-                else:
-                    out.append(candidate)
-                    pos = end
-                break
-            end += 1
-        else:
-            return out, buffer[pos:]
-    return out, ""
+def _control_string_family(buffer):
+    head = buffer[:2]
+    if head == "\x1b]":
+        return "osc"
+    if head in ("\x1bP", "\x1b_", "\x1b^", "\x1bX"):
+        return "st"
+    return None
+
+
+def _control_string_terminator(buffer, family):
+    st = buffer.find("\x1b\\")
+    st = st + 2 if st >= 0 else None
+    if family == "st":
+        return st
+    bel = buffer.find("\x07")
+    bel = bel + 1 if bel >= 0 else None
+    ends = [end for end in (st, bel) if end is not None]
+    return min(ends) if ends else None
+
+
+def _complete_escape_sequence_len(buffer):
+    """complete_escape_sequence_len: the length of the sequence at the head of ``buffer``
+    (which starts with ESC), or None while it is incomplete."""
+    if len(buffer) == 1:
+        return None
+    if buffer.startswith("\x1b\x1b[<"):
+        mouse_len = _find_csi_final(buffer[1:], "Mm")
+        if mouse_len is not None and _parse_sgr_mouse(buffer[1:1 + mouse_len]) is not None:
+            return 1
+    if len(buffer) >= 7 and buffer.startswith("\x1b\x1b[M") and _parse_default_mouse(buffer[1:7]) is not None:
+        return 1
+    if buffer.startswith("\x1b\x1b"):
+        inner = _complete_escape_sequence_len(buffer[1:])
+        return None if inner is None else inner + 1
+    if buffer.startswith("\x1b["):
+        if buffer.startswith("\x1b[<"):
+            return _find_csi_final(buffer, "Mm")
+        if buffer.startswith("\x1b[M"):
+            return 6 if len(buffer) >= 6 else None
+        return _find_csi_final(buffer, _CSI_FINALS)
+    family = _control_string_family(buffer)
+    if family is not None:
+        return _control_string_terminator(buffer, family)
+    if buffer.startswith("\x1bO"):
+        return 3 if len(buffer) >= 3 else None
+    return 2                             # ESC + one character: Alt+key
+
+
+def _incomplete_sgr_mouse(buffer):
+    return buffer.startswith("\x1b[<") and all(ch.isdigit() and ch.isascii() or ch == ";" for ch in buffer[3:])
+
+
+def _incomplete_default_mouse(buffer):
+    return buffer.startswith("\x1b[M") and len(buffer) < 6
+
+
+def _bounded_incomplete_escape(buffer):
+    """starts_with_bounded_incomplete_escape_sequence."""
+    if len(buffer) >= MAX_DISCARDED_CONTROL_TAIL_BYTES:
+        return False
+    if buffer in (_ESC, "\x1bO"):
+        return True
+    if not buffer.startswith("\x1b["):
+        return False
+    return all(0x20 <= ord(ch) <= 0x3F for ch in buffer[2:])
+
+
+def _known_escape_introducer(buffer):
+    return len(buffer) > 1 and buffer[1] in "[O]P_^X\x1b"
+
+
+def _incomplete_orphaned_sgr_mouse_tail(buffer):
+    if len(buffer) > MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES:
+        return False
+    if len(buffer) < 3 and "[<".startswith(buffer):
+        return True
+    return buffer.startswith("[<") and all(ch.isdigit() and ch.isascii() or ch == ";" for ch in buffer[2:])
+
+
+def _complete_orphaned_sgr_mouse_tail_len(buffer):
+    """discard_complete_orphaned_sgr_mouse_tail: the length of a whole ``[<...M`` report
+    left behind by an ESC that was already released, or 0."""
+    ends = [index for index in (buffer.find("M"), buffer.find("m")) if index >= 0]
+    if not ends:
+        return 0
+    length = min(ends) + 1
+    if length > MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES or _parse_sgr_mouse(_ESC + buffer[:length]) is None:
+        return 0
+    return length
+
+
+def _plausible_sgr_mouse_prefix(report):
+    """plausible_sgr_mouse_prefix: rejects continuations that can never become a report."""
+    if not report.startswith("\x1b[<"):
+        return False
+    fields = report[3:].split(";")
+    for index, digits in enumerate(fields):
+        last = index == len(fields) - 1
+        if index > 2:
+            return False
+        if not digits:
+            return last
+        if not (digits.isascii() and digits.isdigit()):
+            return False
+        value = int(digits)
+        if value > 0xFFFF or (index == 0 and value > 255):
+            return False
+        if not last and ((index == 0 and _mouse_cb(value) is None) or (index == 1 and value == 0)):
+            return False
+    return True
+
+
+def _classify_sgr_mouse_continuation(prefix, tail):
+    """classify_sgr_mouse_continuation: ("incomplete", 0) | ("complete", n) | ("invalid", 0)."""
+    tail = tail[:max(0, MAX_DISCARDED_CONTROL_TAIL_BYTES - len(prefix))]
+    final_index = next((i for i, ch in enumerate(tail) if not (ch.isascii() and ch.isdigit()) and ch != ";"), None)
+    payload = tail if final_index is None else tail[:final_index]
+    report = prefix + payload
+    if not _plausible_sgr_mouse_prefix(report):
+        return "invalid", 0
+    if final_index is not None:
+        if _parse_sgr_mouse(report + tail[final_index]) is not None:
+            return "complete", final_index + 1
+        return "invalid", 0
+    if len(report) >= MAX_DISCARDED_CONTROL_TAIL_BYTES:
+        return "invalid", 0
+    return "incomplete", 0
+
+
+_OSC_TAIL_CHARS = frozenset("0123456789;:/#?._-+rgbRGB\x1b")
+
+
+def _plausible_control_string_tail(family, buffer):
+    if family == "osc":
+        return all(ch in _OSC_TAIL_CHARS for ch in buffer)
+    return buffer.endswith(_ESC)
 
 
 class HostInput:
-    """Turns stdin chunks into events. A partial sequence waits for more bytes until
-    ``deadline()`` passes, then ``flush()`` releases it as is (a lone ESC becomes the
-    Escape key). Bracketed paste is collected across chunks into one ``Paste``."""
+    """Turns stdin chunks into events: herdr's ``RawInputByteFramer`` driven by the idle
+    flush of its stdin reader. ``feed`` frames what arrived; when ``deadline()`` passes with
+    no more input, ``flush()`` decides what a partial sequence was. ``mouse_capture``: the
+    panel has host mouse reporting on, so a lone ESC, a bare ``ESC [`` or a partial mouse
+    report gets the longer grace period (a mouse report split across reads is otherwise
+    indistinguishable from Escape followed by typing). ``escape_disambiguation``: the host
+    confirmed the kitty disambiguate flag, so Escape and Alt chords arrive as CSI u and a
+    partial escape sequence is never released by timeout."""
 
-    def __init__(self):
+    def __init__(self, *, mouse_capture=True, escape_disambiguation=False):
+        self.mouse_capture = mouse_capture
+        self.escape_disambiguation = escape_disambiguation
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        self._pending = ""
-        self._pending_since = None
+        self._buffer = ""
         self._paste = None               # text collected since the paste opener, or None
+        self._mouse_prefix = None        # timed_out_mouse_prefix
+        self._lone_escape_recently_flushed = False
+        self._discard_until = None       # "osc" | "st": an incomplete control string's tail
+        self._discarded_tail_bytes = 0
+        self._flush_at = None            # when the next idle flush is due
+        self._flushes = 0                # idle flushes since the last read (herdr does at most two)
+
+    # ── timing (client/input.rs unix_stdin_reader_loop) ──
+
+    def _idle_timeout(self):
+        buffer = self._buffer
+        if self.mouse_capture and (buffer in (_ESC, "\x1b[") or _incomplete_sgr_mouse(buffer)
+                                   or _incomplete_default_mouse(buffer)):
+            return MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT
+        return RAW_INPUT_IDLE_FLUSH_TIMEOUT
 
     def deadline(self):
-        """When ``flush`` should run for the buffered partial sequence, or None."""
-        if not self._pending or self._pending_since is None:
-            return None
-        window = escape_timeout() if self._pending == "\x1b" else SEQUENCE_TIMEOUT
-        return self._pending_since + window
+        """When ``flush`` should run for the buffered partial input, or None."""
+        return self._flush_at
 
     def feed(self, data, now=None):
-        if len(data) == 1 and data[0] > 127 and not self._pending:
+        now = time.monotonic() if now is None else now
+        if len(data) == 1 and data[0] > 127 and not self._buffer and self._paste is None:
             text = "\x1b" + chr(data[0] - 128)   # 8-bit meta: Alt+key as one high byte
         else:
             text = self._decoder.decode(bytes(data))
-        return self._consume(self._pending + text, now if now is not None else time.monotonic())
-
-    def flush(self):
-        """Release whatever is buffered; called when ``deadline`` has passed."""
-        pending, self._pending, self._pending_since = self._pending, "", None
-        events = []
-        if pending:
-            events.extend(self._events_for([pending]))
+        self._buffer += text
+        events = self._events(self._drain())
+        self._flushes = 0
+        self._flush_at = now + self._idle_timeout() if self._buffer else None
         return events
 
-    def _consume(self, buffer, now):
-        events = []
+    def flush(self, now=None):
+        """The idle flush (raw_input.rs flush_timeout); called when ``deadline`` has passed.
+        A flush that could decide nothing gets one more short window, then the framer waits
+        for the next read, as herdr's reader does."""
+        now = time.monotonic() if now is None else now
+        had_pending = bool(self._buffer)
+        chunks = self._flush_timeout()
+        self._flushes += 1
+        held = had_pending and not chunks
+        if self._buffer and held and self._flushes < 2:
+            self._flush_at = now + RAW_INPUT_IDLE_FLUSH_TIMEOUT
+        else:
+            self._flush_at = None
+        return self._events(chunks)
+
+    # ── framing ──
+
+    def _drain(self):
+        """drain_available_chunks: complete chunks off the head of the buffer."""
+        chunks = []
         while True:
             if self._paste is not None:
-                cut = buffer.find(_PASTE_END)
+                cut = self._buffer.find(_PASTE_END)
                 if cut < 0:
-                    self._paste += buffer
-                    self._pending, self._pending_since = "", None
-                    return events
-                events.append(Paste(self._paste + buffer[:cut]))
-                self._paste, buffer = None, buffer[cut + len(_PASTE_END):]
+                    keep = len(_PASTE_END) - 1          # a terminator split across reads
+                    self._paste += self._buffer[:-keep] if len(self._buffer) > keep else ""
+                    self._buffer = self._buffer[-keep:] if len(self._buffer) > keep else self._buffer
+                    break
+                chunks.append(Paste(self._paste + self._buffer[:cut]))
+                self._paste, self._buffer = None, self._buffer[cut + len(_PASTE_END):]
                 continue
-            start = buffer.find(_PASTE_START)
-            if start >= 0:
-                head, remainder = split_sequences(buffer[:start])
-                events.extend(self._events_for(head + ([remainder] if remainder else [])))
-                self._paste, buffer = "", buffer[start + len(_PASTE_START):]
+            if self._mouse_prefix is not None:
+                verdict, length = _classify_sgr_mouse_continuation(self._mouse_prefix, self._buffer)
+                if verdict == "incomplete":
+                    break
+                if verdict == "complete":
+                    self._buffer = self._buffer[length:]
+                self._mouse_prefix = None
+            if self._lone_escape_recently_flushed:
+                if _incomplete_orphaned_sgr_mouse_tail(self._buffer):
+                    break
+                length = _complete_orphaned_sgr_mouse_tail_len(self._buffer)
+                self._lone_escape_recently_flushed = False
+                if length:
+                    self._buffer = self._buffer[length:]
+                    continue
+            if self._discard_until is not None:
+                end = _control_string_terminator(self._buffer, self._discard_until)
+                if end is None:
+                    break
+                self._buffer = self._buffer[end:]
+                self._discard_until, self._discarded_tail_bytes = None, 0
                 continue
-            sequences, remainder = split_sequences(buffer)
-            events.extend(self._events_for(sequences))
-            if remainder != self._pending:          # progress on a partial sequence restarts its window
-                self._pending_since = now if remainder else None
-            self._pending = remainder
-            return events
+            if not PRESERVE_LEGACY_DOUBLED_ESCAPE_INPUT and self._buffer.startswith("\x1b\x1b"):
+                chunks.append(_ESC)
+                self._buffer = self._buffer[1:]
+                continue
+            if (self.escape_disambiguation and self._buffer[:1] == _ESC and len(self._buffer) > 1
+                    and not _known_escape_introducer(self._buffer)):
+                self._buffer = self._buffer[1:]
+                continue
+            if not self._buffer:
+                break
+            if self._buffer.startswith(_PASTE_START):
+                self._paste, self._buffer = "", self._buffer[len(_PASTE_START):]
+                continue
+            if self._buffer[0] == _ESC:
+                length = _complete_escape_sequence_len(self._buffer)
+                if length is None:
+                    break
+            else:
+                length = 1
+            chunks.append(self._buffer[:length])
+            self._buffer = self._buffer[length:]
+        return chunks
+
+    def _retain_timed_out_mouse_prefix(self, prefix):
+        self._mouse_prefix = (prefix if len(prefix) < MAX_DISCARDED_CONTROL_TAIL_BYTES
+                              and _plausible_sgr_mouse_prefix(prefix) else None)
+
+    def _flush_timeout(self):
+        chunks = self._drain()
+        # Idle is not evidence that a mouse report has ended: the continuation stays bounded
+        # and is released if it cannot complete a valid report.
+        if self._mouse_prefix is not None:
+            return chunks
+        buffer = self._buffer
+        if self._discard_until is not None:
+            keep_split_st = buffer.endswith(_ESC)
+            keep = _plausible_control_string_tail(self._discard_until, buffer)
+            self._discarded_tail_bytes += len(buffer)
+            self._buffer = ""
+            if keep and self._discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES:
+                if keep_split_st:
+                    self._buffer = _ESC
+            else:
+                self._discard_until, self._discarded_tail_bytes = None, 0
+            return chunks
+        if not buffer or self._paste is not None:
+            return chunks                 # nothing held, or waiting for the paste terminator
+        if self.escape_disambiguation and _bounded_incomplete_escape(buffer):
+            return chunks
+        if self._lone_escape_recently_flushed and buffer.startswith("[<"):
+            self._buffer = ""
+            self._retain_timed_out_mouse_prefix(_ESC + buffer)
+            self._lone_escape_recently_flushed = False
+            return chunks
+        if _incomplete_sgr_mouse(buffer):
+            self._buffer = ""
+            self._retain_timed_out_mouse_prefix(buffer)
+            return chunks
+        family = _control_string_family(buffer)
+        if family is not None and _control_string_terminator(buffer, family) is None:
+            # Host control strings take precedence over legacy Alt forms like Alt+], so a
+            # later tail of the string cannot leak in as typing.
+            self._discard_until, self._discarded_tail_bytes = family, 0
+            self._buffer = ""
+            return chunks
+        if buffer == _ESC:
+            self._lone_escape_recently_flushed = True
+            self._buffer = ""
+            chunks.append(_ESC)
+            return chunks
+        if parse_key(buffer) is not None:
+            self._buffer = ""
+            chunks.append(buffer)
+            return chunks
+        self._lone_escape_recently_flushed = False
+        self._buffer = ""                 # an incomplete sequence nobody finished
+        return chunks
 
     @staticmethod
-    def _events_for(sequences):
-        return [event for event in map(parse_sequence, sequences) if event is not None]
+    def _events(chunks):
+        events = []
+        for chunk in chunks:
+            event = chunk if isinstance(chunk, Paste) else parse_sequence(chunk)
+            if event is not None:
+                events.append(event)
+        return events
+
+
+# ── Keyboard enhancement probe (terminal_setup.rs query_host_escape_disambiguation) ─────
+
+def _host_control_string_end(buffer, offset):
+    """host_control_string_end: None if no control string starts at ``offset``; -1 while it
+    is unterminated; else its end."""
+    if buffer[offset:offset + 1] != b"\x1b":
+        return None
+    if buffer[offset:offset + 2] == b"\x1b]":
+        allow_bel = True
+    elif buffer[offset + 1:offset + 2] in (b"P", b"_", b"^", b"X"):
+        allow_bel = False
+    else:
+        return None
+    for index in range(offset + 2, len(buffer)):
+        if allow_bel and buffer[index] == 0x07:
+            return index + 1
+        if buffer[index:index + 2] == b"\x1b\\":
+            return index + 2
+    return -1
+
+
+def consume_keyboard_probe_responses(buffer, state):
+    """consume_host_keyboard_probe_responses: remove the ``CSI ? flags u`` and primary-DA
+    replies from ``buffer`` (a bytearray of input read while probing), leaving every other
+    byte for the framer. ``state`` collects ``flags`` and ``primary_device_attributes``."""
+    offset = 0
+    while offset < len(buffer):
+        if buffer[offset:].startswith(b"\x1b[200~"):
+            end = buffer.find(b"\x1b[201~", offset + 6)
+            if end < 0:
+                break
+            offset = end + 6
+            continue
+        end = _host_control_string_end(buffer, offset)
+        if end is not None:
+            if end < 0:
+                break
+            offset = end
+            continue
+        if not buffer[offset:].startswith(b"\x1b[?"):
+            offset += 1
+            continue
+        start, end = offset, offset + 3
+        while end < len(buffer) and (48 <= buffer[end] <= 57 or buffer[end] == 59):
+            end += 1
+        if end == len(buffer):
+            break
+        body = bytes(buffer[start + 3:end])
+        recognized = False
+        if buffer[end] == ord("u") and body and body.isdigit():
+            if not state.get("primary_device_attributes"):
+                state["flags"] = int(body)
+            recognized = True
+        elif buffer[end] == ord("c") and body:
+            state["primary_device_attributes"] = True
+            recognized = True
+        if recognized:
+            del buffer[start:end + 1]
+        else:
+            offset += 1
+
+
+def escape_disambiguation_confirmed(state):
+    """host_escape_disambiguation_confirmed: the host answered DA and reported flag 1."""
+    return bool(state.get("primary_device_attributes")) and bool((state.get("flags") or 0) & 1)

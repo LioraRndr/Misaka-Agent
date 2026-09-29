@@ -1,195 +1,420 @@
 # Research runs
 
-This guide covers everything about `/research` that the [README](../../README.md) leaves out:
-starting a run, plan approval, how each stage works, steering a run while it goes, parallelism
-and cost, and what is written to disk.
+A research run answers one question by exploring the different ways it could be answered. Your
+question is the first **node**. Last Order plans it with you, the Sisters research it, and she
+writes a conclusion. A red-team Sister then challenges that conclusion and brings out the
+possibilities it passed over. Errors and gaps are fixed inside the node; a real alternative,
+resting on different premises, opens as a new node with its own Last Order, Sisters and red team.
+The run grows this way, one level at a time, into a **research graph**, and ends with a report
+written as a research article.
+
+This page covers starting a run, what happens inside each node, how the graph grows, following
+and steering a run, and what it leaves in your project. For a first run, see
+[Getting started](../getting-started.md#5-ask-your-first-question).
 
 ## Starting a run
 
-Research runs in a project folder and needs at least one Sister (`misaka create 10032`).
+A run needs a project folder and at least one Sister (`misaka create 10032`). Two are better:
+one can review the other's work.
 
-**In chat** (Last Order's window in the panel, or `misaka chat`):
+### From chat
 
-- `/research` on its own opens a picker, then takes your next message as the question. It asks
-  for the depth (2 for a quick pass, 5 for standard deep research, 10 for an exhaustive and costly
-  one), how many Last Order nodes may run at once (4, 1 or 8), how many Sister cards each node may
-  run at once (4, 1 or 8), how many extra rounds a node may take (2, 0 or 4), whether plans
-  wait for your approval, when this run's sessions compact their context (your global
-  `lcm.context_threshold`, 0.5 or 0.85 of the window) and how long each reply may be (each model's
-  own maximum, 64k or 32k tokens). The last two apply only to this run -- the window you started it
-  in while the run works there, its fork nodes and its Sisters' cards -- and never change your
-  settings; an output limit above a model's own maximum stays at that maximum. "Other" takes your
-  own value (`0.6` or `60%`; `48k`). Choose "Chat about this" to talk the options over with Last Order first.
-- `/research [--depth N] [--parallel N] [--sister-parallel N] [--followups N] QUESTION` starts at once.
-  Unset options take the defaults: depth 3, 4 nodes at once, 4 Sister cards per node, 2 extra
-  rounds, and plan approval as `research.plan_approval` in `settings.json` says (on by default).
-  A question may start with a number (`/research 1968 student movements in Japan`). A bare number
-  is read as the depth only when nothing but options follows it: `/research 3` sets the depth and
-  takes your next message as the question, and `/research 3 --parallel 2 QUESTION` works as before.
+In Last Order's window, type `/research`. A picker asks nine questions, then takes your next
+message as the question. Enter accepts the suggestion, "Other" takes a value of your own (such
+as `0.6` or `60%` for compaction, `48k` for the output limit), and "Chat about this" lets you
+talk the options over with Last Order first.
 
-**From the shell**, in the project folder:
+| Question | Choices | What it changes |
+|---|---|---|
+| Research depth | 2, 5, 10 | how many levels of alternatives may open below your question. 2 is a quick pass, 10 is exhaustive and costly. |
+| LO parallelism | 4, 1, 8 | how many nodes run at the same time |
+| Sister cards per LO | 4, 1, 8 | how many Sister cards one node runs at the same time |
+| Follow-ups | 2, 0, 4 | how many extra rounds of cards a node may send out after the first |
+| Revisions | 2, 0, 4 | how many times a node may rework its conclusion after the red team |
+| Nodes | 30, 12, 80 | how many nodes the whole run may hold, your question included |
+| Plan approval | Require approval, Automatic | whether plans wait for you ([below](#approving-plans)) |
+| Compaction | your setting, 0.5, 0.85 | how full a conversation gets before older turns are summarised |
+| Output limit | model maximum, 64k, 32k | the longest reply a model may write |
 
-```sh
-misaka research --depth 3 --parallel 4 --sister-parallel 4 --followups 2 "QUESTION"
+The last two apply to this run only.
+
+To skip the picker, put the question and any options on one line:
+
+```text
+/research --depth 2 --max-nodes 12 How did the 1918 influenza change public health law in Japan?
 ```
 
-Depth runs from 0 to 12, with the question itself at depth 0. Extra rounds run from 0 to 6.
+Options you leave out take the defaults: depth 3, 4 nodes and 4 cards at once, 2 follow-ups,
+2 revisions, 30 nodes. `/research 3` on its own sets the depth and waits for the question.
 
-## Plan approval
+### From the shell
 
-Every plan, the root's, each fork's and each follow-up round's, can wait for your go-ahead.
-Two modes:
+```sh
+misaka research --depth 3 --max-nodes 30 "QUESTION"
+```
 
-- **Require approval** (the default). A plan is written and waits. You talk it over with the Last
-  Order who wrote it, and she starts it once you agree. There is no approve command and no
-  keyword; she records the start when the conversation has settled it.
-- **Automatic.** An accepted plan goes ahead at once. A plan that genuinely needs your input still
-  asks for it.
+It takes the same options. Depth runs from 0 (your question only) to 12, follow-ups and
+revisions from 0 to 6, nodes from 1 to 500. The other nodes run in the background; see
+[Runs started from the shell](#runs-started-from-the-shell) to talk to them.
 
-The mode you pick is saved with the run and applies to its forks, its follow-up rounds and any
-resume. `research.plan_approval: false` in `settings.json` makes Automatic the default.
+## Approving plans
 
-Where a plan waits:
+Every plan in a run can wait for your go-ahead: the first plan, each new node's plan, each extra
+round, and each rearrangement of the graph between levels.
 
-| Plan | Where you discuss it |
+- **Require approval** (the default). Last Order shows you the plan and you talk it over in plain
+  words: ask what a part is for, ask for changes, or say it looks good. She starts when you agree.
+- **Automatic.** Plans go ahead as soon as they are written. Last Order still asks when she needs
+  your input, and a plan that changes the question itself always waits for you.
+
+The choice is saved with the run, for all its nodes and any resume. To make Automatic your
+default, set `research.plan_approval` to `false` in `settings.json`.
+
+Where a plan waits for you:
+
+| Plan | Where you talk it over |
 |---|---|
-| the root's | the window you started the run in |
-| a fork's | that fork's own tab in the panel |
-| any plan of a shell run | the session the command prints: `misaka chat --attach --session PATH` |
+| the first plan, and the rearrangements between levels | the window you started the run in |
+| any other node's plan | that node's own tab in the panel |
+| any plan of a run started from the shell | the session the command prints: `misaka chat --attach --session PATH` |
 
-While a plan waits, Last Order can revise it (a revision replaces the last in its plan file; a
-plan too large for one reply arrives in several appending calls) or start it. For a follow-up round she can also withdraw the round, so the node
-concludes from what it already has. For a fork's first plan she can skip the node if you decide
-it is not worth researching: it closes with no cards and no conclusion, and its objection stays
-on record, with your reason, for the final adjudication. To give up on the whole run, use
-`/research stop`.
+Besides changing a plan, you can:
 
-When a run nobody is talking to needs an answer before it can plan, it pauses with its
-questions. Answer them with `/research resume RUN_ID ANSWER`.
+- **skip a node** you decide to leave aside. It closes at once, and the final report lists it
+  among the paths not taken, with your reason;
+- **drop an extra round**, so the node concludes from what it already has;
+- **stop the whole run** with `/research stop`.
+
+If a run that nobody is watching needs an answer before it can plan, it pauses with its
+questions. Answer with `/research resume RUN_ID YOUR ANSWER`.
 
 ## Inside a node
 
-Every node, the root included, runs the same routine. Code keeps the order, the depth, the
-saved state and the files straight; the models make the judgements.
+Every node, your question included, goes through the same steps:
 
-**Plan.** The plan is a research design, not an answer. Last Order works out what the question
-is really asking and which premises are untested, then sets out evidence needs, deliverables,
-dependencies and acceptance criteria, suggests methods and source strategies with their blind
-spots, and explains why each Sister fits her assignment. She names the red-team Sister, and she
-ends the plan with the coverage maps she consulted and the gaps that remain. The plan is saved as
-`plan.md` (and `plan.json`).
+```mermaid
+flowchart TD
+    P["Plan"] --> C["Sisters work their cards"]
+    C --> S["Last Order writes the conclusion"]
+    S --> R["Red team reviews it"]
+    R -->|"first review"| D["Divergence review: the possibilities<br/>not taken, and the gaps"]
+    D --> A["Last Order answers every issue and gap"]
+    R -->|"later reviews"| A
+    A -->|"something to revise"| S
+    A -->|"settled"| X["Decision: which possibilities<br/>open as new nodes"]
+```
 
-**Cards.** Each assignment becomes a card, created in dependency order. A Sister can hold several
-cards at once, each in its own session. As she works she declares findings with
-`misaka_card_note`: the claim, its type (fact, inference, interpretation or normative), its
-source file or document and page, and an optional quotation. Declarations accumulate, and a
-correction names the one it revises. The ledger records them; it does not judge them. That is
-the red team's and Last Order's job.
+A node at the depth limit ends after the review loop.
 
-**Rounds.** When the cards are back, Last Order either concludes or assigns another round
-(`plan-2.md`, then `plan-3.md`, …), up to the run's limit. On the last allowed round she has to
-conclude and say what remains unsupported.
+### 1. The plan
 
-**Conclusion.** Last Order reads the full sources, not only the summaries, and writes
-`synthesis.md`: shared and competing findings, key evidence and counterevidence, methodological
-limits, value premises and open questions, ending with a `## Sources` list.
+The plan is a research design. Last Order works out what the question really asks, what else it
+could mean, and which of its assumptions are untested. She sets out the evidence needed, the
+methods and sources to use and what each of them misses, and why each Sister fits her part.
 
-**Red team.** The Sister named in the plan receives the conclusion, every plan of the node, the
-evidence, and `deliberation.md`, which is Last Order's own reasoning from her turns. She writes
-`critique.md` and records each issue with its kind, question, rationale, priority and whether it
-is material. Only material issues lead anywhere. With none, or at the depth limit, the review is
-filed in Last Order's conversation without spending a model turn, and any issues at the limit are
-kept for the final adjudication.
+- **One card per assignment.** When the question turns on several actors, regions, institutions
+  or periods, each gets a card of its own.
+- **A coverage table** sets every sub-question, actor and dimension against the cards that serve
+  it, so a gap shows up as an empty cell.
+- **The red team is named here**, for two jobs: reviewing every version of the conclusion, and
+  the divergence review.
 
-**Children.** For each material issue, Last Order dispatches a fork of her own conversation as a
-child node one level deeper, which runs this same routine with its own Sisters and red team. The
-tree grows breadth-first: every node at one depth runs (up to `--parallel` at a time) before the
-next depth starts.
+A first plan may also record **decisions**: points where the question can be answered in
+genuinely different ways, such as competing hypotheses, methods, frameworks or readings, or a
+critique of the question itself. A decision has at least two options that exclude each other,
+each with its premise, and the node's own line can be one of them. Work that adds to the same
+answer becomes more cards.
+
+When the options open depends on the plan:
+
+- **Beside the node's own cards**, they open after the node has concluded, and each one answers
+  that conclusion.
+- **In a plan with no cards of its own** (a pure branch point), they open straight away, side by
+  side and independent of each other. This suits readings or methods whose agreement should
+  count as independent confirmation; the main line goes in as one of the options.
+
+A node that tries another framework says which material that framework points to that its
+parents did not read, and what in it would count against their conclusions.
+
+### 2. The cards
+
+Each assignment becomes a **card**: a Markdown file with the task, its sources and what to
+deliver. The Sisters (and [allies](team.md#allies) such as Claude Code) work their cards in
+parallel, each in its own session, in panes beside Last Order.
+
+As she works, a Sister declares each finding: the claim, what kind of claim it is (fact,
+inference, interpretation or value judgement), the file or document and page it rests on, and the
+quotation if there is one. The red team and Last Order weigh these later.
+
+When the cards are back, Last Order either concludes or sends the Sisters out for another round,
+up to the follow-up limit. On the last round she concludes and names what remains unsupported.
+
+### 3. The conclusion
+
+Last Order reads what the cards delivered, in full, and writes the conclusion (`synthesis.md`):
+shared and competing findings, key evidence and counterevidence, the limits of the methods, and
+what stays open. It also says:
+
+- which presuppositions the conclusion rests on, and what each one gains, gives up and trades;
+- what it does not know: what its sources could not reach, whose voices are missing, what its
+  frame keeps out of view;
+- how it answers the node it came from and the strongest case of its rival options.
+
+A conclusion may be a position that openly accepts named **costs**, or a **dissolution**: a
+showing that the question rests on a confusion or an ideological presupposition. A dissolution
+is a legitimate result.
+
+If the cards show that an earlier node got something wrong (a fact, a date, an attribution, a
+reference that does not exist), Last Order records an **erratum** against it. The correction is
+shown beside the earlier conclusion, in every node below it and in the final report.
+
+### 4. The red team
+
+The red-team Sister reads the conclusion, the plans, the evidence, the graph so far and Last
+Order's own reasoning on the node, and writes a critique (`critique.md`). She:
+
+- checks the facts the conclusion rests on against sources of her own, starting with claims from
+  cards that consulted no source;
+- raises the **gaps**: anything an answer to this question has to cover and this one leaves out;
+- checks that the conclusion answers the node it came from and its rivals. For a node opened to
+  question its parent's framing, she asks what the question becomes under that critique;
+- reads what the conclusion and the reasoning leave unsaid, where the silence carries the
+  argument.
+
+She records each objection separately and marks the serious ones. A question another node
+already owns, she names by that node.
+
+### 5. The divergence review
+
+After her first review, the same Sister opens a fresh session and reads the conclusion again for
+the choices it made. She brings out two kinds of thing (`divergence.md`):
+
+- **possibilities not taken**: other hypotheses, methods, frameworks, readings, sources and
+  voices, other ways of dividing the question, or a critique of the question itself. They include
+  what the conclusion gave up and what it never considered, and each rests on a premise different
+  from the conclusion's;
+- **gaps**: what the conclusion neglected and any answer needs.
+
+For each choice she digs out the presuppositions behind it and what it gained and gave up, and
+leaves it to research whether they hold. She starts from the run's **paths list** (below) and
+skips what is already on it.
+
+### 6. Answering the review
+
+Last Order answers every serious objection, and every gap from the divergence review, one answer
+each:
+
+| Answer | Meaning |
+|---|---|
+| **revise** | it is right: she reworks the conclusion. A gap is filled with research, a new card while follow-up rounds remain. |
+| **rebut** | it does not hold, and she gives her reason, which the red team sees. |
+| **concede** | the conclusion stands and accepts this cost. The final report lists it with the costs the answer accepts. |
+| **covered** | another node owns this question, and she says how its work answers it. |
+| **park** | it stays open, and the final report says so. |
+| **branch** | it reveals a real alternative (the framework breaks down, or a critique aims at the question itself). It goes to the decision. |
+
+A node settles its own objections and gaps: what it cannot fill, it concedes or parks on the
+record.
+
+While something is revised and revisions remain, Last Order writes the next version
+(`synthesis-2.md`, …) and the same red-team Sister reviews it in her own conversation, with Last
+Order's answers in front of her (`critique-2.md`, …). She checks whether each revision fixed what
+it set out to fix, whether each rebuttal holds, and what the revision changed. The loop ends when
+nothing more is revised or the revisions run out. After that, plain errors the last review names,
+such as a wrong date or figure, are **corrected** in a `## Corrections` section at the end of the
+conclusion.
+
+### 7. The decision
+
+Last Order goes through the possibilities not taken, and any objection she answered with
+*branch*, and records each as:
+
+- an **option** of a decision, with its premise, to open as a new node;
+- **covered**, when a node or a waiting option already pursues it;
+- **declined**, with her reason. The final report lists declined paths and why.
+
+A fork is a possibility that excludes the node's own line. A presupposition the answer depends
+on becomes one too: the node opened for it researches whether it holds, and what the answer
+becomes if it does not.
+
+## How the graph grows
+
+The run goes one level at a time: all nodes at one depth finish before the next depth starts.
+
+### Between levels
+
+When a level has finished, Last Order looks across the whole graph, in the window you started
+the run in, and rearranges it. With approval on, she presents this to you like a plan.
+
+- **Waiting options open as new nodes**, except those that complement an existing node, that a
+  node already pursues, that are really corrections, or that the depth or node limit stops.
+- **Options that ask the same question become one node** with several parents, so it is
+  researched once. Two readings that share a name but define their key concept differently count
+  as different questions.
+- **Finished nodes that arrive at the same place by different routes can be joined**: a new node
+  carries them forward together and may branch again. In a join the lines confront each other:
+  what can be combined is combined, and where they disagree the disagreement is drawn sharply.
+  Conclusions that simply agree are recorded as converging, which is a finding in itself.
+- **Relations between nodes are recorded**: where they converge or diverge, and where one echoes,
+  borrows from or displaces another. The final report draws on them.
+
+### The paths list
+
+The run keeps a list of every possibility raised so far, grouped under the node that raised it,
+with what became of it (`final/<run>-paths.md`). Each possibility is opened once: one that a node
+already pursues goes to that node, and a declined path comes back only with an answer to why it
+was declined.
+
+A new node starts from a copy of the conversation of the node it came from, so it knows how its
+question arose. A join starts from what its lines have in common, with a brief on each of them
+(`context.md`).
+
+`final/<run>-graph.md` draws the whole graph, and Last Order can show you where it stands
+whenever you ask.
 
 ## The final report
 
-Once every node has closed, the root Last Order, still in the conversation she planned in, writes:
+When every node has closed, Last Order writes the report in four steps:
 
-1. a **survey**: one section per node, with its question, methods, conclusion, key evidence, the
-   full red-team objections and what each child found, without deciding between them;
-2. a **draft** answer to the original question, keeping competing accounts, limits and what would
-   change the answer;
-3. after an **independent red team** reviews that exact draft (the review is tied to the draft's
-   checksum), the **final report**: she accepts, rejects or leaves open each objection with her
-   reasons, and ends with a section saying which objections changed the answer.
+1. **a survey**, one section per node: its question and how it arose, its methods and
+   conclusion, what each revision changed, the objections and what became of them, the
+   corrections, the possibilities it raised, and what the nodes after it found;
+2. **a draft** answer to your question;
+3. **an independent review** of the draft by the red team;
+4. **the final report**, where Last Order accepts, rejects or leaves open each objection with her
+   reasons, and revises the draft where the review holds.
 
-A run that stops early, because you stopped it or because the token budget ran out, writes
-`final/<run>-partial.md` instead: each node's conclusion so far, how many findings the ledger
-holds, and the issues left unsettled. No model call is spent on it.
+The report is a research article for a reader in the humanities and social sciences, in the
+language of your question: title, abstract and keywords, an introduction with the question, its
+concepts and the research design, chapters that argue, and a conclusion. Every line of inquiry's
+final conclusion has its place in the argument, as a finding, an objection, a qualification or a
+rival reading. The body names lines of inquiry by what they argued and sources by author and
+title; the apparatus carries the rest:
 
-## Watching and steering a run
+- **notes** citing author, title, year and page, with the file in the project where there is one;
+- **a bibliography** of every work cited;
+- **Appendix I, the lines of inquiry**: every node, its question, its conclusion in a sentence,
+  and where the article takes it up;
+- **Appendix II, the record**: the costs the answer accepts, the corrections, the paths not taken
+  and why, what stays open, and where independent lines converge and diverge;
+- **Appendix III, the materials**: where to find the full list of what the run read and
+  downloaded;
+- **Appendix IV, the review**: which objections changed the answer, which were rejected and why,
+  and which remain unsettled.
 
-**In the panel,** each fork node opens in a tab of its own, where its Last Order runs as an
-interactive window with her Sisters in a grid beside her. What you type in that tab is a turn of
-that Last Order. The tab stays open after the node closes, so you can ask her about what she
-found. Closing it while the node is still running ends the node; `/research resume` retries it.
+If a node concluded that your question itself dissolves, Last Order asks you before drafting.
+With your agreement, the report answers with the dissolution; otherwise it answers the question
+as asked and presents the dissolution as one reading.
 
-**From the shell,** there is no panel: the command owns the root, and the nodes run as background
-processes. `misaka chat --attach --session PATH` connects you to any of them. Your input goes to
-that session directly, with no second model in between. Enter steers a busy session or starts a
-turn in an idle one. `/pause` holds the session at its next request, tool or workflow boundary,
-and `/resume` releases it; tools and agents already running are not stopped. Closing an attached
-window only detaches.
+## Following a run
+
+### In the panel
+
+Each node below the root opens in a **tab** of its own, with its Last Order in the main pane and
+her Sisters beside her. Type in that tab to talk to that node's Last Order, to ask what she is
+doing or to steer her. The tab stays open after the node finishes, so you can ask about what she
+found. Closing a tab while its node is working ends the node as failed.
+
+The sidebar's agents list shows who is working and who needs you; the [panel guide](panel.md)
+explains the tabs, panes and keys.
+
+### Commands
 
 | To | In chat | From the shell |
 |---|---|---|
-| see a run's state | `/research status [RUN_ID]` | `misaka board` |
-| stop a run | `/research stop [RUN_ID]` | Ctrl+C in the running command |
-| resume a run | `/research resume [RUN_ID] [ANSWER]` | `misaka research --resume RUN_ID` |
-| resume in another window | `/research resume RUN_ID --here` | |
+| see how a run is doing | `/research status [RUN_ID]` | `misaka board` (its cards) |
+| stop a run and get a partial report | `/research stop [RUN_ID]` | Ctrl+C in the running command |
+| resume a stopped or failed run | `/research resume [RUN_ID] [ANSWER]` | `misaka research --resume RUN_ID` |
+| resume in a different window | `/research resume RUN_ID --here` | |
 
-A resumed run needs the Sisters its cards were assigned to; recreate any you removed. While a
-run is paused, the Last Order of that conversation will talk about it but will not carry on the
-research herself.
+Resume a run in the Last Order conversation that started it; from any other window,
+`/research resume` names the conversation to open (the sidebar lists it under sessions).
+`--here` resumes in the current window, whose Last Order starts without the run's earlier
+conversation.
 
-## Parallelism and cost
+A resumed run needs the Sisters its cards went to. If you removed one, create her again with the
+same number first.
 
-`--parallel N` limits how many Last Order nodes run at once (default 4). `--sister-parallel N`
-limits how many Sister cards each node runs at once (default 4); two sessions of the same Sister
-take two slots. Both are saved with the run and reused on resume and in forks.
+### Runs started from the shell
 
-The machine sets its own ceiling on top: `network.max_concurrent_sisters` (free memory divided
-by 256 MiB, between 4 and 12) and `network.max_concurrent_per_sister`. Cards waiting on other
-cards also wait. These limits count cards, not windows or the sub-agents a Sister starts.
+The command runs the root and the other nodes run in the background. To talk to any of them,
+attach to its session:
 
-`research.token_cap` sets a token budget for the board (0, the default, means none). When it
-runs out, the run stops with a partial report.
-
-## On disk
-
+```sh
+misaka chat --attach --session PATH
 ```
-your-project/
-├── PROJECT.md                          the brief; Last Order keeps it current
-├── nodes/<node>/                       the root's folder is named after the run
-│   ├── plan.md, plan.json              plan-2.md … for later rounds
-│   ├── synthesis.md                    the node's conclusion
-│   ├── deliberation.md                 Last Order's reasoning, for the red team
-│   ├── cards/<card>/                   each card's output, its own SOURCES.md and sources/
-│   └── SOURCES.md, sources/            what the node's conclusion cites
+
+What you type goes straight to that Last Order. `/pause` holds her at the next step, `/resume`
+lets her go on, and closing the window detaches.
+
+## When something fails
+
+**A card fails.** A card gets three attempts. When cards have failed for good, the node's Last
+Order decides: send them back to their Sisters (up to twice per node), carry on with the cards
+that finished (her conclusion then says what the missing ones were for), or let the node fail.
+
+**A node fails.** Its process stopped, a provider refused it, or its Last Order gave up on it.
+The run tells you in your window, and the rest of the level carries on. If the cause was passing,
+such as an outage, the root Last Order can run the node again straight away, up to three times.
+Otherwise the run ends with a partial report once the level has finished; fix the cause and
+`/research resume` retries the node.
+
+**The run stops early.** You stopped it, the token budget ran out, or a node failed. The run then
+writes `final/<run>-partial.md`: each node's latest conclusion, how many findings were recorded,
+and the objections still open. `/research resume` carries on from there.
+
+[Troubleshooting](troubleshooting.md#research-runs) lists the messages you may see and what to do
+about each.
+
+## Cost and parallelism
+
+A run makes many model calls: every node plans, runs its Sisters, concludes and is reviewed, and
+the depth and node limits decide how far it spreads. For a cheaper run, lower the depth, the node
+limit, the follow-ups and the revisions.
+
+`--parallel` (default 4) sets how many nodes run at once, and `--sister-parallel` (default 4) how
+many cards each node runs at once. Your machine adds a ceiling of its own based on free memory
+(`network.max_concurrent_sisters`).
+
+For a hard limit on spending, set `research.token_cap` in `~/.misaka/settings.json` to a number
+of tokens for everything on the board (`0`, the default, means no limit). A run that reaches it
+stops with a partial report.
+
+## What a run writes
+
+Everything goes into your project folder:
+
+```text
+my-research/
+├── PROJECT.md                  the project brief; Last Order keeps it up to date
+├── nodes/<node>/               one folder per node, the root's included
+│   ├── NODE.md                 what this node is and how it was reached
+│   ├── context.md              the brief a new node starts from
+│   ├── plan.md                 the plan; plan-2.md … for later rounds
+│   ├── synthesis.md            the conclusion; synthesis-2.md … after revisions
+│   ├── deliberation.md         Last Order's reasoning, as given to the red team
+│   ├── cards/<card>/           each card's work, with the files it cites; the red team's
+│   │                           cards hold critique.md (critique-2.md …) and divergence.md
+│   └── SOURCES.md, sources/    every file the conclusion cites
 └── final/
-    ├── <run>-question.md
+    ├── <run>-question.md       your question
+    ├── <run>-graph.md          the research graph: a map, the nodes, the decisions, the relations
+    ├── <run>-paths.md          every possibility raised and what became of it
     ├── <run>-survey.md
     ├── <run>-draft.md
-    ├── <run>-final.md                  (or <run>-partial.md)
+    ├── <run>-final.md          the report (or <run>-partial.md)
+    ├── <run>-graph.json        the graph as data
     └── <run>-SOURCES.md, <run>-sources/
 ```
 
-`SOURCES.md` and `sources/` are rebuilt from scratch each time a card, node or run settles.
-They are derived: never registered, indexed or committed, and anything edited by hand in them is
-gone at the next rebuild. Each file in `sources/` is a hard link to where it already lives in the
-project, or a copy where a link is impossible. Cite the original files, not the bundle.
+`NODE.md`, the graph files, the paths list and every `SOURCES.md` and `sources/` are rebuilt from
+the run's records whenever something changes, so leave them unedited; the run itself is kept in
+`~/.misaka/`. Each file in `sources/` links to the original in the project, which is the one to
+cite.
 
-`/research resume` in the window belongs to the run's own Last Order conversation; another window is
-refused and told which session to open, and `--here` adopts it on purpose (that Last Order will not
-remember the run's earlier turns). The CLI form reopens the saved conversation itself.
+## Keeping a history with git
 
-If the project is a git repository, MISAKA commits when a node closes, when a run stops and when
-it finishes: the nodes' plans and conclusions, every card's contract and output folder (without
-its derived bundle), and `PROJECT.md`. `misaka init` writes a `.gitignore` for the caches, the
-download folder and the bundles. Conversations are kept under
-`~/.misaka/state/sessions/research/<run>--<scope>/`.
+MISAKA commits only when you ask. `misaka init` makes a folder a git repository, with a
+`.gitignore` for caches and the rebuilt source folders. To commit, type `/commit MESSAGE` or ask
+Last Order in words; you see the files and confirm first, and the commit uses your own git
+identity.

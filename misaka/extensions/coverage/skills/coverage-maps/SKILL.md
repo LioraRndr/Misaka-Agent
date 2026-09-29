@@ -21,9 +21,13 @@ map is evidence. Use several, and say which ones you used.
 
 ## Procedure
 
-0. Call `coverage_scan` with two or three phrasings of the question: it returns which subfields
-   and topics of the literature (OpenAlex) actually discuss it. A neighbouring field with many
-   works is a dimension you may be missing; a field with few is not thereby irrelevant.
+0. Call `coverage_scan` with the question cut into facets -- its object, actors, places, period,
+   processes, sources, method -- each with its alternative terms: synonyms, variant names, and the
+   words other literatures use in their own languages. It returns, for each facet alone, all of
+   them together and every pair, which subfields and topics of the literature (OpenAlex) discuss
+   it, in which languages and kinds of publication. A facet with a literature of its own that
+   barely meets the others is a dimension you may be missing; a field with few works is not
+   thereby irrelevant.
 1. Read `references/facets.md` first. Cut the question along the five facets:
    discipline, period, place, source type / genre, method. Write one line per facet.
 2. Scan `references/disciplines.md`: which fields discuss this question, and which

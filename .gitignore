@@ -18,3 +18,7 @@ __pycache__/
 /.misaka/lcm/
 /.misaka/lcm.gate
 /.misaka/lcm.activity.sqlite*
+
+# Development records (plans, audits, ledgers): kept on the developer's machine, not published
+/docs/plans/
+/docs/audits/

@@ -39,8 +39,8 @@ def _run_with_artifact(tmp_path, monkeypatch, filename, write):
     run = runs.create(con, workspace=str(workspace), question="Did shipments rise?")
     node = runs.nodes(con, run["id"])[0]
     con.execute(
-        "INSERT INTO research_run_tasks (task_id,run_id,branch_id,kind,wave,created_at) "
-        "VALUES (?,?,?,?,0,strftime('%s','now'))",
+        "INSERT INTO research_run_tasks (task_id,run_id,branch_id,kind,round,created_at) "
+        "VALUES (?,?,?,?,1,strftime('%s','now'))",
         ("t1", run["id"], node["id"], "explore"))
     digest = hashlib.sha256((workspace / filename).read_bytes()).hexdigest()
     workflow._register_task_artifacts(            # what dispatch._submitted records for every card

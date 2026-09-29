@@ -2092,17 +2092,13 @@ class SubagentManager:
         for key in durable_keys:
             env.pop(key, None)
         env.update(self._durable_child_environment(task))
-        from misaka.extensions.misaka_lcm.host import storage as lcm_storage
-
-        lcm_project = lcm_storage.project(lcm_storage.context(
-            self.session, os.environ.get("MISAKA_LCM_PROJECT") or self.role_context.workspace))
+        await self._extension_environment(task, env)   # before the core's own keys, which take precedence
         env.update(
             {
                 "PYTHONUNBUFFERED": "1",
                 "MISAKA_WHO": self._who(task),
                 "MISAKA_MCP_ROLE": self.role_context.mcp_role,
                 "MISAKA_WORKSPACE": task.cwd,
-                "MISAKA_LCM_PROJECT": str(lcm_project),
                 "MISAKA_SUBAGENT_ID": task.id,
                 "MISAKA_SUBAGENT_BACKGROUND": "1" if task.background else "0",
                 "MISAKA_SUBAGENT_PARENT_SESSION_ID": task.parent_session_id,
@@ -2914,6 +2910,17 @@ class SubagentManager:
                 continue
             loaded.append(content)
         return loaded
+
+    async def _extension_environment(self, task: AgentTask, env: dict[str, str]) -> None:
+        """``subagent_start`` on this session's extensions, before the child exists. The child is a
+        process of its own with its own copy of every extension; a handler whose copy there needs
+        something only this session knows writes it into ``env`` (the LCM plugin: the project store
+        this session belongs to). Hermes raises its hook of the same name in the parent when it
+        starts a subagent. The core names no extension: without one, nothing is added."""
+        runner = getattr(self.session, "extensionRunner", None)
+        if runner is None or not runner.has_handlers("subagent_start"):
+            return
+        await runner.emit({"type": "subagent_start", "subagentId": task.id, "cwd": task.cwd, "env": env})
 
     def child_env_extra(self, _task: AgentTask) -> dict[str, str]:
         """Extra child environment. The pinned skill snapshot travels to every nested agent, so a

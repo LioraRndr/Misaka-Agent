@@ -190,6 +190,9 @@ def require_current_version(entries: list[FileEntry], file_path: str) -> None:
     """
     header = next((entry for entry in entries if entry.get("type") == "session"), None)
     version = int(header.get("version", 1)) if isinstance(header, dict) else 1
+    if version > CURRENT_SESSION_VERSION:
+        raise InvalidSessionFileError(file_path, f"session version {version} was written by a newer MISAKA; "
+                                                 f"this build reads v{CURRENT_SESSION_VERSION}. Update MISAKA (`misaka update`)")
     if version != CURRENT_SESSION_VERSION:
         raise InvalidSessionFileError(file_path, f"session version {version}; this build reads v{CURRENT_SESSION_VERSION}")
 
@@ -227,12 +230,11 @@ def session_entry_to_display_messages(entry: SessionEntry) -> list[AgentMessage]
     shown the way pi shows its own and never remembered as something the user typed
     (2026-09-18, B30: the LCM summaries were being replayed into the editor's input
     history on every reopen). The engine names its own messages by index in
-    ``details``; nothing here reads their text to guess.
+    ``contextSummaries``; nothing here reads their text to guess, or the engine's own ``details``.
     """
     if entry.get("type") != "compaction" or entry.get("contextMessages") is None:
         return session_entry_to_context_messages(entry)
-    details = entry.get("details") or {}
-    scaffolds = set((details.get("lcm") or {}).get("scaffolds") or []) if isinstance(details, dict) else set()
+    scaffolds = set(entry.get("contextSummaries") or [])
     shown: list[AgentMessage] = []
     for index, message in enumerate(_copy_context_messages(entry["contextMessages"])):
         if index in scaffolds and _message_role(message) == "user":
@@ -842,6 +844,7 @@ class SessionManager:
         usage: Usage | Mapping[str, Any] | None | object = _UNSET,
         *,
         contextMessages: list[AgentMessage] | None = None,
+        contextSummaries: list[int] | None = None,
     ) -> str:
         """Append a compaction summary as child of current leaf, then advance leaf. Returns entry id.
 
@@ -871,9 +874,12 @@ class SessionManager:
                 update={"timestamp": int(_datetime_from_iso(timestamp).timestamp() * 1000)}
             )
         if contextMessages is not None:
-            # MISAKA fork: an engine that replaces the whole context (the LCM plugin) supplies
-            # it here; the projection then reads `contextMessages` instead of the summary.
+            # MISAKA fork: a context engine that replaces the whole context supplies it here; the
+            # projection then reads `contextMessages` instead of the summary, and the transcript
+            # shows the ones the engine wrote itself (`contextSummaries`) as compaction summaries.
             entry["contextMessages"] = _copy_context_messages(contextMessages)
+            if contextSummaries:
+                entry["contextSummaries"] = list(contextSummaries)
         self._appendEntry(entry)
         return str(entry["id"])
 

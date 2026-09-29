@@ -15,7 +15,6 @@ from misaka.core.research.wiring import research
 
 @pytest.fixture
 def board(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     monkeypatch.setattr(repo, "enabled", lambda *a: False)
     monkeypatch.setattr(tasks, "task_state_dir", lambda tid: str(tmp_path / "state" / tid))
     with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
@@ -112,8 +111,9 @@ async def test_chat_mode_survives_pending_and_startup_retry(chat, board, tmp_pat
     if entry not in {"pending", "direct"}:
         assert [q["question"] for q in chat.questions] == [
             research._DEPTH_QUESTION, research._PARALLEL_QUESTION,
-            research._SISTER_PARALLEL_QUESTION, research._ROUNDS_QUESTION, research._APPROVAL_QUESTION,
-            research._THRESHOLD_QUESTION, research._OUTPUT_QUESTION]
+            research._SISTER_PARALLEL_QUESTION, research._ROUNDS_QUESTION, research._REVISIONS_QUESTION,
+            research._NODES_QUESTION, research._APPROVAL_QUESTION, research._THRESHOLD_QUESTION,
+            research._OUTPUT_QUESTION]
         expected_labels = ["Require approval", "Automatic"] if default else ["Automatic", "Require approval"]
         approval = next(q for q in chat.questions if q["question"] == research._APPROVAL_QUESTION)
         assert [option["label"] for option in approval["options"]] == expected_labels
@@ -177,7 +177,7 @@ async def test_pending_stop_or_toggle_discards_selected_mode(chat, board, cancel
 def test_initial_and_followup_prompts_use_saved_mode(board, tmp_path, monkeypatch, saved, fork, phase):
     run = runs.create(board, workspace=str(tmp_path), question="Prompt policy", limits={"plan_approval": saved})
     root = runs.nodes(board, run["id"])[0]
-    node = runs.create_node(board, run["id"], trigger="Child", parent_id=root["id"], depth=1) if fork else root
+    node = runs.create_node(board, run["id"], question="Child", parents=[root["id"]]) if fork else root
     monkeypatch.setattr(planner, "_roster", lambda cfg: [])
     monkeypatch.setattr(planner, "_lo_session", lambda *a: str(tmp_path / "session"))
     cfg = {"research_plan_approval": not saved}
@@ -207,8 +207,10 @@ class CardsSubmitted(Exception):
 async def test_driver_uses_saved_mode_for_each_node_and_round(board, tmp_path, monkeypatch, saved, fork, round_number):
     run = runs.create(board, workspace=str(tmp_path), question="Driver policy", limits={"plan_approval": saved})
     root = runs.nodes(board, run["id"])[0]
-    node = runs.create_node(board, run["id"], trigger="Child", parent_id=root["id"], depth=1) if fork else root
-    plan = {"status": "ready", "plan_markdown": "Fixture plan", "tasks": [], "red_team": {}}
+    node = runs.create_node(board, run["id"], question="Child", parents=[root["id"]]) if fork else root
+    # One card: a plan without cards is a pure branch point, which never reaches card submission.
+    plan = {"status": "ready", "plan_markdown": "Fixture plan", "red_team": {},
+            "tasks": [{"local_id": "a", "title": "A", "assignee": "10032", "dependencies": []}]}
     runs.record_action(board, run, node, runs.plan_key(round_number), plan,
                        session_file="fixture.jsonl", tool_call_id="fixture-plan")
     wait = AsyncMock(return_value="stopped")

@@ -3,9 +3,11 @@
 2026-09-18: `misaka_sister_message` typed the note into the card's pane and pressed Enter.
 That lost the Enter behind a full pty input queue (B1) and could land in a pane that was only
 showing the card (B14). With a card address in the mailbox (B8), the note is a durable row
-that the Sister's own inbox hands her at the next tool boundary. An ally -- a third-party CLI
-in a pane -- reads no mailbox, so it still gets keystrokes."""
+that the Sister's own inbox hands her at the next tool boundary. An ally reads the same inbox,
+between its turns (2026-09-29, ACP)."""
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -46,10 +48,9 @@ def world(tmp_path, monkeypatch, request):
                            mail=lambda: mail)
 
 
-def _running(world, *, executor=None):
-    task_id = cards.create(world.con, str(world.tmp), "T running", BODY, "10032")
-    world.con.execute("UPDATE tasks SET status='running', claim_lock='net:x', executor=? WHERE id=?",
-                      (json.dumps(executor) if executor else None, task_id))
+def _running(world, *, assignee="10032"):
+    task_id = cards.create(world.con, str(world.tmp), "T running", BODY, assignee)
+    world.con.execute("UPDATE tasks SET status='running', claim_lock='net:x' WHERE id=?", (task_id,))
     world.con.commit()
     return task_id
 
@@ -75,13 +76,13 @@ async def test_the_note_is_bound_to_the_attempt_that_is_running(world):
     assert rows[0]["generation"] == 3
 
 
-async def test_an_ally_still_gets_keystrokes(world):
-    task_id = _running(world, executor={"argv": ["codex"]})
+async def test_an_ally_is_steered_through_the_same_inbox_between_its_turns(world):
+    Path(os.environ["MISAKA_HOME"], "settings.json").write_text(json.dumps({"allies": {"codex": {}}}))
+    task_id = _running(world, assignee="codex")
     out = await world.message(task_id, "try the other branch")
-    assert "typed into" in out["content"][0]["text"]
-    assert world.sent == [("pane.send", {"id": "p7", "card": task_id, "text": "try the other branch",
-                                         "enter": True, "expected_generation": 1})]
-    assert messages.pending(world.mail(), "10032", task_id=task_id) == []
+    assert "between turns" in out["content"][0]["text"]
+    assert [r["body"] for r in messages.pending(world.mail(), "codex", task_id=task_id)] == ["try the other branch"]
+    assert world.sent == [], "no keystrokes went to the pane"
 
 
 async def test_a_stale_generation_is_refused_before_anything_is_sent(world):

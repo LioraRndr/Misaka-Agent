@@ -9,12 +9,25 @@ EXTENSION_NAME = "misaka_lcm"
 
 SESSION_KINDS = {"foreground", "dm", "card", "beast", "child", "bare"}
 
+COMMAND = "lcm"
+
+
+def command(argv):
+    """Inspect LCM and run explicit history/backfill operators.
+
+    ``misaka lcm ...`` runs before any session exists or the project layout is created: a dry run
+    or a read-only operator must not bootstrap directories or open an engine first."""
+    from .host.operators import main
+    return main(argv)
+
 
 def activate(spec):
     import os
 
+    from .host import storage
     from .host.extension import register
-    workspace = (os.environ.get("MISAKA_LCM_PROJECT") if os.environ.get("MISAKA_SUBAGENT_ID") else None) or spec.workspace
+    # A subagent joins its parent session's project store, which the parent set on subagent_start.
+    workspace = (os.environ.get(storage.PROJECT_ENV) if os.environ.get("MISAKA_SUBAGENT_ID") else None) or spec.workspace
 
     def register_for_session(harn):
         return register(harn, kind=spec.kind, workspace=workspace)

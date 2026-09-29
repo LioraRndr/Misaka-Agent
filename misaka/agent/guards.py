@@ -569,12 +569,10 @@ class _SessionGuards:
             # the wrap-up turn and must not be marked as one.
             return None
         self._forced_turn = True
+        # pi 0.87: the transcript's system messages carry the prompt and the tool declarations;
+        # an empty executable set is declared to the model as every tool removed.
         return AgentLoopTurnUpdate(
-            context=AgentContext(
-                systemPrompt=read_field(current, "systemPrompt", "") or "",
-                messages=read_field(current, "messages", []) or [],
-                tools=[],
-            )
+            context=AgentContext(messages=read_field(current, "messages", []) or [], tools=[])
         )
 
 

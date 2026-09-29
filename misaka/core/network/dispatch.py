@@ -180,11 +180,16 @@ def reconcile(con, cfg, *, task_ids=None, workspace=None):
 
 
 
-def run_task(con, t, cfg):
+def run_task(con, t, cfg, *, say=None):
+    """Claim a ready card and run it; with ``say``, continue the settled card ``t`` instead -- a new
+    generation in her own conversation, the message being the turn (the headless counterpart of
+    ``pane.continue_card``, which ``misaka_sister_message`` uses in a panel)."""
+    from misaka.core.network.ally import presets
     host_cap, assignee_cap = admission.limits()
     identity = _worker_identity()
-    profile_dir = _profile_dir(cfg, t["assignee"])
-    if not profile_dir:
+    ally = t["assignee"] in presets.names()
+    profile_dir = None if ally else _profile_dir(cfg, t["assignee"])
+    if not ally and not profile_dir:
         if (t["id"], t["generation"]) not in _skipped_logged:    # a reopened card gets a fresh look
             _skipped_logged.add((t["id"], t["generation"]))
             lock = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
@@ -201,7 +206,13 @@ def run_task(con, t, cfg):
 
     lock = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
     generation = int(t["generation"])
-    if not db.claim(
+    if say is not None:
+        if not db.claim_resume(con, t["id"], lock, os.getpid(), worker_identity=identity,
+                               expected_generation=generation, host_cap=host_cap, assignee_cap=assignee_cap):
+            return False
+        t = db.get(con, t["id"])
+        generation = int(t["generation"])
+    elif not db.claim(
         con,
         t["id"],
         lock,
@@ -226,12 +237,14 @@ def run_task(con, t, cfg):
     db.add_event(
         con,
         t["id"],
-        "claimed",
+        "continued" if say is not None else "claimed",
         {"lock": lock, "workspace": workspace},
         generation=generation,
     )
 
     task = dict(t)
+    if say is not None:
+        task["_say"] = say
     from misaka.core.platform import cards as card_files
     task["_attachments"] = card_files.attachment_list(run_dir, t["id"], workspace=workspace)
     task["_handoffs"] = worker.card_handoffs(con, t)
@@ -255,7 +268,7 @@ def run_task(con, t, cfg):
         except (AttributeError, IndexError, TypeError):
             usage_db = None
     try:
-        verdict = worker.run_card(
+        verdict = _run_ally(con, task, generation, lock, usage_db, say) if ally else worker.run_card(
             task, run_dir, profile_dir, cfg["provider"], cfg["default_model"],
             on_event=lambda line: db.add_event(
                 con,
@@ -319,12 +332,30 @@ def run_task(con, t, cfg):
     return True
 
 
+def _run_ally(con, task, generation, lock, usage_db, say):
+    """An ally's attempt, in this process: its runner settles the card, or leaves it running."""
+    from misaka.core.network.ally import card as ally_card
+    from misaka.core.platform.session import run_coro
+
+    run_coro(ally_card.run_attempt(task, generation, lock, db_path=usage_db, say=say))
+    row = db.get(con, task["id"])
+    if row is not None and row["status"] == "running" and row["claim_lock"] == lock:
+        return {"exit_code": 0}                  # idle without completing: unsettled
+    return {"settled": True}
+
+
+# A review card's typed record, frozen with its submission: a red team's issues, a divergence
+# review's alternatives. Whatever ``worker.build_submission`` attaches must pass through here --
+# the alternatives once did not, and every divergence review failed its node (2026-09-27).
+REVIEW_FIELDS = ("issues", "alternatives")
+
+
 def _submitted(submission, *, artifact_digests=None):
     return {"summary": submission["summary"], "artifacts": submission.get("artifacts", []),
             "notes": submission.get("notes", ""), "uncertain": submission.get("uncertain", []),
             "findings": submission.get("findings", []),
             "artifact_digests": artifact_digests or {},
-            **({"issues": submission["issues"]} if "issues" in submission else {})}
+            **{field: submission[field] for field in REVIEW_FIELDS if field in submission}}
 
 
 def finish_abandoned(con, t, *, reason=db.ABANDONED_REASON):
@@ -393,61 +424,25 @@ def accept_state(con, t, submission, *, generation, claim_lock):
     if prepared.owner != (t["id"], generation, claim_lock, t["workspace"]):
         raise ValueError("Prepared submission belongs to a different card attempt")
     with db.write_txn(con):                                # done and its submitted payload land together
-        if not db.submit_task(
-            con, t["id"], generation=generation, claim_lock=claim_lock, commit=False
-        ):
+        if not db.submit_task(con, t["id"], generation=generation, claim_lock=claim_lock):
             return False
         db.add_event(con, t["id"], "submitted", prepared.payload, generation=generation)
     return True
 
 
-def _research_linked(con, task_id):
-    """True when the card belongs to a research run: its Git history is written per node when
-    the node closes, not per card, so acceptance skips the per-card commit."""
-    try:
-        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_run_tasks'").fetchone():
-            return False
-        return con.execute("SELECT 1 FROM research_run_tasks WHERE task_id=?", (task_id,)).fetchone() is not None
-    except Exception:  # noqa: BLE001 - a board without the research schema is an ordinary board
-        return False
-
-
-def accept_side_effects(con, t, submission, *, generation, workspace):
-    """Commit and index a submission whose state transition has already landed."""
-    from filelock import FileLock
-
-    from misaka.core.platform import cards, repo
-
-    committed = True
-    research_linked = _research_linked(con, t["id"])
-    # Generation changes publish through this same card lock. Read the file fence,
-    # not SQLite, while holding it: transitions acquire DB -> card, never card -> DB.
-    # Git can wait on its own repository lock without occupying the board's writer.
-    with FileLock(os.path.join(db.task_state_dir(t["id"]), "card.lock")):
-        try:
-            fields = cards.read(cards.card_path(workspace, t["id"]))["fields"]
-            current = (int(fields.get("generation", 1)) == int(generation)
-                       and fields.get("status") in {"done", "review"})
-        except (OSError, ValueError, TypeError):
-            current = False
-        if current and repo.enabled(workspace) and not research_linked:
-            committed = repo.commit_card(
-                workspace, t["id"], submission, f"card {t['id']}: submit"
-            )
-    if not committed:
-        db.add_event(con, t["id"], "git_commit_pending", {"reason": "submit"}, generation=generation)
+def accept_side_effects(con, t, submission, *, generation):
+    """Index a submission whose state transition has already landed: its artifacts join the
+    project's document corpus. Nothing is committed; the project's git history is the user's."""
     index_artifacts(con, t["id"], submission.get("artifacts", []), generation)
 
 
-def accept(con, t, submission, *, generation, claim_lock, workspace):
-    """Accept atomically, then run the slower Git and indexing tail."""
+def accept(con, t, submission, *, generation, claim_lock):
+    """Accept atomically, then run the slower indexing tail."""
     if not accept_state(
         con, t, submission, generation=generation, claim_lock=claim_lock
     ):
         return False
-    accept_side_effects(
-        con, t, submission, generation=generation, workspace=workspace,
-    )
+    accept_side_effects(con, t, submission, generation=generation)
     return True
 
 

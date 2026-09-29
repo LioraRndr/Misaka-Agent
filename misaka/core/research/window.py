@@ -29,8 +29,9 @@ def node_description(con, node_id):
 class WindowLO:
     """The synchronous planner calls back onto the window's own event loop and session.
 
-    Root reuses its chat window or owns a headless session through final adjudication;
-    fork LOs own a resident session in their isolated node process. Closing cancels pending callbacks too:
+    Root reuses its chat window or owns a headless session through final adjudication (and every
+    reconciliation of the graph); every other node's Last Order owns a resident session in its
+    isolated node process. Closing cancels pending callbacks too:
     cancelling asyncio.to_thread alone does not stop its thread.
     """
 
@@ -238,7 +239,7 @@ async def node_session(con, cfg, run, node):
     from misaka.core.research import planner, runs
 
     directory = planner._lo_session(run, node)
-    session_file = run["root_session"] if node["parent_id"] is None else node["session_file"]
+    session_file = planner.lo_session_file(run, node)
     from misaka.core.wiring import role_session_setup
 
     flags, assembly, env = role_session_setup(
@@ -274,7 +275,7 @@ async def node_session(con, cfg, run, node):
             check_active()
             bridge = WindowLO(session, check_active, describe=lambda: node_description(con, node["id"]), headless=True)
             runs.set_node(con, node["id"], session_file=bridge.session_file)
-            if node["parent_id"] is None:
+            if runs.is_root(node):
                 runs.set_state(con, run["id"], root_session=bridge.session_file, driver_lock=run["driver_lock"])
             control = for_session(session)
             control.check_active = check_active

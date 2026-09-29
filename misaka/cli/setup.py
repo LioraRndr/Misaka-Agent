@@ -9,8 +9,8 @@ What each section touches, and nothing else:
 
 - environment: reads the system (python, git, ripgrep, fd, pdftotext, ocrmypdf, the panel's
   terminal library) and prints what is missing, with the install command for this OS.
-- model: ``~/.misaka/agent/auth.json`` (the credential) and either global ``settings.json``
-  or the selected role's ``config.json``, through the same registry every session uses;
+- model: ``credentials/auth.json`` in the home (the credential) and either the global
+  ``settings.json`` or the selected role's, through the same registry every session uses;
   then one tiny real request, because a stored key that does not work is the failure that
   otherwise shows up an hour later inside a research run.
 - sisters: ``~/.misaka/profiles/sisters/<id>/`` through ``roster.create_sister``. Without at
@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,7 +47,9 @@ from misaka.cli.setup_ui import (
     prompt_yes_no,
 )
 from misaka.config import home
+from misaka.utils.tools_manager import find_tool
 
+OPENALEX_KEY_URL = "https://openalex.org/rest-api"
 SECTIONS = ("environment", "model", "sisters", "skills", "documents", "web", "research", "project")
 
 # The providers a fresh install is most likely to want, in the order they are offered; every
@@ -59,17 +62,6 @@ SECTIONS = ("environment", "model", "sisters", "skills", "documents", "web", "re
 # further to walk than the person with a credit card.
 FEATURED_PROVIDERS = ("anthropic", "openai-codex", "github-copilot", "xai", "openrouter",
                       "openai", "google", "mistral", "amazon-bedrock", "ollama")
-
-PAGEINDEX_PACKAGES = ("PyPDF2==3.0.1", "pypdfium2==4.30.0", "regex>=2024.0.0", "sortedcontainers==2.4.0")
-
-# PyPI's ``misaka`` is an unrelated package, so a ``misaka[extra]`` requirement only resolves
-# from a checkout or straight from the repository -- the address the README installs from.
-REPO_URL = "git+https://github.com/Luciole-Studio/Misaka-Agent.git"
-
-
-def _requirement(package: str) -> str:
-    """``misaka[anthropic]`` as something pip can actually resolve; anything else unchanged."""
-    return f"{package} @ {REPO_URL}" if package == "misaka" or package.startswith("misaka[") else package
 
 
 def _open_browser(url: str) -> bool:
@@ -99,7 +91,9 @@ def _install_command(binary: str) -> str:
     brew = {"git": "xcode-select --install", "rg": "brew install ripgrep", "fd": "brew install fd",
             "pdftotext": "brew install poppler", "ocrmypdf": "brew install ocrmypdf tesseract-lang"}
     apt = {"git": "sudo apt install git", "rg": "sudo apt install ripgrep", "fd": "sudo apt install fd-find",
-           "pdftotext": "sudo apt install poppler-utils", "ocrmypdf": "sudo apt install ocrmypdf tesseract-ocr"}
+           "pdftotext": "sudo apt install poppler-utils",
+           # The chi_sim and jpn packs: documents.ocr_langs defaults to eng+chi_sim+jpn.
+           "ocrmypdf": "sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn"}
     table = brew if sys.platform == "darwin" else apt
     return table.get(binary, f"install {binary}")
 
@@ -114,25 +108,25 @@ class Wizard:
         ui.print_header("Environment")
         version = platform.python_version()
         ui.print_check(sys.version_info >= (3, 12), "Python", f"{version}" + ("" if sys.version_info >= (3, 12) else "  (3.12 or newer needed)"))
-        required = {"git": "projects are git repositories; results are committed",
+        required = {"git": "projects are git repositories; /commit records results once you confirm",
                     "rg": "the grep tool (ripgrep)", "fd": "the find tool",
                     "pdftotext": "reads the text of PDFs (poppler)"}
         optional = {"ocrmypdf": "scanned PDFs (OCR); only needed for image-only documents"}
         missing = []
         for binary, purpose in required.items():
-            present = shutil.which(binary) is not None
+            present = find_tool(binary) is not None
             ui.print_check(present, binary, purpose if present else f"{purpose}  →  {_install_command(binary)}")
             if not present:
                 missing.append(binary)
         for binary, purpose in optional.items():
-            present = shutil.which(binary) is not None
+            present = find_tool(binary) is not None
             ui.print_check(True if present else None, binary, purpose if present else f"{purpose}  →  {_install_command(binary)}")
         from misaka.ui.panel import ghostty
         library = ghostty.library_path()
-        has_panel = os.path.isfile(library)
+        has_panel = ghostty.unavailable() is None
         ui.print_check(has_panel, "panel terminal",
                        "libghostty-vt: the panel's terminal emulator" if has_panel else
-                       "no build for this platform; `misaka` opens plain chat, everything else works")
+                       "no build this system can load; `misaka` opens plain chat, everything else works")
         if not has_panel:
             ui.print_info(f"    looked in {library}",
                           "    macOS and Linux on x86_64 and arm64 ship a build; point MISAKA_GHOSTTY_VT",
@@ -151,7 +145,7 @@ class Wizard:
     # -- 2. model & provider ------------------------------------------------------------------
 
     def model(self) -> None:
-        from misaka.cli.auth import _create_runtime, _install_hint, _missing_sdk_extras
+        from misaka.cli.auth import _create_runtime, _missing_sdk_extras
         from misaka.config import current_config, profiles
         from misaka.core.model_resolver import findExactModelReferenceMatch
         from misaka.core.network import roster
@@ -194,9 +188,9 @@ class Wizard:
         # The SDK is installed per provider; a missing one is the most common first-run failure.
         extras = _missing_sdk_extras(registry, provider)
         if extras:
-            ui.print_warning(f"The SDK for {provider} is not installed: {_install_hint(extras)}")
-            if prompt_yes_no("Install it now with this interpreter's pip?", True):
-                self._pip_install(["misaka[" + extra + "]" for extra in extras], from_checkout=True)
+            ui.print_warning(f"The SDK for {provider} is not installed (misaka's {', '.join(extras)} extra).")
+            if prompt_yes_no("Install it now?", True):
+                self._add_extras(extras)
         self._credential(registry, runtime.storage, provider)
         model_id = self._pick_model(registry, provider, cfg)
         from misaka.core.settings_manager import SettingsManager
@@ -443,7 +437,7 @@ class Wizard:
         self.state["sisters"] = existing
 
     def _sister_model(self) -> str | None:
-        """A model pinned into each new Sister's ``config.json``, or None to follow the default.
+        """A model pinned into each new Sister's ``settings.json``, or None to follow the default.
 
         Sisters do the reading and the legwork while Last Order plans and writes the
         conclusion, so running them on a cheaper model is the common shape of a real install;
@@ -511,7 +505,7 @@ class Wizard:
         ui.print_check(has_outline, "PDF outlines", "PageIndex extra installed" if has_outline else
                        "PageIndex extra not installed: PDFs are indexed page by page, without an outline")
         if not has_outline and prompt_yes_no("Install the PDF outline extra now? (recommended for PDF-heavy research)", True):
-            self._pip_install(list(PAGEINDEX_PACKAGES))
+            self._add_extras(["pageindex"])
             has_outline = pageindex_available()
         ocr = shutil.which("ocrmypdf") is not None
         ui.print_check(True if ocr else None, "OCR", "ocrmypdf present" if ocr else
@@ -530,8 +524,9 @@ class Wizard:
     # -- 7. research --------------------------------------------------------------------------
 
     def research(self) -> None:
-        """Report defaults without changing them. The environment sets default plan approval;
-        the /research picker saves a per-run choice. Explain the wait before a first run."""
+        """Report the run defaults without changing them (the /research picker saves a per-run
+        choice) and explain the wait before a first run; then the one thing this section stores:
+        the literature scan's optional OpenAlex key."""
         from misaka.config import CFG
         from misaka.core.research import runs
         ui.print_header("How a research run behaves")
@@ -540,20 +535,46 @@ class Wizard:
                       "cards to the Sisters. Per run, unless you pass the flags:", "")
         ui.print_check(True, "parallel LO nodes", f"{limits['parallel']}    (`--parallel`)")
         ui.print_check(True, "Sister cards per LO", f"{limits['sister_parallel']}    (`--sister-parallel`; global admission limits still apply)")
-        ui.print_check(True, "follow-up rounds", f"{limits['max_followups']}    extra rounds a node may run before concluding (`--followups`)")
-        ui.print_check(True, "sub-question depth", f"{limits['max_depth']}    (`--depth`)")
+        ui.print_check(True, "follow-up rounds", f"{limits['max_followups']}    extra rounds of cards a node may send out (`--followups`)")
+        ui.print_check(True, "revisions", f"{limits['max_revisions']}    times a node may rework its conclusion after review (`--revisions`)")
+        ui.print_check(True, "branch depth", f"{limits['max_depth']}    (`--depth`)")
+        ui.print_check(True, "graph size", f"{limits['max_nodes']}    nodes at most, the root included (`--max-nodes`)")
         gate = bool(CFG["research_plan_approval"])
         ui.print_check(gate, "plan approval",
-                       "every node's plan waits for you, in a conversation with Last Order; she starts the "
-                       "run herself once you agree" if gate else
+                       "every node's plan and every reconciliation of the graph waits for you, in a conversation "
+                       "with Last Order; she starts it herself once you agree" if gate else
                        "off (settings.json research.plan_approval = false): accepted plans proceed without an approval wait")
         if gate:
             ui.print_info("", "So each plan waits for your go-ahead before its Sisters execute it. There is no approve",
                           "command and no keyword: you discuss the plan and she goes when you are satisfied.",
                           "Set research.plan_approval to false in settings.json to make automatic plan execution the default.")
         ui.print_info("Use bare /research to choose Require approval or Automatic after the other run settings.",
-                      "That choice is saved for this run and its forks, including resume; clarification still applies.")
+                      "That choice is saved for this run and all its nodes, including resume; clarification, and a",
+                      "plan that reframes the question, still wait for you.")
         self.state["approval"] = gate
+        self._openalex_key()
+
+    def _openalex_key(self) -> None:
+        """``coverage_scan`` asks OpenAlex where a question lives in the literature. Without a key
+        it shares the anonymous allowance, which OpenAlex pauses under load (2026-09-27: every
+        scan of a run failed). The key is a credential, so it goes to the home's ``.env`` beside
+        the web vendors' keys, never to settings.json."""
+        from misaka.config import env as env_file
+        from misaka.extensions import coverage
+
+        name = coverage.KEY_ENV
+        stored = bool(env_file.read().get(name))
+        ui.print_info("", "Last Order checks a plan against the literature with coverage_scan (OpenAlex). A free",
+                      f"OpenAlex API key keeps it working when OpenAlex pauses anonymous access: {OPENALEX_KEY_URL}")
+        ui.print_check(True if stored else None, "OpenAlex key",
+                       f"{name} in {ui.tilde(str(env_file.path()))}" if stored else
+                       f"{name} set in the shell" if os.environ.get(name) else "none: anonymous access")
+        value = ui.prompt(f"{name} (Enter keeps {'the current one' if stored else 'none'})", password=True)
+        if value:
+            env_file.write({name: value})
+            stored = True
+            ui.print_success(f"Saved to {ui.tilde(str(env_file.path()))}; MISAKA processes read it when they start.")
+        self.state["openalex"] = stored or bool(os.environ.get(name))
 
     # -- 8. project ---------------------------------------------------------------------------
 
@@ -624,10 +645,14 @@ class Wizard:
         names = roster.roster_names()
         ui.print_check(bool(names), "sisters", ", ".join(names) if names else "none: run `misaka setup sisters`")
         for binary in ("git", "rg", "fd", "pdftotext"):
-            ui.print_check(shutil.which(binary) is not None, binary, "" if shutil.which(binary) else _install_command(binary))
+            present = find_tool(binary) is not None
+            ui.print_check(present, binary, "" if present else _install_command(binary))
         ui.print_check(state.get("pageindex", None), "PDF outlines", "" if state.get("pageindex") else "optional")
         ui.print_check(None, "web tools", str(state.get("web") or "not checked: misaka web status"))
         ui.print_check(None, "skills", "coverage-maps built in; more: `misaka skills optional-list`")
+        ui.print_check(True if state.get("openalex") else None, "literature scan",
+                       "OpenAlex key set" if state.get("openalex") else
+                       "anonymous OpenAlex: a free key via `misaka setup research`")
         indexed = state.get("documents")
         ui.print_check(bool(indexed) if indexed is not None else None, "documents",
                        f"{indexed} indexed" if indexed else "none indexed yet: `misaka doc scan <folder>`")
@@ -652,34 +677,28 @@ class Wizard:
             return False
 
     @staticmethod
-    def _pip_install(packages: list[str], *, from_checkout: bool = False) -> None:
-        """Install into this interpreter, or say what to run by hand when it cannot.
+    def _add_extras(extras: list[str]) -> None:
+        """Install ``extras`` the way this install was made, keeping every extra it already has.
 
-        ``misaka[...]`` extras become ``.[extra]`` inside a checkout; everywhere else they are
-        printed against the repository URL, because telling someone who installed from git to
-        run ``pip install '.[anthropic]'`` names a directory they do not have."""
-        import importlib.util
-        if from_checkout and os.path.isfile("pyproject.toml"):
-            packages = [package.replace("misaka[", ".[") for package in packages]
-        elif from_checkout:
-            ui.print_info("Install it with:", *[f"  pip install '{_requirement(p)}'" for p in packages])
+        uv and pipx own the environment this wizard runs in: replacing it underneath a running
+        process is theirs to do after it exits, so their command is printed, not run."""
+        from misaka.cli import update
+        install = update.describe()
+        command = update.adding_extras(install, extras)
+        if command is None:
+            ui.print_info("Install it with:", f"  pip install 'misaka[{','.join(extras)}] @ git+{update.REPO_URL}'")
             return
-        if importlib.util.find_spec("pip") is None:
-            # Normal for `uv tool install` and pipx: the tool environment is managed, and
-            # pip-installing into it is either impossible or undone by the next upgrade.
-            ui.print_warning("This interpreter has no pip, which is how `uv tool` and pipx installs look.")
-            ui.print_info("Add it through the tool that installed misaka, for example:",
-                          *[f"  uv tool install --force '{_requirement(p)}'" for p in packages])
+        if install.installer in ("uv tool", "pipx"):
+            ui.print_info("Run this once setup is done, then start MISAKA again:", f"  {shlex.join(command)}")
             return
-        command = [sys.executable, "-m", "pip", "install", *packages]
-        ui.print_info(color_dim(" ".join(command)))
+        ui.print_info(color_dim(shlex.join(command)))
         try:
             result = subprocess.run(command, check=False)
         except OSError as error:
-            ui.print_error(f"pip could not start: {error}")
+            ui.print_error(f"{command[0]} could not start: {error}")
             return
         (ui.print_success if result.returncode == 0 else ui.print_error)(
-            "installed" if result.returncode == 0 else f"pip exited with {result.returncode}")
+            "installed" if result.returncode == 0 else f"{command[0]} exited with {result.returncode}")
 
 
 def color_dim(text: str) -> str:

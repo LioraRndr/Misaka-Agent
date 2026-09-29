@@ -1,0 +1,247 @@
+"""`misaka update` and `misaka uninstall`, held to Hermes's promises (docs/plans/upgrade-install-uninstall-2026-09-29.md).
+
+An update keeps what the install holds and never cuts running work off; it copies the home aside
+first and puts a checkout back when the new code cannot start. An uninstall keeps the data unless
+told otherwise, lists what lies outside the home, and never touches what a person wrote.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+import sys
+import tarfile
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from misaka.cli import backup, uninstall, update
+from misaka.config import home
+
+
+@pytest.fixture
+def fresh_home(tmp_path, monkeypatch):
+    monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
+    root = home.home()
+    root.mkdir(parents=True)
+    return root
+
+
+def _install(kind="git", installer="pip", path=None, commit="c0ffee"):
+    return update.Install(kind, kind == "checkout", installer, path, commit, "0.18.0")
+
+
+# -- update: the install method decides, and the extras survive -------------------------------
+
+def test_uv_and_pipx_upgrade_from_their_own_records(monkeypatch):
+    monkeypatch.setattr(update, "installed_extras", lambda: ["providers"])
+    assert update._install_commands(_install(installer="uv tool")) == [["uv", "tool", "upgrade", "misaka"]]
+    assert update._install_commands(_install(installer="pipx")) == [["pipx", "upgrade", "misaka"]]
+
+
+def test_pip_reinstalls_the_package_alone_then_its_dependencies_with_the_extras(monkeypatch):
+    """pip keeps a git requirement whose version string did not move (verified 2026-09-29), so
+    the package is forced alone first; the extras found installed ride on the second step."""
+    monkeypatch.setattr(update, "installed_extras", lambda: ["browser", "providers"])
+    first, second = update._install_commands(_install(installer="pip"))
+    assert first[-3:] == ["--force-reinstall", "--no-deps", f"misaka @ git+{update.REPO_URL}"]
+    assert second[-1] == f"misaka[browser,providers] @ git+{update.REPO_URL}"
+
+
+def test_a_checkout_syncs_with_the_extras_it_holds(tmp_path, monkeypatch):
+    (tmp_path / "uv.lock").write_text("")
+    monkeypatch.setattr(update, "installed_extras", lambda: ["pageindex"])
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / ".venv"))
+    assert update._install_commands(_install("checkout", "uv", tmp_path)) == [["uv", "sync", "--extra=pageindex"]]
+
+
+def test_the_owning_tool_is_read_from_its_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+    assert update._manager("pip") == "pip"
+    (tmp_path / "pipx_metadata.json").write_text("{}")
+    assert update._manager("pip") == "pipx"                 # pipx installs through pip
+    (tmp_path / "uv-receipt.toml").write_text("")
+    assert update._manager("uv") == "uv tool"
+
+
+def test_installed_extras_are_named_the_widest_way(monkeypatch):
+    import importlib.metadata
+    requires = ["anthropic>=0.45; extra == 'anthropic'", "openai>=1.60; extra == 'openai'",
+                "anthropic>=0.45; extra == 'providers'", "openai>=1.60; extra == 'providers'",
+                "fastembed; extra == 'lcm-semantic'", "pydantic>=2.10"]
+    present = {"misaka", "anthropic", "openai"}
+
+    def distribution(name):
+        if name not in present:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return SimpleNamespace(requires=requires)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+    assert update.installed_extras() == ["providers"]
+
+
+def test_adding_an_extra_keeps_the_ones_installed(monkeypatch):
+    monkeypatch.setattr(update, "installed_extras", lambda: ["providers"])
+    command = update.adding_extras(_install(installer="uv tool"), ["pageindex"])
+    assert command == ["uv", "tool", "install", "--force", f"misaka[pageindex,providers] @ git+{update.REPO_URL}"]
+
+
+# -- update: running work, the snapshot, the rollback -----------------------------------------
+
+def _apply_setup(monkeypatch, install, *, blocking=(), panes=(), starts=None):
+    calls = []
+    monkeypatch.setattr(update, "describe", lambda: install)
+    monkeypatch.setattr(update, "_checkout_state", lambda _install: {"head": "old", "behind": 1, "dirty": False, "reason": None})
+    monkeypatch.setattr(update, "_behind", lambda _commit: (1, None))
+    monkeypatch.setattr(update, "installed_extras", list)
+    monkeypatch.setattr(update, "running_work", lambda: (list(blocking), list(panes)))
+    monkeypatch.setattr(update, "prompt_choice", lambda *_a, **_k: 1)
+    monkeypatch.setattr(update, "stop_daemon", lambda: calls.append("stop"))
+    monkeypatch.setattr(backup, "snapshot", lambda reason: calls.append(f"snapshot:{reason}") or Path("/snap"))
+    monkeypatch.setattr(update, "_git", lambda _path, *args, check=True: calls.append("git " + " ".join(args)) or "")
+    monkeypatch.setattr(update, "_run_all", lambda commands, cwd: calls.append("install") and None)
+    results = iter(starts or [None])
+    monkeypatch.setattr(update, "_starts", lambda: next(results))
+    return calls
+
+
+def test_an_update_waits_for_a_research_run_or_a_card(monkeypatch):
+    calls = _apply_setup(monkeypatch, _install(), blocking=["research run r_1  ~/p"])
+    assert update.run(apply=True) == 1
+    assert calls == []                                       # nothing stopped, copied or installed
+
+
+def test_an_update_copies_the_home_first_and_leaves_an_open_panel_running(monkeypatch):
+    calls = _apply_setup(monkeypatch, _install(), panes=[{"id": "p1", "alive": True}])
+    assert update.run(apply=True) == 0
+    assert calls == ["snapshot:update", "install"]           # no daemon stop under an open session
+
+
+def test_a_checkout_that_cannot_start_is_put_back(tmp_path, monkeypatch):
+    calls = _apply_setup(monkeypatch, _install("checkout", "uv", tmp_path), starts=["ImportError: boom", None])
+    assert update.run(apply=True) == 1
+    assert calls == ["snapshot:update", "stop", "git pull --ff-only origin main", "install",
+                     "git reset --hard old", "install"]
+
+
+# -- backups ----------------------------------------------------------------------------------
+
+def _seed_home(root: Path) -> None:
+    home.path("settings").write_text('{"a": 1}')
+    home.path("credentials").mkdir(parents=True)
+    home.path("auth").write_text("{}")
+    home.path("db").parent.mkdir(parents=True)
+    with sqlite3.connect(home.path("db")) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE t(x)")
+        con.execute("INSERT INTO t VALUES (1)")
+    (root / "cache").mkdir()
+    (root / "cache" / "big.bin").write_bytes(b"x" * 10)
+    role = home.path("roles_root") / "last_order"
+    role.mkdir(parents=True)
+    (role / "settings.json").write_text("{}")
+
+
+def test_an_update_snapshot_holds_settings_credentials_boards_and_roles(fresh_home, monkeypatch):
+    _seed_home(fresh_home)
+    shot = backup.snapshot("update")
+    assert (shot / "settings.json").read_text() == '{"a": 1}'
+    assert (shot / "credentials" / "auth.json").exists()
+    assert (shot / "profiles" / "last_order" / "settings.json").exists()
+    with sqlite3.connect(shot / "state" / "board.db") as con:
+        assert con.execute("SELECT x FROM t").fetchone() == (1,)
+    assert not (shot / "cache").exists()
+    assert home.path("backups").stat().st_mode & 0o777 == 0o700
+    for n in range(backup.KEEP + 2):                          # bounded, oldest first
+        (home.path("backups") / f"update-2000010{n}-000000").mkdir()
+    backup.snapshot("update")
+    assert len(list(home.path("backups").glob("update-*"))) == backup.KEEP
+
+
+def test_the_uninstall_archive_is_private_and_leaves_rebuildables_out(fresh_home, tmp_path):
+    _seed_home(fresh_home)
+    backup.snapshot("update")
+    target = tmp_path / "out.tar.gz"
+    assert backup.archive(target) == []
+    assert target.stat().st_mode & 0o777 == 0o600
+    with tarfile.open(target) as tar:
+        names = set(tar.getnames())
+    assert f"{home.DIR_NAME}/credentials/auth.json" in names and f"{home.DIR_NAME}/state/board.db" in names
+    assert not any("/cache" in name or "/backups" in name or name.endswith("-wal") for name in names)
+
+
+# -- uninstall ------------------------------------------------------------------------------
+
+def _project(tmp_path: Path) -> Path:
+    project = tmp_path / "project"
+    config = project / home.DIR_NAME
+    (config / "subagents").mkdir(parents=True)
+    (config / "settings.json").write_text("{}")
+    (config / "lcm").mkdir()
+    (config / "lcm.gate").write_text("")
+    (project / "report.md").write_text("mine")
+    home.path("db").parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(home.path("db")) as con:
+        con.execute("CREATE TABLE tasks(workspace TEXT)")
+        con.execute("CREATE TABLE research_runs(workspace TEXT)")
+        con.execute("INSERT INTO research_runs VALUES (?)", (str(project),))
+    return project
+
+
+def test_only_what_misaka_derived_in_a_project_is_offered_for_removal(fresh_home, tmp_path):
+    project = _project(tmp_path)
+    assert uninstall._projects(str(home.path("db"))) == [str(project.resolve())]
+    derived = {Path(path).name for path in uninstall._derived([str(project)])}
+    assert derived == {"lcm", "lcm.gate"}
+
+
+def test_links_into_the_home_are_found_and_others_are_not(fresh_home, tmp_path, monkeypatch):
+    tool = fresh_home / "shared" / "tool"
+    tool.parent.mkdir()
+    tool.write_text("")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    os.symlink(tool, bin_dir / "tool")
+    os.symlink(tmp_path, bin_dir / "elsewhere")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert uninstall._links_into(fresh_home) == [str(bin_dir / "tool")]
+
+
+def _uninstall_setup(monkeypatch, *, blocking=(), panes=()):
+    ran = []
+    monkeypatch.setattr(update, "describe", lambda: _install(installer="uv tool"))
+    monkeypatch.setattr(update, "running_work", lambda: (list(blocking), list(panes)))
+    monkeypatch.setattr(update, "stop_daemon", lambda: None)
+    monkeypatch.setattr(uninstall.subprocess, "run", lambda command, check=False: ran.append(command) or SimpleNamespace(returncode=0))
+    return ran
+
+
+def test_the_default_removes_the_program_and_keeps_the_data(fresh_home, tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    ran = _uninstall_setup(monkeypatch)
+    assert uninstall.run(assume_yes=True) == 0
+    assert ran == [["uv", "tool", "uninstall", "misaka"]]
+    assert fresh_home.exists() and (project / home.DIR_NAME / "lcm").exists()
+
+
+def test_data_only_removes_the_home_and_derived_files_but_nothing_a_person_wrote(fresh_home, tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    ran = _uninstall_setup(monkeypatch)
+    assert uninstall.run(mode="data", assume_yes=True) == 0
+    assert ran == [] and not fresh_home.exists()
+    config = project / home.DIR_NAME
+    assert sorted(path.name for path in config.iterdir()) == ["settings.json", "subagents"]
+    assert (project / "report.md").read_text() == "mine"
+
+
+def test_uninstall_refuses_while_misaka_runs(fresh_home, monkeypatch):
+    ran = _uninstall_setup(monkeypatch, panes=[{"id": "p1", "alive": True, "title": "LO"}])
+    assert uninstall.run(mode="full", assume_yes=True) == 2
+    assert ran == [] and fresh_home.exists()
+
+
+def test_a_source_checkout_is_never_removed(fresh_home, tmp_path, monkeypatch):
+    ran = _uninstall_setup(monkeypatch)
+    monkeypatch.setattr(update, "describe", lambda: _install("checkout", "uv", tmp_path))
+    assert uninstall.run(mode="full", assume_yes=True) == 0
+    assert ran == [] and tmp_path.exists() and not fresh_home.exists()

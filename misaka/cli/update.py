@@ -1,23 +1,29 @@
 """``misaka update``: is this install behind the repository, and what would bring it level.
 
-Shaped after how Hermes updates itself (``hermes-lcm/scripts/update.sh``): follow the
-branch head rather than release tags, fast-forward only, and never guess. Its install
-script sets the tone for the rest -- a preflight that refuses on anything unexpected and
-prints the manual fix instead of clobbering -- so this command refuses on a dirty tree, a
-diverged branch, or an install shape it cannot vouch for, and says what to run by hand.
+Shaped after how Hermes updates itself, in intent rather than detail. Follow the branch head
+rather than release tags, fast-forward only, and never guess: refuse on a dirty tree, a diverged
+branch, or an install shape it cannot vouch for, and say what to run by hand. Checking and applying
+are separate (``hermes update --check``); nothing here runs on its own. Applying keeps Hermes's
+promises too:
 
-Checking and applying are separate, as they are in the Hermes skills hub (``hub-update-check``
-against ``hub-update``). Nothing here runs on its own: no background poll, no footer nag. The
-one ambient mention is the wizard's environment section, which already reports the state of
-this machine.
+- the install method decides the command, and what the install holds survives it: uv and pipx
+  upgrade from their own records, extras included; pip is handed the extras found installed;
+- running work is not cut off: an active research run or a card in a pane refuses the update,
+  and a panel with sessions open is left running for its owner to restart;
+- before anything changes, the settings, credentials and state databases are copied aside
+  (``cli.backup``), because a code rollback is not a data rollback;
+- the updated code must start. When it cannot, a checkout is put back where it was; any other
+  install is told the command that puts it back.
 
 How the install was made is read, not guessed: PEP 610 writes ``direct_url.json`` into the
-dist-info, and ``INSTALLER`` records which tool did it.
+dist-info, ``INSTALLER`` records which tool did it, and uv and pipx leave a receipt in the
+environment they manage.
 """
 from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -26,7 +32,7 @@ from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
 from misaka.cli import setup_ui as ui
-from misaka.cli.setup_ui import SetupCancelled, prompt_choice
+from misaka.cli.setup_ui import SetupCancelled, SetupGoBack, prompt_choice
 
 REPO = "Luciole-Studio/Misaka-Agent"
 REPO_URL = f"https://github.com/{REPO}.git"
@@ -41,10 +47,22 @@ class Install:
 
     kind: str                 # "checkout" | "git" | "wheel"
     editable: bool
-    installer: str            # pip | uv | pipx | ""
+    installer: str            # "uv tool" | "pipx" | "uv" (uv pip) | "pip" | ""
     path: Path | None         # the checkout, when there is one
     commit: str | None        # the commit a git install pinned
     version: str
+
+
+def _manager(installer: str) -> str:
+    """The tool that owns this environment. ``INSTALLER`` alone cannot say: pipx installs through
+    pip, and uv writes one name for ``uv tool install`` and ``uv pip install`` alike. The two
+    tools that manage whole environments leave a receipt in them."""
+    prefix = Path(sys.prefix)
+    if (prefix / "uv-receipt.toml").is_file():
+        return "uv tool"
+    if (prefix / "pipx_metadata.json").is_file():
+        return "pipx"
+    return installer
 
 
 def describe() -> Install:
@@ -55,7 +73,7 @@ def describe() -> Install:
         dist = distribution("misaka")
     except PackageNotFoundError:
         return Install("wheel", False, "", None, None, VERSION)
-    installer = (dist.read_text("INSTALLER") or "").strip()
+    installer = _manager((dist.read_text("INSTALLER") or "").strip())
     try:
         direct = json.loads(dist.read_text("direct_url.json") or "{}")
     except ValueError:
@@ -74,6 +92,88 @@ def describe() -> Install:
             return Install("checkout", editable, installer, path, None, dist.version)
         return Install("wheel", editable, installer, path, None, dist.version)
     return Install("wheel", False, installer, None, None, dist.version)
+
+
+def installed_extras() -> list[str]:
+    """The extras this environment holds in full, named the widest way: ``providers``, not its parts.
+
+    Nothing but uv's and pipx's receipts records which extras an install asked for. What is
+    installed is the next best record, and it is what a reinstall must not take away."""
+    import re
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        requires = distribution("misaka").requires or []
+    except PackageNotFoundError:
+        return []
+    needs: dict[str, set[str]] = {}
+    for line in requires:
+        requirement, _, marker = line.partition(";")
+        extra = re.search(r"extra\s*==\s*['\"]([^'\"]+)['\"]", marker)
+        name = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
+        if extra and name:
+            needs.setdefault(extra.group(1), set()).add(name.group(1))
+
+    def present(name: str) -> bool:
+        try:
+            distribution(name)
+        except PackageNotFoundError:
+            return False
+        return True
+
+    held = {extra for extra, names in needs.items() if all(present(name) for name in names)}
+    return sorted(extra for extra in held if not any(needs[extra] < needs[other] for other in held))
+
+
+def active_runs() -> list[str]:
+    """Research runs in flight, as ``<run id>  <project>``, read without taking a write lock.
+    A board that cannot be read reports none: this is a courtesy check, not the board's guard."""
+    import sqlite3
+    from contextlib import closing
+
+    from misaka.config import home
+    from misaka.core.research.runs import ACTIVE
+    board = home.path("db")
+    if not board.is_file():
+        return []
+    try:
+        with closing(sqlite3.connect(board.resolve().as_uri() + "?mode=ro", uri=True)) as con:
+            rows = con.execute(f"SELECT id, workspace FROM research_runs WHERE status IN ({','.join('?' * len(ACTIVE))})",
+                               ACTIVE).fetchall()
+    except sqlite3.Error:
+        return []
+    return [f"{run_id}  {home.display(workspace)}" for run_id, workspace in rows]
+
+
+def live_panes() -> list[dict]:
+    """The panel daemon's panes that still run something; none when no daemon answers."""
+    from misaka.ui.panel import client
+    try:
+        panes = client.request("panes.list", timeout=3)["panes"]
+    except (ConnectionError, FileNotFoundError, OSError, RuntimeError, KeyError, TypeError):
+        return []
+    return [pane for pane in panes if pane.get("alive")]
+
+
+def running_work() -> tuple[list[str], list[dict]]:
+    """``(what must finish first, panes left open)``. The first is research runs in flight and
+    cards running in panes: stopping the daemon under them is losing work. The second is every
+    other live pane: a session its owner has open."""
+    panes = live_panes()
+    blocking = [f"research run {run}" for run in active_runs()]
+    blocking += [f"card {pane['card']} in pane {pane.get('id')}" for pane in panes if pane.get("card")]
+    return blocking, [pane for pane in panes if not pane.get("card")]
+
+
+def stop_daemon() -> None:
+    """Ask the panel daemon to stop, the way ``misaka net stop`` does. A daemon that is not
+    running raises on connect, which is the same outcome as stopping it."""
+    from misaka.ui.panel import client
+    try:
+        client.request("server.stop", timeout=3)
+    except (ConnectionError, FileNotFoundError, OSError, RuntimeError):
+        return
+    ui.print_success("Stopped the panel daemon.")
 
 
 def _git(path: Path, *args: str, check: bool = True) -> str:
@@ -199,21 +299,90 @@ def _checkout_state(install: Install) -> dict:
     return state
 
 
-def _install_command(install: Install) -> list[str] | None:
-    """The command that reinstalls this install in place, or None when there is no safe one."""
+def _install_commands(install: Install) -> list[list[str]] | None:
+    """What reinstalls this install in place, keeping its extras, or None when nothing safely can.
+
+    uv and pipx upgrade a tool from their own record of it, extras included, and follow a git
+    source to its new head. pip keeps no record, and it does not reinstall a git requirement whose
+    version string has not moved, so it takes two steps: the package alone, forced, and then
+    whatever its new metadata asks for, with the extras found installed."""
+    if install.kind == "wheel":
+        return None
+    if install.installer == "uv tool":
+        return [["uv", "tool", "upgrade", "misaka"]]
+    if install.installer == "pipx":
+        return [["pipx", "upgrade", "misaka"]]
+    extras = installed_extras()
+    wanted = f"[{','.join(extras)}]" if extras else ""
     if install.kind == "git":
-        requirement = f"misaka @ git+{REPO_URL}"
+        source = f"misaka{wanted} @ git+{REPO_URL}"
         if install.installer == "uv":
-            return ["uv", "tool", "install", "--force", requirement]
-        if install.installer == "pipx":
-            return ["pipx", "install", "--force", requirement]
-        return [sys.executable, "-m", "pip", "install", "--upgrade", requirement]
+            return [["uv", "pip", "install", "--python", sys.executable, "--reinstall-package", "misaka", source]]
+        return [[sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", f"misaka @ git+{REPO_URL}"],
+                [sys.executable, "-m", "pip", "install", source]]
     if install.kind == "checkout" and install.path is not None:
         # Dependencies move with the code; the pull alone leaves the environment behind.
-        if install.installer == "uv" and (install.path / "uv.lock").exists():
-            return ["uv", "sync"]
-        return [sys.executable, "-m", "pip", "install", "-e", "."]
+        if install.installer == "uv":
+            if (install.path / "uv.lock").exists() and Path(sys.prefix) == install.path / ".venv":
+                return [["uv", "sync", *[f"--extra={extra}" for extra in extras]]]
+            return [["uv", "pip", "install", "--python", sys.executable, "-e", f".{wanted}"]]
+        return [[sys.executable, "-m", "pip", "install", "-e", f".{wanted}"]]
     return None
+
+
+def adding_extras(install: Install, adding: list[str]) -> list[str] | None:
+    """The command that gives this install ``adding`` as well, made the way the install was and
+    keeping every extra it holds; None for a built package of unknown origin."""
+    extras = ",".join(sorted({*installed_extras(), *adding}))
+    if install.kind == "checkout" and install.path is not None:
+        target = ["-e", f"{install.path}[{extras}]"]
+    elif install.kind == "git":
+        target = [f"misaka[{extras}] @ git+{REPO_URL}"]
+    else:
+        return None
+    return {"uv tool": ["uv", "tool", "install", "--force", *target],
+            "pipx": ["pipx", "install", "--force", *target],
+            "uv": ["uv", "pip", "install", "--python", sys.executable, *target],
+            }.get(install.installer, [sys.executable, "-m", "pip", "install", *target])
+
+
+def _starts() -> str | None:
+    """Why the code now installed cannot start, or None. The import is the one every command makes."""
+    try:
+        result = subprocess.run([sys.executable, "-c", "import misaka.cli.app"],
+                                capture_output=True, text=True, check=False, timeout=300)
+    except (OSError, subprocess.SubprocessError) as error:
+        return str(error)
+    if result.returncode == 0:
+        return None
+    lines = (result.stderr or result.stdout).strip().splitlines()
+    return lines[-1] if lines else f"exit {result.returncode}"
+
+
+def _run_all(commands: list[list[str]], cwd: Path | None) -> str | None:
+    """Run each command in turn; the first failure, or None."""
+    for command in commands:
+        ui.print_info(ui.color("  " + shlex.join(command), ui.DIM))
+        try:
+            result = subprocess.run(command, cwd=str(cwd) if cwd else None, check=False)
+        except OSError as error:
+            return f"{command[0]} could not start: {error}"
+        if result.returncode != 0:
+            return f"{command[0]} exited with {result.returncode}"
+    return None
+
+
+def _restore_command(install: Install) -> str:
+    """How to put a non-checkout install back on the commit it had, when there was one."""
+    if not install.commit:
+        return ""
+    extras = installed_extras()
+    wanted = f"[{','.join(extras)}]" if extras else ""
+    source = f"'misaka{wanted} @ git+{REPO_URL}@{install.commit}'"
+    return {"uv tool": f"uv tool install --force {source}",
+            "pipx": f"pipx install --force {source}",
+            "uv": f"uv pip install --python {sys.executable} --reinstall-package misaka {source}",
+            }.get(install.installer, f"{sys.executable} -m pip install --force-reinstall {source}")
 
 
 def _report(install: Install, state: dict | None, behind: int | None) -> None:
@@ -258,10 +427,10 @@ def run(*, apply: bool = False) -> int:
         behind = None
     _report(install, state, behind)
 
-    command = _install_command(install)
+    commands = _install_commands(install)
     if behind == 0 and not apply:
         return 0
-    if command is None:
+    if commands is None:
         ui.print_info("", "This install was not made from the repository, so there is nothing to pull into.",
                       f"  pip install --upgrade 'misaka @ git+{REPO_URL}'")
         return 0
@@ -273,23 +442,40 @@ def run(*, apply: bool = False) -> int:
         return 1
 
     steps = ([f"git -C {ui.tilde(str(install.path))} pull --ff-only origin {BRANCH}"] if install.kind == "checkout" else []) \
-        + [" ".join(command)]
+        + [shlex.join(command) for command in commands]
     ui.print_info("", "Updating would run:", *[f"  {step}" for step in steps])
     if not apply:
         ui.print_info("", "`misaka update --apply` runs it.")
         return 0
 
+    blocking, open_panes = running_work()
+    if blocking:
+        ui.print_error("Work is running that an update would cut off:")
+        ui.print_info(*[f"    {item}" for item in blocking], "",
+                      "Let it finish, or stop it (`/research stop` in the run's Last Order window; a card from",
+                      "the panel), then run this again.")
+        return 1
+
     try:
         if prompt_choice("Run it now?", ["No, leave this install alone", "Yes, update"], 0) != 1:
             ui.print_info("Nothing was changed.")
             return 1
-    except SetupCancelled:
+    except (SetupCancelled, SetupGoBack):
         print()
         ui.print_info("Nothing was changed.")
         return 1
 
-    from misaka.cli.uninstall import _stop_daemon
-    _stop_daemon()
+    import sqlite3
+
+    from misaka.cli import backup
+    try:
+        ui.print_success(f"Saved settings, credentials and the boards to {ui.tilde(str(backup.snapshot('update')))}")
+    except (OSError, sqlite3.Error) as error:      # best-effort, as Hermes's is: warned, never fatal
+        ui.print_warning(f"Could not save a copy of the home first ({error}); updating anyway.")
+    if not open_panes:
+        stop_daemon()
+
+    before = state.get("head") if state else None
     if install.kind == "checkout" and install.path is not None:
         try:
             _git(install.path, "pull", "--ff-only", "origin", BRANCH)
@@ -297,16 +483,26 @@ def run(*, apply: bool = False) -> int:
             ui.print_error(f"git pull failed: {error}")
             return 1
         ui.print_success(f"Fast-forwarded to {BRANCH}.")
-    ui.print_info(ui.color("  " + " ".join(command), ui.DIM))
-    try:
-        result = subprocess.run(command, cwd=str(install.path) if install.path else None, check=False)
-    except OSError as error:
-        ui.print_error(f"{command[0]} could not start: {error}")
-        return 1
-    if result.returncode != 0:
-        ui.print_error(f"{command[0]} exited with {result.returncode}; the code is updated but the environment may not be.")
+    failure = _run_all(commands, install.path) or _starts()
+    if failure:
+        ui.print_error(f"The update did not finish: {failure}.")
+        if install.kind == "checkout" and install.path is not None and before:
+            ui.print_info(f"Putting the checkout back on {before[:12]}.")
+            try:
+                _git(install.path, "reset", "--hard", before)
+            except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+                ui.print_error(f"git reset failed: {error}")
+                return 1
+            again = _run_all(commands, install.path) or _starts()
+            (ui.print_error if again else ui.print_success)(
+                f"The checkout is back on {before[:12]}" + (f", but it still does not start: {again}." if again else ", as it was."))
+        elif _restore_command(install):
+            ui.print_info("To put it back on the commit it had:", f"  {_restore_command(install)}")
         return 1
     ui.print_success("Updated.")
-    ui.print_info("", "Restart MISAKA if it is running: this process is still on the old code,",
-                  "and the panel daemon was stopped so it comes back on the new one.")
+    if open_panes:
+        ui.print_info("", f"The panel is still open with {len(open_panes)} session(s) on the old code. Close them,",
+                      "then run `misaka net stop` so the panel comes back on the new code.")
+    else:
+        ui.print_info("", "Restart MISAKA if it is running: this process is still on the old code.")
     return 0

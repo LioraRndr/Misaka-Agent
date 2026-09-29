@@ -102,7 +102,7 @@ async def test_a_research_card_is_left_to_the_user_and_research_resume(board, tm
     and requeueing one behind the driver's back is what B13's mass-stop was repaired with."""
     task_id = _card(board, tmp_path)
     run = runs.create(board, workspace=str(tmp_path), question="why is the sky blue")
-    node = runs.create_node(board, run["id"], trigger="why is the sky blue", parent_id=None, depth=0)
+    node = runs.root(board, run["id"])
     runs.link_task(board, run["id"], task_id, kind="investigate", node=node)
     board.commit()
     with pytest.raises(ValueError, match="/research resume"):

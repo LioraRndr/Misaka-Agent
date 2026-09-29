@@ -91,7 +91,7 @@ def card_counts(sid, db_path=None):
         con.close()
 
 
-def create_sister(sid, root=None, specialty=None, model=None):
+def create_sister(sid, root=None, specialty=None, model=None, thinking=None):
     """Create a Sister profile and return ``(success, message)``."""
     root = root or ROOT
     if not _valid(sid):
@@ -107,6 +107,11 @@ def create_sister(sid, root=None, specialty=None, model=None):
             pin = resolve_pin(model)
         except ValueError as error:
             return False, f"Sister {sid} was not created: {error}"
+    if thinking:
+        from misaka.cli.args import VALID_THINKING_LEVELS
+        if thinking not in VALID_THINKING_LEVELS:
+            return False, (f"Sister {sid} was not created: unknown thinking level {thinking!r} "
+                           f"(choose {', '.join(VALID_THINKING_LEVELS)})")
     os.makedirs(os.path.join(prof, "skills"))
     specialty = (specialty or "").strip()
     with open(os.path.join(prof, "SOUL.md"), "w", encoding="utf-8") as f:
@@ -118,10 +123,14 @@ def create_sister(sid, root=None, specialty=None, model=None):
     if pin:
         profiles.persist_role_default_model(prof, pin, strict=True)
         pinned = f"Pinned model: {pin}. "
+    if thinking:
+        profiles.persist_role_thinking_level(prof, thinking)
+        pinned += f"Default thinking level: {thinking}. "
     return True, (
         f"Sister {sid} was added to the roster. {pinned}Profile: {prof} -- "
         f"DESCRIBE.md (what Last Order routes to her), SOUL.md (her voice), "
-        f"settings.json (add it for a pinned model or \"mcpServers\"; /model Ctrl+S writes the pin), "
+        f"settings.json (her pinned model, her default thinking level, \"mcpServers\"; /model and "
+        f"/thinking with Ctrl+S in her window write them), "
         f"skills/ (link skills here). Use /sister {sid} to switch to this Sister."
     )
 
@@ -152,6 +161,22 @@ def describe_line(sid, root=None):
     return truncate_skill_description(desc) if desc else None
 
 
+def allies():
+    """The allies this home enables that can start on this machine, by name (``ally.presets``)."""
+    from misaka.core.network.ally import presets
+    return {name: ally for name, ally in presets.configured().items() if presets.unavailable(ally) is None}
+
+
+def executors(root=None):
+    """Who a card may be assigned to: the Sisters, and the usable allies."""
+    return set(roster_names(root)) | set(allies())
+
+
+def _ally_entry(ally):
+    return {"id": ally.name, "profile": "",
+            "description": f"Ally -- an external agent misaka drives over ACP, not a Sister: {ally.description}"}
+
+
 def coordinator_profile(entry):
     """LO's routing summary, without mutating the internal capability catalog."""
     return {
@@ -169,7 +194,7 @@ def routing_catalog(root=None):
         if _valid(sid):
             description, body = describe(sid, root)
             out.append(coordinator_profile({"id": sid, "description": description, "profile": body}))
-    return out
+    return out + [coordinator_profile(_ally_entry(ally)) for ally in allies().values()]
 
 
 def capability_catalog(root=None, *, workspace=None, platform="cli"):
@@ -194,7 +219,8 @@ def capability_catalog(root=None, *, workspace=None, platform="cli"):
                     "profile_path": os.path.join(profile, "DESCRIBE.md"),
                     "skills": [{"name": e.get("runtime_name", e["name"]), "description": e["description"],
                                 "path": e["path"], "layer": e["layer"]} for e in entries]})
-    return out
+    # An ally brings its own skills and tools; misaka has no profile or skill stack to show.
+    return out + [{**_ally_entry(ally), "profile_path": None, "skills": []} for ally in allies().values()]
 
 
 def remove_sister(sid, root=None, db_path=None):
@@ -255,11 +281,19 @@ def commands():
             except ValueError as error:
                 ctx.ui.notify(f"Sister {sid} was not created: {error}", "error")
                 return
-        summary = f"Specialty: {specialty.strip() or 'not specified'} | Model: {model or 'global default'}"
+        from misaka.cli.args import VALID_THINKING_LEVELS
+        thinking_pick = await ctx.ui.select(f"Choose Sister {sid}'s default thinking level",
+                                            [DEFAULT_CHOICE, *VALID_THINKING_LEVELS])
+        if thinking_pick is None:
+            ctx.ui.notify("Creation cancelled.", "info")
+            return
+        thinking = None if thinking_pick == DEFAULT_CHOICE else thinking_pick
+        summary = (f"Specialty: {specialty.strip() or 'not specified'} | Model: {model or 'global default'}"
+                   f" | Thinking: {thinking or 'global default'}")
         if not await ctx.ui.confirm(f"Create Sister {sid}?", summary):
             ctx.ui.notify("Creation cancelled.", "info")
             return
-        ok, msg = create_sister(sid, specialty=specialty, model=model)
+        ok, msg = create_sister(sid, specialty=specialty, model=model, thinking=thinking)
         ctx.ui.notify(msg, "info" if ok else "error")
 
     async def remove_cmd(args, ctx):
@@ -308,7 +342,7 @@ class RosterPart:
 # ── CLI: misaka create / misaka remove ──────────────────────────────
 
 
-def cli_create(sid=None, desc=None, model=None, root=None):
+def cli_create(sid=None, desc=None, model=None, root=None, thinking=None):
     """Create a Sister interactively when optional fields are omitted."""
     interactive = sys.stdin.isatty()
     if not sid:
@@ -323,7 +357,10 @@ def cli_create(sid=None, desc=None, model=None, root=None):
         desc = input("Specialty for Last Order's task routing (optional): ").strip()
     if model is None and interactive:
         model = input(f"Pinned model as provider/model, such as {PIN_EXAMPLE} (blank uses the global default): ").strip()
-    ok, msg = create_sister(sid, root=root, specialty=desc or None, model=model or None)
+    if thinking is None and interactive:
+        thinking = input("Default thinking level: off, minimal, low, medium, high, xhigh or max "
+                         "(blank uses the global default): ").strip()
+    ok, msg = create_sister(sid, root=root, specialty=desc or None, model=model or None, thinking=thinking or None)
     print(msg)
     return 0 if ok else 1
 

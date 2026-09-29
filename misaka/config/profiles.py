@@ -129,6 +129,20 @@ def persist_role_default_model(profile_dir, model_id, *, strict=False):
     return True
 
 
+def persist_role_thinking_level(profile_dir, level):
+    """Record ``level`` as this role's own default thinking level (``defaultThinkingLevel`` in her
+    settings.json), under the lock SettingsManager takes for the same file. Raises on a file
+    that cannot be read or written."""
+    from filelock import FileLock
+
+    os.makedirs(profile_dir, exist_ok=True)
+    path = settings_path(profile_dir)
+    with FileLock(path + ".lock"):
+        data = role_settings(profile_dir, strict=True)
+        data["defaultThinkingLevel"] = level
+        atomic.write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+
+
 SHARED_SOUL_TEMPLATE = """# MISAKA Network · Shared identity
 
 - Keep research deliverables accessible as project artifacts, following the current task's output and saving contract.

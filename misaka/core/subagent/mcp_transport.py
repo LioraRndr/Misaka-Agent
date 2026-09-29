@@ -14,11 +14,11 @@ from typing import Any
 import httpx
 
 from misaka.core.mcp import (
-    CALL_TIMEOUT,
-    INIT_TIMEOUT,
     MAX_LIST_PAGES,
     McpClient,
     McpRoleContext,
+    call_timeout,
+    init_timeout,
 )
 from misaka.core.tools._common import abort_race
 from misaka.utils.async_lifecycle import settle
@@ -56,7 +56,7 @@ class NetworkMcpClient(McpClient):
                                              refresh_client_factory=self.http_client_factory)
             async with AsyncExitStack() as stack:
                 if kind in {"sse", "sse-ide"}:
-                    transport = sse_client(self.cfg["url"], headers=headers, timeout=INIT_TIMEOUT, sse_read_timeout=86400, auth=self.auth, httpx_client_factory=self.http_client_factory)
+                    transport = sse_client(self.cfg["url"], headers=headers, timeout=init_timeout(), sse_read_timeout=86400, auth=self.auth, httpx_client_factory=self.http_client_factory)
                 elif kind in {"ws", "ws-ide"}:
                     from misaka.core.subagent.mcp_websocket import websocket_client
 
@@ -66,14 +66,14 @@ class NetworkMcpClient(McpClient):
                 elif kind == "http":
                     client = await stack.enter_async_context(self.http_client_factory(
                         headers=headers, auth=self.auth,
-                        timeout=httpx.Timeout(CALL_TIMEOUT, read=None), follow_redirects=False,
+                        timeout=httpx.Timeout(call_timeout(), read=None), follow_redirects=False,
                     ))
                     transport = streamable_http_client(self.cfg["url"], http_client=client)
                 else:
                     raise ValueError(f"MCP transport {kind!r} requires its owning host connection")
                 streams = await stack.enter_async_context(transport)
                 self._session = await stack.enter_async_context(ClientSession(
-                    *streams[:2], read_timeout_seconds=timedelta(seconds=CALL_TIMEOUT + (300 if self._login_callback else 0)),
+                    *streams[:2], read_timeout_seconds=timedelta(seconds=call_timeout() + (300 if self._login_callback else 0)),
                     client_info=types.Implementation(name="misaka", version="1.0"),
                 ))
                 result = await self._session.initialize()
@@ -112,14 +112,14 @@ class NetworkMcpClient(McpClient):
             self._ready = False
             self._session = None
 
-    async def start(self, *, timeout=INIT_TIMEOUT):
+    async def start(self, *, timeout=None):
         await self.stop()
         self._closing = asyncio.Event()
         self._connected = asyncio.get_running_loop().create_future()
         self._owner = asyncio.create_task(self._serve())
         self._owner.add_done_callback(lambda job: None if job.cancelled() else job.exception())
         try:
-            await asyncio.wait_for(asyncio.shield(self._connected), timeout)
+            await asyncio.wait_for(asyncio.shield(self._connected), timeout or init_timeout())
         except BaseException:
             await self.stop()
             raise
@@ -143,7 +143,7 @@ class NetworkMcpClient(McpClient):
             async with OAuthCallback(notify, port=port) as callback:
                 self._login_callback = callback
                 try:
-                    return await self.start(timeout=AUTH_TIMEOUT + INIT_TIMEOUT)
+                    return await self.start(timeout=AUTH_TIMEOUT + init_timeout())
                 finally:
                     self._login_callback = None
                     # The returned client may later receive a step-up challenge;
@@ -171,7 +171,7 @@ class NetworkMcpClient(McpClient):
         }
         request = types.ClientRequest.model_validate({"method": method, "params": params})
         job = asyncio.create_task(self._session.send_request(
-            request, result_types[method], request_read_timeout_seconds=timedelta(seconds=timeout or CALL_TIMEOUT),
+            request, result_types[method], request_read_timeout_seconds=timedelta(seconds=timeout or call_timeout()),
         ))
         try:
             async with abort_race(signal) as aborting:

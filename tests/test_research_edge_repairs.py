@@ -14,7 +14,6 @@ from misaka.core.research import report, runs, workflow
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a, **k: None)
     con = tasks.connect(str(tmp_path / "board.db"))
     run = runs.create(
         con,
@@ -73,12 +72,8 @@ async def test_one_clarifying_node_does_not_revoke_its_sibling(
     state, monkeypatch, clarify_first
 ):
     con, run, root = state
-    a = runs.create_node(
-        con, run["id"], trigger="question A", parent_id=root["id"], depth=1
-    )
-    b = runs.create_node(
-        con, run["id"], trigger="question B", parent_id=root["id"], depth=1
-    )
+    a = runs.create_node(con, run["id"], question="question A", parents=[root["id"]])
+    b = runs.create_node(con, run["id"], question="question B", parents=[root["id"]])
     runs.record_action(
         con,
         run,
@@ -146,6 +141,7 @@ async def test_derived_index_failure_does_not_reverse_completed_run(
             "path": "/tmp/fixture-draft.md",
         },
     )
+    monkeypatch.setattr(report, "review_body", lambda *a: "## deliverable\n`critique.md`\n")
     monkeypatch.setattr(
         workflow,
         "_submit_tasks",

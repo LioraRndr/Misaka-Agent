@@ -125,17 +125,34 @@ class SizeReport(Structure):
     _fields_ = [("rows", c_uint16), ("columns", c_uint16), ("cell_width", c_uint32), ("cell_height", c_uint32)]
 
 
+class ClipboardContent(Structure):
+    _fields_ = [("mime", GString), ("data", GString)]
+
+
+class ClipboardWrite(Structure):
+    _fields_ = [("size", c_size_t), ("location", c_int), ("contents", POINTER(ClipboardContent)),
+                ("contents_len", c_size_t)]
+
+
 WritePtyFn = CFUNCTYPE(None, c_void_p, c_void_p, POINTER(c_uint8), c_size_t)
 SizeFn = CFUNCTYPE(c_bool, c_void_p, c_void_p, POINTER(SizeReport))
+ClipboardWriteFn = CFUNCTYPE(c_int, c_void_p, c_void_p, POINTER(ClipboardWrite))
 
 # Enum values (the headers define them as plain C enums).
 OPT_USERDATA, OPT_WRITE_PTY, OPT_SIZE, OPT_COLOR_FOREGROUND, OPT_COLOR_BACKGROUND = 0, 1, 6, 11, 12
+OPT_CLIPBOARD_WRITE = 26
+CLIPBOARD_LOCATION_STANDARD = 0
+CLIPBOARD_WRITE_SUCCESS, CLIPBOARD_WRITE_UNSUPPORTED, CLIPBOARD_WRITE_INVALID_DATA = 0, 2, 4
+MAX_CLIPBOARD_BYTES = 192 * 1024      # herdr ghostty/mod.rs
 DATA_TITLE = 12
 DATA_CURSOR_X, DATA_CURSOR_Y, DATA_ACTIVE_SCREEN, DATA_CURSOR_VISIBLE = 3, 4, 6, 7
 DATA_KITTY_KEYBOARD_FLAGS, DATA_SCROLLBAR = 8, 9
 DATA_TOTAL_ROWS, DATA_VIEWPORT_ACTIVE, DATA_MODIFY_OTHER_KEYS = 14, 32, 33
 RS_COLS, RS_ROWS, RS_DIRTY, RS_ROW_ITERATOR = 1, 2, 3, 4
 RS_CURSOR_VISIBLE, RS_CURSOR_HAS_VALUE, RS_CURSOR_X, RS_CURSOR_Y = 11, 14, 15, 16
+RS_CURSOR_VISUAL_STYLE, RS_CURSOR_BLINKING = 10, 12
+# render.h GhosttyRenderStateCursorVisualStyle
+CURSOR_STYLE_BAR, CURSOR_STYLE_BLOCK, CURSOR_STYLE_UNDERLINE, CURSOR_STYLE_BLOCK_HOLLOW = 0, 1, 2, 3
 RS_OPTION_DIRTY, ROW_OPTION_DIRTY = 0, 0
 ROW_DIRTY, ROW_CELLS = 1, 3
 CELLS_RAW, CELLS_STYLE, CELLS_HAS_STYLING, CELLS_UTF8 = 1, 2, 8, 9
@@ -144,6 +161,8 @@ WIDE_NARROW, WIDE_WIDE, WIDE_SPACER_TAIL, WIDE_SPACER_HEAD = 0, 1, 2, 3
 SCROLL_TOP, SCROLL_BOTTOM, SCROLL_DELTA, SCROLL_ROW = 0, 1, 2, 3
 POINT_SCREEN = 2
 DIRTY_FALSE, DIRTY_PARTIAL, DIRTY_FULL = 0, 1, 2
+COMPRESSION_MODE_INCREMENTAL = 0
+COMPRESSION_UNSUPPORTED, COMPRESSION_PENDING, COMPRESSION_COMPLETE = 0, 1, 2
 FORMAT_PLAIN = 0
 COLOR_NONE, COLOR_PALETTE, COLOR_RGB = 0, 1, 2
 
@@ -168,6 +187,16 @@ def library():
     if _LIB is None:
         _LIB = _load()
     return _LIB
+
+
+def unavailable():
+    """Why the library cannot be used here, or None. Loading it is the test: a build that is
+    present can still be one this system cannot load (a glibc build on a musl system)."""
+    try:
+        library()
+    except RuntimeError as error:
+        return str(error)
+    return None
 
 
 def library_path():
@@ -206,6 +235,9 @@ def _load():
         "ghostty_terminal_get": (c_int, [vp, c_int, vp]),
         "ghostty_terminal_mode_get": (c_int, [vp, c_uint16, POINTER(c_bool)]),
         "ghostty_terminal_scroll_viewport": (None, [vp, ScrollViewport]),
+        "ghostty_unicode_codepoint_width": (c_uint8, [c_uint32]),
+        "ghostty_terminal_compression_activity": (c_int, [vp, POINTER(c_uint64)]),
+        "ghostty_terminal_compress": (c_int, [vp, c_int, POINTER(c_int)]),
         "ghostty_terminal_grid_ref": (c_int, [vp, Point, POINTER(GridRef)]),
         "ghostty_render_state_new": (c_int, [vp, POINTER(vp)]),
         "ghostty_render_state_free": (None, [vp]),
@@ -231,6 +263,12 @@ def _load():
         fn = getattr(lib, name)
         fn.restype, fn.argtypes = restype, argtypes
     return lib
+
+
+def codepoint_width(codepoint):
+    """The cells ghostty gives a codepoint (0 for combining and zero-width marks, 2 for
+    wide): herdr ``ghostty::unicode_codepoint_width``."""
+    return library().ghostty_unicode_codepoint_width(codepoint)
 
 
 def _check(result, what):
@@ -265,7 +303,7 @@ class Terminal:
     ``on_write_pty``, which the owner sends back to the program.
     """
 
-    def __init__(self, cols, rows, max_scrollback=SCROLLBACK_BYTES, on_write_pty=None):
+    def __init__(self, cols, rows, max_scrollback=SCROLLBACK_BYTES, on_write_pty=None, on_clipboard_write=None):
         self._lib = library()
         self.raw = c_void_p()
         _check(self._lib.ghostty_terminal_new(None, byref(self.raw), TerminalOptions(cols, rows, max_scrollback)),
@@ -274,9 +312,13 @@ class Terminal:
         self.on_write_pty = on_write_pty
         self._write_pty = WritePtyFn(self._pty_output)      # kept alive with the terminal
         self._size = SizeFn(self._size_report)
+        self.on_clipboard_write = on_clipboard_write
+        self._clipboard_write = ClipboardWriteFn(self._clipboard)
         _check(self._lib.ghostty_terminal_set(self.raw, OPT_WRITE_PTY, ctypes.cast(self._write_pty, c_void_p)),
                "set write_pty")
         _check(self._lib.ghostty_terminal_set(self.raw, OPT_SIZE, ctypes.cast(self._size, c_void_p)), "set size")
+        _check(self._lib.ghostty_terminal_set(self.raw, OPT_CLIPBOARD_WRITE,
+                                              ctypes.cast(self._clipboard_write, c_void_p)), "set clipboard_write")
 
     def close(self):
         if self.raw:
@@ -292,6 +334,41 @@ class Terminal:
     def _pty_output(self, _terminal, _userdata, data, length):
         if self.on_write_pty is not None and length:
             self.on_write_pty(ctypes.string_at(data, length))
+
+    def _clipboard(self, _terminal, _userdata, write):
+        """herdr ghostty/mod.rs capture_clipboard_write: a program's OSC 52 / OSC 1337 copy,
+        already decoded by ghostty. Only one text/plain representation for the standard
+        clipboard is taken; it is handed to ``on_clipboard_write`` (the daemon forwards it to
+        the panel, which owns the host terminal and its clipboard)."""
+        try:
+            if not write:
+                return CLIPBOARD_WRITE_INVALID_DATA
+            request = write[0]
+            if request.size < ClipboardWrite.contents_len.offset + sizeof(c_size_t):
+                return CLIPBOARD_WRITE_INVALID_DATA
+            if request.location != CLIPBOARD_LOCATION_STANDARD:
+                return CLIPBOARD_WRITE_UNSUPPORTED
+            if request.contents_len == 0:
+                return CLIPBOARD_WRITE_SUCCESS
+            if request.contents_len != 1:
+                return CLIPBOARD_WRITE_UNSUPPORTED
+            if not request.contents:
+                return CLIPBOARD_WRITE_INVALID_DATA
+            content = request.contents[0]
+            mime = ctypes.string_at(content.mime.ptr, content.mime.len) if content.mime.len else b""
+            if mime.split(b";")[0].strip().lower() != b"text/plain":
+                return CLIPBOARD_WRITE_UNSUPPORTED
+            if content.data.len and not content.data.ptr:
+                return CLIPBOARD_WRITE_INVALID_DATA
+            if not content.data.len:
+                return CLIPBOARD_WRITE_UNSUPPORTED
+            if content.data.len > MAX_CLIPBOARD_BYTES:
+                return CLIPBOARD_WRITE_INVALID_DATA
+            if self.on_clipboard_write is not None:
+                self.on_clipboard_write(ctypes.string_at(content.data.ptr, content.data.len))
+            return CLIPBOARD_WRITE_SUCCESS
+        except Exception:  # noqa: BLE001 - a callback must never unwind into C
+            return CLIPBOARD_WRITE_INVALID_DATA
 
     def _size_report(self, _terminal, _userdata, out):
         out[0].rows, out[0].columns = self.rows, self.cols
@@ -383,6 +460,24 @@ class Terminal:
     def scroll(self, delta):
         """Move the viewport by rows: negative goes back into history (herdr ``scroll_up``)."""
         self._scroll(SCROLL_DELTA, delta=delta)
+
+    # ── scrollback compression (terminal.h "Scrollback Compression"; herdr ghostty/mod.rs) ──
+
+    def compression_activity(self):
+        """The opaque activity token: only equality means anything."""
+        out = c_uint64()
+        _check(self._lib.ghostty_terminal_compression_activity(self.raw, byref(out)), "compression_activity")
+        return out.value
+
+    def compress_incremental(self):
+        """One bounded compression step: COMPRESSION_PENDING (call again while idle),
+        COMPRESSION_COMPLETE (nothing until the activity token changes) or
+        COMPRESSION_UNSUPPORTED (this target cannot reclaim retained mappings)."""
+        out = c_int()
+        _check(self._lib.ghostty_terminal_compress(self.raw, COMPRESSION_MODE_INCREMENTAL, byref(out)), "compress")
+        if out.value not in (COMPRESSION_UNSUPPORTED, COMPRESSION_PENDING, COMPRESSION_COMPLETE):
+            raise RuntimeError(f"libghostty-vt compress: unknown result {out.value}")
+        return out.value
 
     def scroll_to_bottom(self):
         self._scroll(SCROLL_BOTTOM)
@@ -497,6 +592,11 @@ class RenderState:
             return (0, 0, False)
         visible = bool(self._get(RS_CURSOR_VISIBLE, c_bool).value)
         return (self._get(RS_CURSOR_X, c_uint16).value, self._get(RS_CURSOR_Y, c_uint16).value, visible)
+
+    def cursor_style(self):
+        """``(visual style, blinking)`` of the cursor: a CURSOR_STYLE_* value and whether it
+        blinks (render.h DATA_CURSOR_VISUAL_STYLE / DATA_CURSOR_BLINKING)."""
+        return (self._get(RS_CURSOR_VISUAL_STYLE, c_int).value, bool(self._get(RS_CURSOR_BLINKING, c_bool).value))
 
     def rows(self, all_rows=False):
         """Yield ``(index, cells)`` for each dirty row (every row when ``all_rows``), where

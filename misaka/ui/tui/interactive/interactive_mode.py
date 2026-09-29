@@ -5866,12 +5866,24 @@ class InteractiveMode(Conversation):
         self._apply_thinking_level(level, persist=parsed.persist)
 
     def _apply_thinking_level(self, level: str, *, persist: bool = False) -> None:
-        # Only explicit default actions (`--default` or selector Ctrl+S) write the global
-        # default; ordinary selection remains session scoped like pi.
-        self.session.setThinkingLevel(level, persist)
+        # Only explicit default actions (`--default`, selector Ctrl+S, the settings panel) save a
+        # default: this agent's own in a Last Order or Sister window, the global one elsewhere.
+        # Ordinary selection remains session scoped like pi.
+        # MISAKA fork: the default is saved before the session switches, so a role file that
+        # refuses the write leaves both as they were (pi's global write cannot fail here).
+        if persist:
+            save = _callable_attr(self.settingsManager, "setDefaultThinkingLevel")
+            if save is not None:
+                try:
+                    save(level)
+                except (OSError, ValueError) as error:
+                    self.showError(f"Thinking level not saved: {error}")
+                    return
+        self.session.setThinkingLevel(level)
         self.footer.invalidate()
         self.updateEditorBorderColor()
-        self.showStatus(f"Default thinking level: {level}" if persist else f"Thinking level: {level}")
+        whose = " for this agent" if _safe_call_str(self.settingsManager, "getModelProfile", "") else ""
+        self.showStatus(f"Default thinking level{whose}: {level}" if persist else f"Thinking level: {level}")
 
     def showThinkingSelector(self, *, persist: bool = False) -> None:
         self.showSelector(
@@ -6207,12 +6219,7 @@ class InteractiveMode(Conversation):
                         # per-model overrides, already persisted by setModelThinkingLevel one
                         # line above -- so the persist gate that pi puts on setThinkingLevel
                         # says nothing about this control.
-                        onThinkingLevelChange=lambda level: (
-                            _callable_attr(self.session, "setThinkingLevel")
-                            and self.session.setThinkingLevel(level, True),
-                            self.footer.invalidate(),
-                            self.updateEditorBorderColor(),
-                        ),
+                        onThinkingLevelChange=lambda level: self._apply_thinking_level(level, persist=True),
                         onModelThinkingLevelChange=_on_model_thinking_level_change,
                         onModelThinkingLevelRemove=_on_model_thinking_level_remove,
                         onThemeChange=_on_theme_change,

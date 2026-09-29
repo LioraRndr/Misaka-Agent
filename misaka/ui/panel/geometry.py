@@ -178,14 +178,14 @@ def panel_contrast_fg(bg=None):
     light_tone, dark_tone = sorted((TEXT, PANEL_BG), key=luminance, reverse=True)
     return dark_tone if luminance(bg) > 0.5 else light_tone
 
-# src/ui/tabs.rs:12-15
+# client/shell/state.rs MIN_TAB_WIDTH / NEW_TAB_WIDTH, client/shell/tabs.rs
 MIN_TAB_WIDTH = 8
 NEW_TAB_WIDTH = 3
 TAB_SCROLL_BUTTON_WIDTH = 3
-# src/ui/tabs.rs:16-19
+MIN_TAB_STRIP_WIDTH = MIN_TAB_WIDTH + NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH * 2
 TabBarView = namedtuple(
     "TabBarView",
-    "scroll tab_hit_areas scroll_left_hit_area scroll_right_hit_area new_tab_hit_area")
+    "scroll tab_hit_areas scroll_left_hit_area scroll_right_hit_area new_tab_hit_area max_scroll")
 
 
 def display_width(text):
@@ -309,15 +309,16 @@ def global_launcher_rect(ws_area, label="menu"):
 
 
 def menu_popup_rect(screen, launcher, labels):
-    """src/app/input/sidebar.rs:210-232 global_menu_rect: width = longest label + 4 (padding and
-    border), left edge on the launcher's left edge (clamped to the screen), bottom edge on the
-    row above it. MISAKA addition: the height is capped at the rows above the launcher, so a
-    long list scrolls instead of spilling over the footer."""
+    """client/shell/overlays.rs render_global_menu: width = longest label + 4 (padding and
+    border); the right edge on the launcher's right edge, so a menu wider than the launcher
+    extends to the left (clamped to the screen); bottom edge on the row above it. MISAKA
+    addition: the height is capped at the rows above the launcher, so a long list scrolls
+    instead of spilling over the footer."""
     content = max([display_width(label) for label in labels] or [8]) + 2
     menu_w = min(content + 2, max(screen.width, 1))
     menu_h = min(len(labels) + 2, max(screen.height, 1), max(launcher.y - screen.y, 2))
     max_x = screen.x + max(0, screen.width - menu_w)
-    x = min(launcher.x + max(0, launcher.width - menu_w), max_x)
+    x = min(max(0, launcher.x + launcher.width - menu_w), max_x)
     return Rect(x, max(0, launcher.y - menu_h), menu_w, menu_h)
 
 
@@ -376,6 +377,19 @@ def list_scroll_metrics(heights, body_h, scroll):
     return {"offset_from_bottom": max_scroll - scroll,
             "max_offset_from_bottom": max_scroll,
             "viewport_rows": list_visible_count(heights, body_h, scroll)}
+
+
+def list_scroll_start_to_reveal(heights, body_h, requested, target):
+    """client/shell/scroll.rs list_scroll_start_to_reveal: the least scroll from ``requested``
+    that shows entry ``target`` whole."""
+    metrics = list_scroll_metrics(heights, body_h, requested)
+    start = metrics["max_offset_from_bottom"] - metrics["offset_from_bottom"]
+    if target < start:
+        return target
+    while target >= start + metrics["viewport_rows"] and start < metrics["max_offset_from_bottom"]:
+        start += 1
+        metrics = list_scroll_metrics(heights, body_h, start)
+    return start
 
 
 def fit_tokens(tokens, max_width):
@@ -500,95 +514,90 @@ def tab_width(tab_names, tab_idx, zoomed=()):
                MIN_TAB_WIDTH)
 
 
-def layout_tab_hit_areas(tab_names, area, scroll, zoomed=()):
-    """src/ui/tabs.rs:107-127: lay tabs out from scroll with a 1-column gap; tabs that do not fit get width 0."""
-    rects = [RECT_DEFAULT] * len(tab_names)
-    if area.width == 0 or area.height == 0:
-        return rects
-    x = area.x
-    right = area.x + area.width
-    for idx in range(scroll, len(tab_names)):
-        if x >= right:
-            break
-        desired = tab_width(tab_names, idx, zoomed)
-        width = max(1, min(desired, right - x))
-        rects[idx] = Rect(x, area.y, width, 1)
-        x += width + 1
-    return rects
-
-
-def centered_tab_scroll(tab_names, active_tab, area, zoomed=()):
-    """src/ui/tabs.rs:129-158: center the active tab as well as possible."""
-    best_scroll, best_distance = active_tab, float("inf")
-    viewport_center = area.x * 2 + area.width
-    for scroll in range(active_tab + 1):
-        rects = layout_tab_hit_areas(tab_names, area, scroll, zoomed)
-        active_rect = rects[active_tab] if active_tab < len(rects) else None
-        if not active_rect or active_rect.width == 0:
+def centered_tab_scroll(focused, widths, available):
+    """client/shell/tabs.rs centered_tab_scroll: the first tab to draw so the focused one
+    sits as close to the middle of ``available`` columns as it can (ties: the later start)."""
+    best, best_distance = focused, None
+    for start in range(focused + 1):
+        before = sum(width + 1 for width in widths[start:focused])
+        if before >= available:
             continue
-        active_center = active_rect.x * 2 + active_rect.width
-        distance = abs(active_center - viewport_center)
-        if distance <= best_distance:
-            best_distance, best_scroll = distance, scroll
-    return best_scroll
+        focused_width = min(widths[focused], available - before)
+        distance = abs(before * 2 + focused_width - available)
+        if best_distance is None or distance <= best_distance:
+            best_distance, best = distance, start
+    return best
 
 
-def trailing_tab_controls_x(tab_hit_areas, fallback_x):
-    """src/ui/tabs.rs:160-166."""
-    for rect in reversed(tab_hit_areas):
-        if rect.width > 0:
-            return rect.x + rect.width
-    return fallback_x
-
-
-def max_tab_scroll(tab_names, area, zoomed=()):
-    """src/ui/tabs.rs:168-177: smallest scroll at which the last tab is visible."""
-    for scroll in range(len(tab_names)):
-        rects = layout_tab_hit_areas(tab_names, area, scroll, zoomed)
-        if rects and rects[-1].width > 0:
-            return scroll
-    return 0
+def max_tab_scroll(widths, available):
+    """client/shell/tabs.rs max_tab_scroll: the start of the longest suffix that is fully
+    visible -- not merely a sliver of the last tab. A last tab wider than the strip is still
+    reachable at the start of the strip."""
+    if not widths:
+        return 0
+    start, used = len(widths) - 1, widths[-1]
+    for width in reversed(widths[:-1]):
+        required = used + 1 + width
+        if required > available:
+            break
+        used, start = required, start - 1
+    return start
 
 
 def compute_tab_bar_view(tab_names, active_tab, area, current_scroll,
-                         follow_active, mouse_chrome, zoomed=()):
-    """src/ui/tabs.rs:179-268: if everything fits, all tabs plus the new-tab button;
-    otherwise scroll buttons on both sides of the tab area."""
+                         reveal_active, mouse_chrome, zoomed=()):
+    """client/shell/tabs.rs render_tab_bar, the layout half: the strip overflows as soon as
+    the tabs, their gaps and "+" do not fit (but never below MIN_TAB_STRIP_WIDTH, where the
+    tabs are truncated instead of getting scroll buttons); ``reveal_active`` centres the
+    focused tab once, otherwise the scroll is only clamped. Tabs are laid out from the
+    scroll, 1-column gaps, and the first one that has to be truncated is the last drawn."""
+    count = len(tab_names)
+    none = [RECT_DEFAULT] * count
     if area.width == 0 or area.height == 0:
-        return TabBarView(0, [RECT_DEFAULT] * len(tab_names),
-                          RECT_DEFAULT, RECT_DEFAULT, RECT_DEFAULT)
-    if not mouse_chrome:
-        cap = max_tab_scroll(tab_names, area, zoomed)
-        scroll = (min(centered_tab_scroll(tab_names, active_tab, area, zoomed), cap)
-                  if follow_active else min(current_scroll, cap))
-        return TabBarView(scroll, layout_tab_hit_areas(tab_names, area, scroll, zoomed),
-                          RECT_DEFAULT, RECT_DEFAULT, RECT_DEFAULT)
-
-    area_right = area.x + area.width
-    all_tabs_area = Rect(area.x, area.y, max(0, area.width - NEW_TAB_WIDTH), area.height)
-    all_tabs = layout_tab_hit_areas(tab_names, all_tabs_area, 0, zoomed)
-    overflow = any(rect.width == 0 for rect in all_tabs)
+        return TabBarView(0, none, RECT_DEFAULT, RECT_DEFAULT, RECT_DEFAULT, 0)
+    widths = [tab_width(tab_names, index, zoomed) for index in range(count)]
+    new_tab_width = NEW_TAB_WIDTH if mouse_chrome else 0
+    content_right = area.x + area.width
+    desired_total = sum(widths) + max(0, count - 1) + new_tab_width
+    overflow = desired_total > area.width and (not mouse_chrome or area.width >= MIN_TAB_STRIP_WIDTH)
+    if overflow and mouse_chrome:
+        available = max(0, area.width - NEW_TAB_WIDTH - TAB_SCROLL_BUTTON_WIDTH * 2)
+    else:
+        available = max(0, area.width - new_tab_width)
+    cap = max_tab_scroll(widths, available)
     if not overflow:
-        new_tab_x = trailing_tab_controls_x(all_tabs, area.x)
-        new_tab = Rect(new_tab_x, area.y,
-                       min(max(0, area_right - new_tab_x), NEW_TAB_WIDTH), 1)
-        return TabBarView(0, all_tabs, RECT_DEFAULT, RECT_DEFAULT, new_tab)
+        scroll = 0
+    elif reveal_active and 0 <= active_tab < count:
+        scroll = min(centered_tab_scroll(active_tab, widths, available), cap)
+    else:
+        scroll = min(current_scroll, cap)
 
-    left = Rect(area.x, area.y, min(TAB_SCROLL_BUTTON_WIDTH, area.width), 1)
-    tab_area_x = left.x + left.width
-    tab_area_right = max(0, area_right - (NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH))
-    tab_area = Rect(tab_area_x, area.y, max(0, tab_area_right - tab_area_x), area.height)
-    cap = max_tab_scroll(tab_names, tab_area, zoomed)
-    scroll = (min(centered_tab_scroll(tab_names, active_tab, tab_area, zoomed), cap)
-              if follow_active else min(current_scroll, cap))
-    tab_hits = layout_tab_hit_areas(tab_names, tab_area, scroll, zoomed)
-    trailing_x = min(trailing_tab_controls_x(tab_hits, tab_area_x), tab_area_right)
-    right = Rect(trailing_x, area.y,
-                 min(max(0, area_right - trailing_x), TAB_SCROLL_BUTTON_WIDTH), 1)
-    new_tab_x = right.x + right.width
-    new_tab = Rect(new_tab_x, area.y,
-                   min(max(0, area_right - new_tab_x), NEW_TAB_WIDTH), 1)
-    return TabBarView(scroll, tab_hits, left, right, new_tab)
+    left = right = new_tab = RECT_DEFAULT
+    x = area.x
+    if overflow and mouse_chrome:
+        left = Rect(area.x, area.y, min(TAB_SCROLL_BUTTON_WIDTH, area.width), 1)
+        x = left.x + left.width
+        tab_right = max(0, content_right - (NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH))
+    else:
+        tab_right = max(0, content_right - new_tab_width)
+    rects = list(none)
+    for index in range(scroll, count):
+        desired = widths[index]
+        width = min(desired, max(0, tab_right - x))
+        if width == 0:
+            break
+        rects[index] = Rect(x, area.y, width, 1)
+        x += width + 1
+        if width < desired:
+            break
+    if overflow and mouse_chrome:
+        right = Rect(tab_right, area.y, TAB_SCROLL_BUTTON_WIDTH, 1)
+        right_end = right.x + right.width
+        new_tab = Rect(right_end, area.y, min(max(0, content_right - right_end), NEW_TAB_WIDTH), 1)
+    elif mouse_chrome:
+        new_x = min(x, content_right)
+        new_tab = Rect(new_x, area.y, min(max(0, content_right - x), NEW_TAB_WIDTH), 1)
+    return TabBarView(scroll, rects, left, right, new_tab, cap)
 
 
 # ── src/layout.rs: BSP split tree ────────────────────────────────────

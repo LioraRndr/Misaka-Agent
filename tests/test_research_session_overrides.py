@@ -17,8 +17,6 @@ from misaka.core.platform import cards, repo, tasks
 from misaka.core.research import runs, workflow
 from misaka.core.research.wiring import research
 from misaka.core.wiring import SessionSpec, spec_overrides
-from misaka.extensions.misaka_lcm.host import config_bridge
-from misaka.extensions.misaka_lcm.host import settings as lcm_settings
 
 
 def _session(session_id="s-1", stream=None):
@@ -38,7 +36,7 @@ def _session(session_id="s-1", stream=None):
 # --- the picker's answers -------------------------------------------------------------------
 
 @pytest.mark.parametrize("answer,expected", [
-    ("Global setting (0.7)", None), ("Global setting", None), ("", None),
+    ("Global setting", None), ("", None),
     ("0.5", 0.5), ("0.85", 0.85), ("60%", 0.6), ("60", 0.6), (" 0.6 ", 0.6)])
 def test_threshold_answers(answer, expected):
     assert research._parse_threshold(answer) == expected
@@ -120,6 +118,7 @@ def _ctx(session_id):
 
 
 def test_lcm_reads_the_session_threshold_through_its_own_config_channel(monkeypatch):
+    config_bridge = pytest.importorskip("misaka.extensions.misaka_lcm.host.config_bridge")   # a plugin
     monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
     _settings({"lcm": {"context_threshold": 0.7}})
     assert config_bridge.load_config(ctx=_ctx("plain")).context_threshold == 0.7
@@ -135,6 +134,8 @@ def test_lcm_reads_the_session_threshold_through_its_own_config_channel(monkeypa
 
 
 def test_a_running_engine_recomputes_its_trigger_when_the_threshold_changes(monkeypatch):
+    config_bridge = pytest.importorskip("misaka.extensions.misaka_lcm.host.config_bridge")   # a plugin
+    lcm_settings = pytest.importorskip("misaka.extensions.misaka_lcm.host.settings")
     monkeypatch.delenv("LCM_CONTEXT_THRESHOLD", raising=False)
     _settings({"lcm": {"context_threshold": 0.7}})
     config = config_bridge.load_config(ctx=_ctx("window"))
@@ -184,7 +185,6 @@ def test_a_child_reads_what_its_parent_handed_it(monkeypatch):
 
 @pytest.fixture
 def board(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     monkeypatch.setattr(repo, "enabled", lambda *a: False)
     monkeypatch.setattr(tasks, "task_state_dir", lambda tid: str(tmp_path / "state" / tid))
     with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
@@ -262,8 +262,9 @@ async def test_the_pickers_choice_is_the_runs_and_its_window_uses_it_while_the_r
 
 
 async def test_the_defaults_leave_the_run_on_the_global_settings(chat):
-    _settings({"lcm": {"context_threshold": 0.7}})
-    await _start(chat, {research._THRESHOLD_QUESTION: "Global setting (0.7)", research._OUTPUT_QUESTION: "Model default"})
+    """The default names no value: which threshold applies globally is the context engine's own
+    setting, and the core does not read another subsystem's settings to show it."""
+    await _start(chat, {research._THRESHOLD_QUESTION: "Global setting", research._OUTPUT_QUESTION: "Model default"})
     assert runs.session_overrides(chat.run) == {}
     assert chat.seen == [(None, None)]
 

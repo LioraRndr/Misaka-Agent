@@ -64,6 +64,9 @@ class CompactionResult:
     usage: Usage | dict[str, Any] | None = None
     # None keeps Pi's prefix/tail form; even [] is a complete engine-owned view.
     contextMessages: list[AgentMessage] | None = None
+    # MISAKA fork: indexes into contextMessages of what the engine wrote itself (its summaries) rather
+    # than kept from the transcript -- shown as compaction summaries, not as turns someone took.
+    contextSummaries: list[int] | None = None
 
 
 @dataclass(slots=True)

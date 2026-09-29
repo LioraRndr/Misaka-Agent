@@ -7,43 +7,66 @@
 
 <p align="center"><em>Every conclusion faces a red team and keeps its sources beside it, says Misaka.</em></p>
 
+<p align="center">
+  <a href="LICENSE"><img alt="Licence: Apache 2.0" src="https://img.shields.io/badge/licence-Apache_2.0-blue"></a>
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB">
+  <img alt="macOS and Linux" src="https://img.shields.io/badge/runs_on-macOS_%7C_Linux-555">
+</p>
+
 <p align="center">English · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a></p>
 
-MISAKA borrows its cast from *A Certain Magical Index* ([about the name](#about-the-name)).
-**Last Order** is the coordinator you talk to. The **Sisters** are the specialists she sends
-out: a historian, an econometrician, a critic, whoever you define. Each has a serial number,
-her own skills and tools, and her own model. Like the Misaka Network, they share what they
-learn: any agent in a project can search the others' conversations.
-
-Ask a question and Last Order plans the research with you. The Sisters work on it in
-parallel, then a red team attacks the conclusion. Each serious objection becomes a new branch
-of research, with its own team and its own red team. When every branch has closed, Last Order
-drafts the report, an independent red team reviews it, and she rules on each objection. The
-report lands in your project folder next to the exact files it cites.
+You ask a question. **Last Order**, the coordinator, plans the research with you and hands the
+parts to **Sisters**, specialist agents you create, who work in parallel in your terminal.
+Before any conclusion stands, a red-team Sister challenges it and Last Order answers every
+objection. The paths the conclusion did not take become research of their own. The report
+lands in your project folder, next to every file it cites.
 
 <p align="center">
   <img src="assets/tui.png" alt="The MISAKA panel: spaces, sessions and agents beside Last Order's window" width="820">
 </p>
 
-## What makes it different
+## Quick start
 
-- **A team you design.** Each Sister has a specialty that Last Order assigns work by, her own
-  skills and MCP servers, and her own model: one can run on Claude, another on GPT.
-- **Research that argues back.** The Sister best placed to attack a conclusion reviews it, and
-  each material objection opens a child node that repeats the whole routine, down to a depth you
-  choose.
+```sh
+uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misaka-Agent.git"
+
+mkdir my-research && cd my-research
+misaka setup     # sign in, pick a model, create your first two Sisters
+misaka           # open MISAKA and type /research
+```
+
+You need macOS or Linux with [uv](https://docs.astral.sh/uv/), git,
+[ripgrep](https://github.com/BurntSushi/ripgrep), [fd](https://github.com/sharkdp/fd) and
+poppler, and access to a model provider: an API key, or a ChatGPT or GitHub Copilot subscription.
+A Claude account signs in too; Anthropic bills that use per token as extra usage. Install from
+this repository: the `misaka` package on PyPI is an unrelated project.
+
+[Getting started](docs/getting-started.md) walks you through each step and your first research
+question.
+
+## What it does
+
+- **A team you design.** Each Sister has a specialty, which Last Order assigns work by, and her
+  own skills, tools and model: one can run on Claude, another on GPT, another on a model on your
+  own machine. Claude Code and Codex can join the team too.
+- **Research that argues back.** Every conclusion is challenged by a red-team Sister, and Last
+  Order answers each objection: she revises the conclusion, rebuts the objection, or accepts it
+  as a cost, on the record.
+- **The paths not taken, explored.** Other hypotheses, methods and readings that a
+  conclusion passed over become branches of the research, each with its own team and red team,
+  to the depth you choose.
 - **Claims kept apart.** Facts, inferences, interpretations and value judgements are declared as
-  such. When the evidence can't decide, rival conclusions stay side by side; nothing is settled
-  by vote.
-- **Traceable to the file.** Each node's folder holds the plan, every Sister's work, the
-  conclusion and the critique, with a `SOURCES.md` and hard links to every file cited.
-- **You stay in charge.** A plan waits for your go-ahead in plain conversation. Talk to any branch
-  in its own tab, drop the branches you don't need, stop a run and resume it later.
-- **Your library and the web.** Index PDFs, EPUBs, DjVu, Office files and notes. Agents read by
-  outline or by page, look at page images and find the page a quotation is on. Web search works
+  such. When the evidence can't decide, rival conclusions stay side by side.
+- **Traceable to the file.** Every node keeps its plan, each Sister's work, the conclusion and
+  its critique, with a list of every file cited and a link to each one.
+- **You stay in charge.** By default every plan waits for your go-ahead, given in plain
+  conversation. Each branch has its own tab where you can talk to it. Runs can be stopped and
+  resumed.
+- **Your library and the web.** Index PDFs, EPUBs, DjVu, Word, Excel and PowerPoint files and
+  notes. Agents read by chapter or page and find the page a quotation is on. Web search works
   without a key.
-- **Memory that lasts.** Long conversations are compacted, not cut off, and the full history
-  stays searchable.
+- **Long memory.** Long conversations are summarised as they grow, and an agent can still search
+  what was said earlier, in her own conversation and in the others running in the project.
 
 ## How a research run works
 
@@ -52,189 +75,100 @@ report lands in your project folder next to the exact files it cites.
 ```mermaid
 flowchart TD
     Q(["Your question"]) --> P["Last Order drafts a plan"]
-    P -->|"you approve"| C["Sisters work their cards in parallel"]
-    C --> S{"Enough to conclude?"}
-    S -->|"not yet: another round"| C
-    S -->|"yes"| N["Last Order writes the node's conclusion"]
-    N --> R["A red-team Sister attacks it"]
-    R -->|"each material objection"| K["Child node: a fork of Last Order runs this same routine"]
-    R -->|"nothing material, or depth limit"| X["Node closes"]
-    K -.->|"closes in turn"| X
-    X -->|"every node closed"| F["Report draft → independent red team → adjudication"]
-    F --> O(["Final report, SOURCES.md, cited files"])
+    P -->|"you agree"| C["Sisters work their cards in parallel"]
+    C --> N["Last Order writes the conclusion"]
+    N --> R["A red-team Sister challenges it<br/>and digs out the paths it did not take"]
+    R --> A["Last Order answers every objection<br/>and fills every gap, revising where needed"]
+    A --> B{"Possibilities<br/>not taken?"}
+    B -->|"real alternatives"| P
+    B -->|"none left"| F["Report: a research article,<br/>reviewed before it is final"]
+    F --> O(["Final report with its sources"])
 ```
 
-1. **Plan.** Last Order works out what the question is really asking, gives each part to the
-   Sister whose specialty fits, and names a red-team Sister. The plan waits for your go-ahead:
-   talk it over with her, and she starts once you agree.
-2. **Cards.** Each assignment becomes a card. The Sisters work their cards in parallel, each in
-   her own session, and declare their findings with sources as they go.
-3. **More rounds.** If the results leave gaps, Last Order sends Sisters out again before she
-   concludes (two extra rounds at most, unless you allow more).
-4. **Red team.** Last Order writes the node's conclusion, and the red-team Sister attacks it
-   with the plan, the evidence and Last Order's own reasoning in hand.
-5. **Branches.** Each material objection becomes a child node: a fork of Last Order's
-   conversation that runs this same routine with its own Sisters and red team. The tree grows
-   one level at a time, to the depth you choose (three levels below your question if you don't).
-6. **Final report.** Once every node has closed, Last Order drafts the report, an independent
-   red team reviews the draft, and she accepts, rejects or leaves open each objection, with her
-   reasons, in the final report.
+1. **Plan.** Last Order works out what the question really asks, gives each part to the Sister
+   whose specialty fits, and names a red team. You talk the plan over; she starts when you agree.
+2. **Cards.** Each assignment becomes a card. The Sisters work their cards in parallel and
+   record each finding with its source. Last Order can send them out again before she
+   concludes.
+3. **Red team.** Last Order writes the conclusion. The red-team Sister challenges it, then reads
+   it again for the possibilities it did not take and the gaps it left. Last Order answers every
+   objection and fills every gap inside the node; a revised conclusion goes back for review.
+4. **Branches.** Only real alternatives, resting on different premises, open as new research, one
+   level at a time. Alternatives that ask the same question become one branch, no possibility is
+   opened twice, and lines that arrive at the same place can be joined.
+5. **Report.** When every branch has concluded, Last Order surveys them all and drafts the answer
+   as a research article, with notes, a bibliography and appendices that record every line of
+   inquiry, the costs the answer accepts and the paths not taken. An independent red team reviews
+   the draft, and she rules on each objection in the final report.
 
-A run is saved as it goes, and `/research resume` carries on from wherever it stopped. The
-[research guide](docs/guide/research.md) covers automatic runs, depth and parallelism, dropping
-a branch, and running from the shell.
+The [research guide](docs/guide/research.md) covers depth, parallelism, following a run and
+resuming it.
 
 ## What you get
 
 > *Every source is filed where you can check it, Misaka reports.*
 
-Everything is written into your project folder, one folder per node:
+Everything is written into your project folder:
 
-```
-your-project/
-├── PROJECT.md                  the brief Last Order keeps current
-├── nodes/<node>/
-│   ├── plan.md                 what she planned, and why these Sisters
-│   ├── cards/<card>/           each Sister's work, and the red team's critique.md
-│   ├── synthesis.md            the node's conclusion
-│   ├── deliberation.md         Last Order's reasoning, as the red team saw it
-│   ├── SOURCES.md              every file the conclusion cites…
-│   └── sources/                …hard-linked here
-└── final/<run>-final.md        the adjudicated report, beside the question, survey and draft
+```text
+my-research/
+├── final/<run>-final.md     the report, with the costs it accepts and the paths not taken
+├── final/<run>-sources/     every file the report cites, linked in place
+└── nodes/<node>/            each piece of research
+    ├── plan.md              what Last Order planned, and why these Sisters
+    ├── cards/<card>/        each Sister's work, and the red team's critique
+    ├── synthesis.md         the conclusion (synthesis-2.md once revised)
+    └── SOURCES.md           every file the conclusion cites, and which claims rest on it
 ```
 
-For each cited file, `SOURCES.md` records its checksum, where it is cited, and which of the
-Sisters' declared findings rest on it:
-
-```markdown
-- `sources/t_3f8cc0/notes.md` ← `nodes/b_ebf11de142/cards/t_3f8cc0/notes.md`
-  - sha256 46559fecec176cae…
-  - cited in `nodes/b_ebf11de142/synthesis.md`
-  - cited by [t_3f8cc0] "…" (inference)
-```
-
-Hard links take no extra space, and the originals never move. If the project is a git
-repository (`misaka init` makes it one), each closed node and the finished run are committed.
-
-## Install
-
-You need Python 3.12 or newer, git, [ripgrep](https://github.com/BurntSushi/ripgrep) and
-[fd](https://github.com/sharkdp/fd), on macOS or Linux.
-
-```sh
-uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misaka-Agent.git"
-```
-
-`pip install` and `pipx install` take the same requirement. `providers` brings every model
-SDK; if you only use one, name its extra instead (`anthropic`, `openai`, `google`, `bedrock` or
-`mistral`; OpenRouter and other OpenAI-compatible endpoints use `openai`). `pageindex` adds
-outlines for long PDFs, and `browser` the browser tools. Install from this repository: the
-`misaka` package on PyPI is an unrelated project.
-
-## Quick start
-
-> *Your first question is the coin. Flip it.* ⚡
-
-```sh
-mkdir my-research && cd my-research
-misaka setup     # sign in, pick a model, create your first Sisters, make this folder a project
-misaka           # open the panel, then type /research
-```
-
-<p align="center">
-  <img src="assets/setup.png" alt="misaka setup: environment checks, then the model and provider" width="820">
-</p>
-
-Have PDFs, EPUBs or notes already? Put them in the folder (say, in `sources/`) before running
-setup and it will index them, or run `misaka doc scan sources/` later. Bare `/research` asks
-how deep to go, how much to run at once, how many extra rounds a node may take and whether
-plans wait for you; your next message is the question. `misaka research "QUESTION"` starts a
-run from the shell instead.
-
-## Your team
-
-> *Misaka 10032, reporting for duty, says Misaka.*
-
-Last Order comes with MISAKA; the Sisters are yours to create. Two are enough to start, since
-one can red-team the other:
-
-```sh
-misaka create 10032 --desc "History and social research: archives, periodicals, oral history"
-misaka create 10043 --desc "Independent review: dissent, replication, what everyone else missed"
-```
-
-Each Sister is a folder under `~/.misaka/profiles/sisters/<id>/`:
-
-| File | What it holds |
-|---|---|
-| `DESCRIBE.md` | her specialty; Last Order reads it to decide what to send her |
-| `SOUL.md` | her personality and voice |
-| `settings.json` | her own model and MCP servers |
-| `skills/` | skills only she sees |
-
-A roster from real use, for example:
-
-| Sister | Specialty |
-|---|---|
-| 10032 | History and social research |
-| 10036 | Econometrics and causal identification |
-| 10037 | Macroeconomics and public policy |
-| 10043 | Independent review and replication |
-
-What every agent shares, how a prompt is put together, and how to talk to one Sister directly
-are in the [team guide](docs/guide/team.md).
+MISAKA commits only when you ask. If the project is a git repository, `/commit` commits it after
+you have seen the files and agreed.
 
 ## Everyday commands
 
-| To | Run |
+| To | Type |
 |---|---|
-| open the panel (plain chat when piped) | `misaka` |
-| talk to one Sister | `/sister 10032` in chat, or `misaka chat --as 10032` |
-| start a research run | `/research` in chat, or `misaka research "QUESTION"` |
+| open MISAKA | `misaka` |
+| start a research run | `/research`, then your question |
 | check, stop or resume a run | `/research status`, `/research stop`, `/research resume` |
-| see the task board | `/board`, or `misaka board` |
-| add or remove a Sister | `misaka create ID`, `misaka remove ID` |
-| index documents | `misaka doc add FILE`, `misaka doc scan FOLDER` |
-| pick a model, sign in | `/model`, `/login` |
-| set up web search | `misaka web` |
-| manage skills | `misaka skills` |
-| report a problem | `/debug` writes the screen and the conversation to a log and prints its path |
-| update, uninstall | `misaka update --apply`, `misaka uninstall` |
+| talk to one Sister | `/sister 10032` |
+| create a Sister | `misaka create 10036 --desc "Econometrics and causal inference"` |
+| index your documents | `misaka doc scan sources/` |
+| choose a model, sign in | `/model`, `/login` |
+| see every command | `/` in chat, `misaka --help` in the terminal |
+| see the panel's keys | `ctrl+b`, then `?` ([panel guide](docs/guide/panel.md)) |
+| update | `misaka update --apply` |
 
-`misaka --help` lists the rest.
-
-## Models
-
-Sign in through the browser with `/login` (Anthropic, OpenAI's ChatGPT plans, GitHub Copilot,
-xAI, OpenRouter), or give the credentials of any provider in the catalog, Google, Mistral and
-Bedrock included. A local server or any OpenAI-compatible gateway goes in
-`~/.misaka/models.json`. `/model` sets the default for every agent; a Sister can pin her own.
-
-## Your data and your bill
-
-Everything MISAKA keeps stays on your machine: settings, credentials, sessions and the board
-in `~/.misaka/`, research output in your project folder. Your prompts go to the model providers
-you set up. Searches go to the search services you configure; when none is configured, or one
-fails, they go to the free public tiers of Exa, Parallel, Firecrawl and Keenable in turn
-(`misaka web set keyless_fallback false` turns that off). MISAKA runs no telemetry of its own,
-and it checks for updates only when you run `misaka update` or `misaka setup`. Skills and MCP
-servers you add may reach the network on their own. `misaka uninstall` removes `~/.misaka` and
-never touches a project folder.
-
-A research run fans out. By default up to four nodes run at once, each with up to four Sister
-cards, within a limit set by your machine's memory, so a deep run makes many model calls in
-parallel. `research.token_cap` in `~/.misaka/settings.json` sets a token budget the board
-enforces.
+The [command reference](docs/reference/commands.md) lists them all.
 
 ## Documentation
 
 | To | Read |
 |---|---|
-| run research: approval, depth, parallelism, resuming, shell runs | [docs/guide/research.md](docs/guide/research.md) |
-| build the team: roles, profiles, prompts, models, skills | [docs/guide/team.md](docs/guide/team.md) |
-| work with documents and the web | [docs/guide/sources.md](docs/guide/sources.md) |
-| change a setting | [CONFIGURATION.md](CONFIGURATION.md) |
-| see what came from where | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
+| install and run your first question | [Getting started](docs/getting-started.md) |
+| run and steer research | [Research runs](docs/guide/research.md) |
+| build your team, add Claude Code or Codex | [The team](docs/guide/team.md) |
+| find your way around the panel: tabs, panes, keys | [The panel](docs/guide/panel.md) |
+| sign in, choose models, use a local model | [Models](docs/guide/models.md) |
+| work with your documents and the web | [Documents and the web](docs/guide/sources.md) |
+| fix a problem | [Troubleshooting](docs/guide/troubleshooting.md) |
+| look up a command or a setting | [Commands](docs/reference/commands.md), [Configuration](docs/reference/configuration.md) |
+
+[docs/README.md](docs/README.md) is the map of every page, with the words MISAKA uses.
+
+## Your data and your bill
+
+Everything MISAKA keeps stays on your machine: settings, credentials and history in
+`~/.misaka/`, research output in your project folder. Your prompts go only to the model
+providers you set up. Web searches go to the search services you set up, or to the free public
+tiers of Exa, Parallel, Firecrawl and Keenable when there are none or one fails
+(`misaka web set keyless_fallback false` turns that off). Literature scans send a question's
+search terms to OpenAlex. MISAKA sends no telemetry.
+
+A research run fans out: by default up to four branches at once, each with up to four Sisters
+working as far as your machine's memory allows, so a deep run makes many model calls. Choose a
+smaller depth for a cheaper run, and set `research.token_cap` in `~/.misaka/settings.json` for a
+hard budget across all runs.
 
 ## About the name
 
@@ -245,12 +179,12 @@ memories through the Misaka Network.
 | In the story | In MISAKA |
 |---|---|
 | **Misaka Mikoto**, the original every Sister comes from | `MISAKA.md`, the identity every agent loads before her own |
-| **The Sisters**, known by serial number: Misaka 10032, 10033, … | your specialists, each with an ID, a specialty and her own `SOUL.md` |
+| **The Sisters**, known by serial number: Misaka 10032, 10033, … | your specialists, each with a number, a specialty and her own `SOUL.md` |
 | **Last Order**, Misaka 20001, who commands the network | the coordinator you talk to |
-| **The Misaka Network**, where what one Sister learns, the others can recall | a project's shared memory, which every agent can search |
+| **The Misaka Network**, where what one Sister learns, the others can recall | the project's conversations, which every agent in it can search |
 
 The "says Misaka" lines in this README are flavour; your agents talk however their `SOUL.md`
-tells them to. If you want them to talk like the Sisters, one line in `SOUL.md` does it.
+tells them to. One line in `SOUL.md` makes them talk like the Sisters.
 
 MISAKA is an independent project. It is not affiliated with or endorsed by the author or the
 publishers of the series.
@@ -264,12 +198,11 @@ builds on [hermes-lcm](https://github.com/stephenschoettler/hermes-lcm) for long
 and [PageIndex](https://github.com/VectifyAI/PageIndex) for document structure, and ports web
 tools and skills from [Hermes Agent](https://github.com/NousResearch/hermes-agent) and Office
 support from [FrontierAgent](https://github.com/ApodexAI/FrontierAgent).
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) records what came from where, at which commit,
-and what was changed.
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) records what came from where.
 
 ## Licence
 
-[Apache License 2.0](LICENSE). Third-party components keep their own licences, all recorded in
-THIRD_PARTY_NOTICES.md.
+[Apache License 2.0](LICENSE). Third-party components keep their own licences, recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 <p align="center"><em>Misaka Network, signing off, says Misaka Misaka.</em></p>

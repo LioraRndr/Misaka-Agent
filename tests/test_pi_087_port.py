@@ -140,6 +140,25 @@ def _agent_tool(name: str) -> AgentTool:
     return AgentTool(name=name, label=name, description="d", parameters={"type": "object", "properties": {}}, execute=execute)
 
 
+def test_a_stop_verdict_takes_the_tools_off_the_wrap_up_turn():
+    """2026-09-29: the 0.87 port took ``systemPrompt`` off AgentContext, and the guards' wrap-up
+    turn still passed it -- the first stop verdict of a headless run (a loop, no progress, the wall
+    clock) raised TypeError instead of letting the model write its answer. The stripped context
+    reaches the model as every tool declared removed."""
+    from misaka.agent.guards import _SessionGuards
+    from misaka.utils.values import read_field
+
+    context = AgentContext(messages=[], tools=[_agent_tool("a")])
+    context.messages.extend(declare_tool_changes(context, [_user("q")]))
+    guards = _SessionGuards(SimpleNamespace())
+    guards._forcing = True
+    update = guards.next_turn({"context": context})
+    assert update.context.tools == [] and update.context.messages == context.messages
+    declared = declare_tool_changes(update.context, [_user("wrap up", 2)])
+    assert [m.role for m in declared] == ["system", "user"]
+    assert [read_field(tool, "name") for tool in declared[0].toolsRemoved] == ["a"]
+
+
 def test_declare_tool_changes_inserts_a_system_message_before_the_first_prompt():
     context = AgentContext(messages=[], tools=[_agent_tool("a")])
     declared = declare_tool_changes(context, [_user("q")])

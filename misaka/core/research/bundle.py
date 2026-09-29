@@ -10,9 +10,8 @@ they close over references: a conclusion that cites a card's output also gets th
 sources; a final report that cites a node's conclusion gets that node's.
 
 The bundle is derived state -- rebuilt from scratch on every call, never registered as an
-artifact, never indexed, never committed -- so ``sources/`` belongs to this module and anything
-put there by hand is gone at the next rebuild. Runs on the older project-flat layout are left
-alone.
+artifact, never indexed -- so ``sources/`` belongs to this module and anything put there by hand
+is gone at the next rebuild. Runs written before the research graph are left alone.
 """
 from __future__ import annotations
 
@@ -199,7 +198,7 @@ class _Collector:
         for row in runs.artifacts(con, run["id"]):
             index.digests.setdefault(os.path.realpath(row["path"]), row["sha256"])
         for node in runs.nodes(con, run["id"]):
-            self.nodes[os.path.realpath(os.path.join(index.workspace, _node_dir(run, node)))] = node
+            self.nodes[os.path.realpath(os.path.join(index.workspace, runs.node_dir(node["id"])))] = node
 
     def cite(self, locator, by, bases, *, origin=None):
         real, reason = self._resolve(locator, bases)
@@ -365,16 +364,11 @@ def consulted_in_session(session_file, index):
     return out
 
 
-def _node_dir(run, node):
-    return runs.node_dir(run, node["id"] if node["parent_id"] else None)
-
-
 def _node_products(con, run, node, index):
     """The node's own registered files: under its folder, not under one of its cards."""
-    folder = os.path.join(index.workspace, _node_dir(run, node))
+    folder = os.path.join(index.workspace, runs.node_dir(node["id"]))
     cards = os.path.join(folder, "cards") + os.sep
-    scope = {"branch_id": node["id"]} if node["parent_id"] else {"root_only": True}
-    return [row for row in runs.artifacts(con, run["id"], **scope)
+    return [row for row in runs.artifacts(con, run["id"], branch_id=node["id"])
             if (real := os.path.realpath(row["path"])).startswith(folder + os.sep) and not real.startswith(cards)]
 
 
@@ -499,7 +493,7 @@ def _build(collector, *, folder, manifest, sources_dir, title, products, cards=(
 
 def card_bundle(con, run, task):
     """Beside one card's outputs: the sources its declared findings rest on and what its files cite."""
-    if not runs._by_node(run) or not task["output_dir"]:
+    if not task["output_dir"]:
         return None
     index = _Index(run["workspace"])
     folder = index.dir_inside(task["output_dir"])
@@ -515,17 +509,15 @@ def card_bundle(con, run, task):
 
 def node_bundle(con, run, node):
     """Beside a node's conclusion: what it cites, closed over its cards' declared sources."""
-    if not runs._by_node(run):
-        return None
     index = _Index(run["workspace"])
-    folder = index.dir_inside(os.path.join(index.workspace, _node_dir(run, node)))
+    folder = index.dir_inside(os.path.join(index.workspace, runs.node_dir(node["id"])))
     if folder is None:                                # a node that never wrote a file has no folder to bundle in
         return None
     collector = _Collector(con, run, index)
     collector.node(node)
     return _build(collector, folder=folder, manifest=os.path.join(folder, MANIFEST),
                   sources_dir=os.path.join(folder, SOURCES_DIR),
-                  title=f"{os.path.relpath(folder, index.workspace)} — {_clip(node['trigger_text'], 100)}",
+                  title=f"{os.path.relpath(folder, index.workspace)} — {_clip(node['question'], 100)}",
                   products=_node_products(con, run, node, index),
                   cards=runs.tasks(con, run["id"], node_id=node["id"]))
 
@@ -534,14 +526,12 @@ def final_bundle(con, run):
     """Beside the run's delivered document (final.md, or partial.md when the run stopped early):
     what it cites, closed over the nodes and cards it names. Files keep the run's prefix so two
     runs of one project never overwrite each other's bundle."""
-    if not runs._by_node(run):
-        return None
     index = _Index(run["workspace"])
     folder = index.dir_inside(os.path.join(index.workspace, "final"))
     if folder is None:
         return None
     prefix = os.path.join(folder, f"{run['id']}-")
-    products = [row for row in runs.artifacts(con, run["id"], root_only=True)
+    products = [row for row in runs.artifacts(con, run["id"], run_level=True)
                 if os.path.realpath(row["path"]).startswith(prefix)]
     collector = _Collector(con, run, index)
     for kind in _RUN_SEEDS:

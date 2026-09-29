@@ -19,7 +19,9 @@ class _ExactArgumentParser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
 
 
-def _parser():
+def _parser(extension_commands=None):
+    """The product CLI's grammar. ``extension_commands`` (``misaka.extensions.commands()``) are
+    listed for help only: they are dispatched in ``main`` before this parser runs."""
     p = _ExactArgumentParser(prog="misaka")
     # The first thing anyone types after installing. Without it argparse answers the version
     # question with a usage error and exit 2, which reads as "this install is broken".
@@ -32,10 +34,7 @@ def _parser():
                     help="Delete the card and its event history")
 
     sub.add_parser("board", help="Show the task board")
-    tl = sub.add_parser("tell", help="Send a message from inside a running card")
-    tl.add_argument("message", help="Message body")
-    tl.add_argument("--to", default="last-order", help="Recipient; defaults to Last Order")
-    tl.add_argument("--summary", help="Short audit-log summary")
+    sub.add_parser("allies", help="List the enabled allies and whether each can take a card (spends no quota)")
 
     dmp = sub.add_parser("dm", help="Deliver a message to an agent's contact session and run one turn")
     dmp.add_argument("to", help="Recipient: last-order or a Sister ID")
@@ -48,13 +47,19 @@ def _parser():
     dmp.add_argument("--generation", dest="dm_gen", type=int, help=argparse.SUPPRESS)
     dmp.add_argument("--wait-message", type=int, help=argparse.SUPPRESS)
 
-    st = sub.add_parser("setup", help="First-run wizard: environment, model & provider, Sisters, documents, web search, project")
+    st = sub.add_parser("setup", help="First-run wizard: environment, model & provider, Sisters, skills, documents, web search, research, project")
     up = sub.add_parser("update", help="Report whether this install is behind the repository; --apply fast-forwards it")
     up.add_argument("--apply", action="store_true", help="Run the update instead of only reporting it")
-    un = sub.add_parser("uninstall", help=f"Remove this machine's MISAKA data ({home.display()}); project folders are never touched")
-    un.add_argument("--yes", action="store_true", help="Skip the confirmation")
+    un = sub.add_parser("uninstall", help=f"Remove the program and keep your data ({home.display()}); --full removes both. "
+                                          "Project folders are never touched")
+    scope = un.add_mutually_exclusive_group()
+    scope.add_argument("--full", dest="mode", action="store_const", const="full",
+                       help="Also remove the data, and MISAKA's derived files and links outside it")
+    scope.add_argument("--data", dest="mode", action="store_const", const="data",
+                       help="Remove the data only; the program stays installed")
+    un.add_argument("--yes", action="store_true", help="Skip the questions (and the backup offer)")
     un.add_argument("--dry-run", action="store_true", help="List what would be removed and stop")
-    st.add_argument("section", nargs="?", help="Run one section only: environment | model | sisters | documents | web | project")
+    st.add_argument("section", nargs="?", help="Run one section only: environment | model | sisters | skills | documents | web | research | project")
 
     sub.add_parser("init", help="Make this folder a MISAKA project (git repo + PROJECT.md + cards/) and initialize the database")
 
@@ -83,6 +88,10 @@ def _parser():
                     help="Resume the card's existing session")
     cs.add_argument("--say", metavar="TEXT",
                     help="With --resume: deliver this message as the first turn")
+    ac = sub.add_parser("ally-card", help="Internal: run an ally's card over ACP inside a pane")
+    ac.add_argument("task_id")
+    ac.add_argument("--say", metavar="TEXT", help="Continue the card with this message as the first turn")
+    sub.add_parser("ally-bridge", help="Internal: the MCP server lending an ally its card's tools")
 
     sub.add_parser("panel", help="Open the Misaka Network panel (default in a terminal)")
     ch = sub.add_parser("chat", help="Chat with Last Order, or with a Sister via --as")
@@ -109,7 +118,11 @@ def _parser():
     rs.add_argument("--sister-parallel", type=int,
                     help="Maximum active Sister cards per LO node (default: 4); saved with the run, subject to global admission limits")
     rs.add_argument("--followups", type=int,
-                    help="After its first cards are back, how many more times a node may send Sisters out before concluding (default: 2, 0-6)")
+                    help="After its first cards are back, how many more times a node may send Sisters out, over its whole life (default: 2, 0-6)")
+    rs.add_argument("--revisions", type=int,
+                    help="How many times a node may revise its conclusion after the red team's review (default: 2, 0-6)")
+    rs.add_argument("--max-nodes", type=int,
+                    help="How many nodes the research graph may hold, the root included (default: 30)")
     rs.add_argument("--runner-key", help=argparse.SUPPRESS)
     rs.add_argument("--node", nargs=2, metavar=("RUN_ID", "NODE_ID"),
                     help="(internal) run one research node in this process")
@@ -154,10 +167,11 @@ def _parser():
     # Registered so `misaka --help` lists it, and so `misaka auth --help` is not an
     # "invalid choice" -- but it is never dispatched: `main` short-circuits `argv[0] ==
     # "auth"` before argparse runs, because auth has its own Pi-compatible grammar.
-    lc = sub.add_parser("lcm", help="Inspect LCM and run explicit history/backfill operators")
-    lc.add_argument("lcm_args", nargs=argparse.REMAINDER)
     ac = sub.add_parser("auth", help="Check or print provider credentials")
     ac.add_argument("auth_args", nargs=argparse.REMAINDER)
+    for name, command in (extension_commands or {}).items():
+        sub.add_parser(name, help=(command.__doc__ or "").strip().split("\n")[0]).add_argument(
+            "args", nargs=argparse.REMAINDER)
 
     wb = sub.add_parser("web", help=f"Show or change web-search configuration ({home.display(home.path('settings'))}, keys in {home.display(home.path('env'))})")
     wb.add_argument("op", nargs="?", default=None, choices=["configure", "status", "set", "unset", "providers", "setup", "enable", "disable", "accounts", "login", "logout", "browser-status", "browser-providers", "browser-setup", "browser-install", "browser-connect", "browser-disconnect", "gateway-login", "gateway-logout", "gateway-status"],
@@ -189,7 +203,8 @@ def _parser():
     cr.add_argument("sid", nargs="?", help="Sister ID, such as 10033")
     cr.add_argument("--desc", help="Specialty for Last Order's task routing, written to DESCRIBE.md")
     cr.add_argument("--model", help="Pinned model as provider/model, such as anthropic/claude-opus-5")
-    rm = sub.add_parser("remove", help="Remove a Sister along with her sessions and workspace")
+    cr.add_argument("--thinking", help="Her default thinking level: off, minimal, low, medium, high, xhigh or max")
+    rm = sub.add_parser("remove", help="Remove a Sister's profile; her cards, conversations and workspaces are kept")
     rm.add_argument("sid", help="Sister ID")
     rm.add_argument("--yes", action="store_true", help="Skip confirmation")
     return p
@@ -240,6 +255,28 @@ def _cmd_net_daemon(args):
 def _cmd_card_shell(args):
     from misaka.cli import card_shell
     card_shell.launch(args.task_id, resume_only=args.resume, say=args.say)
+
+
+def _cmd_ally_card(args):
+    from misaka.core.network.ally import card
+    card.launch(args.task_id, say=args.say)
+
+
+def _cmd_ally_bridge(args):
+    from misaka.core.network.ally import bridge
+    bridge.main()
+
+
+def _cmd_allies(args):
+    from misaka.core.network.ally import presets
+    enabled = presets.configured()
+    if not enabled:
+        print(f"No ally is enabled. Add one to `allies` in settings.json, e.g. "
+              f"{{\"{'\": {}, \"'.join(presets.PRESETS)}\": {{}}}}.")
+        return 0
+    for name, ally in enabled.items():
+        print(f"{name}  {presets.check(ally)}\n    {' '.join(ally.command)}")
+    return 0
 
 
 def _cmd_net(args):
@@ -293,19 +330,12 @@ def _cmd_init(args):
 
 def _cmd_create(args):
     from misaka.core.network import roster
-    sys.exit(roster.cli_create(args.sid, desc=args.desc, model=args.model))
+    sys.exit(roster.cli_create(args.sid, desc=args.desc, model=args.model, thinking=args.thinking))
 
 
 def _cmd_remove(args):
     from misaka.core.network import roster
     sys.exit(roster.cli_remove(args.sid, yes=args.yes))
-
-
-def _cmd_tell(args):
-    from misaka.core.network.ally import tell as ally_tell
-    ok, msg = ally_tell.tell(args.message, to_addr=args.to, summary=args.summary)
-    print(msg)
-    sys.exit(0 if ok else 1)
 
 
 def _cmd_dm(args):
@@ -339,9 +369,8 @@ def _cmd_research(args):
         sys.exit(research_node.main(*args.node, runner_key=args.runner_key))
     cfg = current_config()
     # Preflight before anything is written: a run with no Sister to assign to dies deep
-    # inside the workflow (planner._roster), after the workspace has been git-initialised
-    # and committed into, and the message that surfaces there names neither the roster nor
-    # the command that fills it.
+    # inside the workflow (planner._roster), after the project skeleton has been written, and
+    # the message that surfaces there names neither the roster nor the command that fills it.
     roster = {sister["id"] for sister in planner.sister_catalog(cfg.get("profiles_root"))}
     empty_roster = ("The Sister roster is empty; research tasks cannot be assigned.\n"
                     "Create at least one Sister first, for example: misaka create 10032")
@@ -370,14 +399,14 @@ def _cmd_research(args):
         if not args.goal:
             sys.exit("A new research run requires a question; use --resume RUN_ID to continue one.")
         try:
+            chosen = {"parallel": args.parallel, "sister_parallel": args.sister_parallel, "max_followups": args.followups,
+                      "max_revisions": args.revisions, "max_nodes": args.max_nodes}
             limits = runs.normalize_limits({"max_depth": args.depth,
-                                            **({"parallel": args.parallel} if args.parallel is not None else {}),
-                                            **({"sister_parallel": args.sister_parallel} if args.sister_parallel is not None else {}),
-                                            **({"max_followups": args.followups} if args.followups is not None else {})})
+                                            **{key: value for key, value in chosen.items() if value is not None}})
         except ValueError as error:
             sys.exit(str(error))
         from misaka.core.platform import cards as card_files
-        card_files.init_project(os.getcwd(), draft_brief=False)
+        card_files.init_project(os.getcwd(), draft_brief=False, git=False)
         run = runs.create(con, workspace=os.getcwd(), question=args.goal,
                           limits=limits,
                           token_start=budget.spent(con))
@@ -688,7 +717,7 @@ def _cmd_update(args):
 
 def _cmd_uninstall(args):
     from misaka.cli import uninstall
-    sys.exit(uninstall.run(assume_yes=args.yes, dry_run=args.dry_run))
+    sys.exit(uninstall.run(mode=args.mode, assume_yes=args.yes, dry_run=args.dry_run))
 
 
 COMMANDS = {
@@ -699,11 +728,13 @@ COMMANDS = {
     "panel": _cmd_panel,
     "net-daemon": _cmd_net_daemon,
     "card-shell": _cmd_card_shell,
+    "ally-card": _cmd_ally_card,
+    "ally-bridge": _cmd_ally_bridge,
+    "allies": _cmd_allies,
     "net": _cmd_net,
     "init": _cmd_init,
     "create": _cmd_create,
     "remove": _cmd_remove,
-    "tell": _cmd_tell,
     "dm": _cmd_dm,
     "task": _cmd_task,
     "board": _cmd_board,
@@ -727,11 +758,13 @@ def main(argv=None):
     home.ensure()
     configure_logging()      # warnings go to the log file, never to a TUI's screen (B6)
     env_file.load()          # the home's .env: environment for code that is not MISAKA
-    if argv[:1] == ["lcm"]:
-        # Read-only/dry-run operators must not bootstrap user directories or open
-        # a board/engine before their original parser decides what to do.
-        from misaka.extensions.misaka_lcm.host.operators import main as lcm_main
-        return lcm_main(argv[1:])
+    if argv and argv[0] not in COMMANDS and argv[0] != "auth" and not argv[0].startswith("-"):
+        # A command a bundled extension offers runs here, before the project layout exists: it
+        # decides for itself what it creates (a dry run or read-only operator creates nothing).
+        from misaka import extensions
+        extension_command = extensions.commands().get(argv[0])
+        if extension_command is not None:
+            return extension_command(argv[1:])
     # Attaching/reading uses the existing owner's configuration. Other commands,
     # including first-run help/version, retain the normal CLI bootstrap contract.
     if not (argv[:1] == ["chat"] and ({"--read-only", "--attach"} & set(argv))):
@@ -748,10 +781,10 @@ def main(argv=None):
                 if setup.run() != 0:
                     return 1
             from misaka.ui.panel import ghostty
-            if not os.path.isfile(ghostty.library_path()):
-                # The panel's terminal emulator is a prebuilt library; a platform without it
-                # (Linux, until libghostty-vt.so is built) still gets the plain chat.
-                print("The panel's terminal library (libghostty-vt) is not available on this install; "
+            if ghostty.unavailable():
+                # The panel's terminal emulator is a prebuilt library; a platform without a
+                # build it can load (a musl system, an unusual architecture) still gets plain chat.
+                print("The panel's terminal library (libghostty-vt) is not available on this system; "
                       "opening plain chat. See `misaka setup environment`.", file=sys.stderr)
                 interactive = False
         argv = ["panel"] if interactive else ["chat"]
@@ -761,6 +794,9 @@ def main(argv=None):
         from misaka.cli.auth import run_auth_command
 
         return run_auth_command(argv[1:])
+    if argv[0] in ("-h", "--help"):
+        from misaka import extensions
+        _parser(extensions.commands()).parse_args(argv)
     args = _parser().parse_args(argv)
     from misaka.core.skills.layers import SkillsConfigError
 

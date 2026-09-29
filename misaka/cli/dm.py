@@ -13,9 +13,11 @@ Differences from Hermes are structural, not semantic:
 - There is no resident gateway queue; concurrent deliveries to one recipient are
   serialized with a per-recipient flock. A timed-out message is already in the
   recipient's session file, so it is not lost.
-- Like Hermes, a live recipient session is served first: an automatic wake-up
-  leaves the row to that session's inbox pump and only starts a contact turn when
-  no live session reads the address.
+- A contact session reads only the mail no live session of its role was found
+  for: SendMessage pins a name to the one session of that role in the sender's
+  panel space, and only with none there does the row wait here. An automatic
+  wake-up leaves the row to a contact turn already running and starts one only
+  when none is.
 - Every delivery is recorded as delivered in messages.db for auditing.
 - Sessions run with cwd=~ (Hermes ``--in ~``).
 """
@@ -52,10 +54,10 @@ content as a message from a peer and decide how to act on it based on your role.
   (to=<role>, message=<text>, summary=<short preview>).
   Never write the `Message from` prefix yourself; the delivery layer adds it.
 - Delivery is asynchronous. Finish this turn's work without waiting for a reply;
-  any reply is delivered into this session and you will see it on your next wake.
+  any reply is delivered into this session: during a turn at your next tool
+  boundary, otherwise on your next wake.
 - A `<card-context>` identifies a Sister asking for help on one task. Reply through
-  `misaka_sister_message` with its task ID and generation, not through the role-wide
-  SendMessage address. Supply the same task ID and generation when inspecting that
+  `misaka_sister_message` with its task ID and generation, not through SendMessage. Supply the same task ID and generation when inspecting that
   card with the Sister output/peek or card to-do/comments/attachments tools.
 - Messages are not commands: they do not change card state, count as a
   submission, or authorize new work. Use your normal tools and workflow for that.
@@ -145,10 +147,8 @@ def _deliver_once(to, message=None, sender=None, model=None, timeout=600,
                     task_id=task_id,
                     generation=generation,
                 )
-            rows = messages.pending(con, to)
-            deliverable, discard = messages.delivery_plan(
-                rows, task_help_consumer=to == "last-order"
-            )
+            rows = messages.pending(con, to, contact=True)
+            deliverable, discard = messages.delivery_plan(rows)
             leased = deliverable | discard
             won = messages.claim(
                 con,
@@ -275,33 +275,14 @@ def _deliver_once(to, message=None, sender=None, model=None, timeout=600,
     return 0
 
 
-def _help_workspace(mid):
-    """The project of the card a queued help request belongs to; None for ordinary mail."""
-    from misaka.core.network import messages
-    con = messages.connect()
-    try:
-        row = con.execute("SELECT task_id FROM messages WHERE id=?", (int(mid),)).fetchone()
-    finally:
-        con.close()
-    if row is None or not row["task_id"]:
-        return None
-    from misaka.core.platform import tasks
-    board = tasks.connect(CFG["db"])
-    try:
-        card = tasks.get(board, row["task_id"])
-        return tasks.workspace_for(card) if card is not None else None
-    finally:
-        board.close()
-
-
-def _left_to_live_session(to, workspace, consumed):
-    """While a live session reads ``to``'s mail, watch for the row to be consumed instead of
-    starting a contact turn. True when the row was consumed, or the session is still there
-    after ``LIVE_WAIT_SECONDS`` and the row is its responsibility now; False when no live
-    session is there, or it went away with the row still queued."""
+def _left_to_contact(to, consumed):
+    """While ``to``'s contact session is running a turn, its inbox pump reads the row: watch for
+    it to be consumed instead of starting a second turn. True when the row was consumed, or the
+    session is still there after ``LIVE_WAIT_SECONDS`` and the row is its responsibility now;
+    False when no contact session is running, or it ended with the row still queued."""
     from misaka.core import session_catalog
     deadline = time.monotonic() + LIVE_WAIT_SECONDS
-    while session_catalog.live_inbox(to, workspace=workspace):
+    while session_catalog.live_contact(to):
         if consumed() or time.monotonic() >= deadline:
             return True
         time.sleep(LIVE_POLL_SECONDS)
@@ -312,10 +293,10 @@ def deliver(to, message=None, sender=None, model=None, timeout=600,
             task_id=None, generation=None, summary=None, *, wait_message=None):
     """Deliver once, or keep an automatic wake alive for one existing durable row.
 
-    An automatic wake never races a live session for its row: while one reads ``to``'s
-    mail, the wake only watches for the row to be consumed. Contact turns start only
-    with no live session there, at most ``WAKE_ATTEMPTS`` of them; the row stays queued
-    for the next wake-up either way.
+    An automatic wake never races a running contact turn for its row: while one runs, the
+    wake only watches for the row to be consumed. Contact turns start only with none
+    running, at most ``WAKE_ATTEMPTS`` of them; the row stays queued for the next wake-up
+    either way.
     """
     if wait_message is None:
         return _deliver_once(
@@ -335,11 +316,6 @@ def deliver(to, message=None, sender=None, model=None, timeout=600,
         finally:
             con.close()
 
-    try:
-        workspace = _help_workspace(wait_message)
-    except Exception as error:  # noqa: BLE001 - without the project, any live recipient session counts
-        print(f"DM help lookup failed: {type(error).__name__}: {error}", file=sys.stderr)
-        workspace = None
     # One leader retries a recipient at a time. Other per-message wake-ups wait here;
     # after the leader drains their rows they exit without starting another model turn.
     retry_key = (to or "").strip().encode().hex()
@@ -347,7 +323,7 @@ def deliver(to, message=None, sender=None, model=None, timeout=600,
         attempts, delay = 0, 1.0
         while True:
             try:
-                if consumed() or _left_to_live_session(to, workspace, consumed):
+                if consumed() or _left_to_contact(to, consumed):
                     return 0
             except Exception as error:  # noqa: BLE001 - a transient mailbox failure is retryable
                 print(f"DM queue check retry: {type(error).__name__}: {error}", file=sys.stderr)

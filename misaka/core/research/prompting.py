@@ -16,6 +16,13 @@ question explicit. Give every major or minor question included in the plan a tar
 her expertise, with clear evidence needs, deliverables and acceptance criteria, rather than a generic request to
 collect material.
 
+Attend to what you do not know as closely as to what you know. A question, a plan and a conclusion each stand on
+presuppositions -- concepts and categories taken as given, units of analysis, time frame and scope, a standpoint, what
+counts as evidence and what authorises it, value premises, received views -- and every choice among them gains something and
+gives something up, making some things visible and askable and others not. Know which presuppositions carry your line
+and what each gains, gives up and trades; where the answer depends on one, whether it holds is a question for
+research -- pursued alongside the rest of the work, not a gate every card waits on -- not ground to stand on.
+
 The same Sister may take multiple distinct tasks, each in its own independent session. Independent tasks run
 concurrently and dependent tasks after their prerequisites; the concurrency limit only paces dispatch and never
 caps how many cards a plan holds.
@@ -25,14 +32,21 @@ the agreed research scope and execution limits.
 Still produce internal node conclusions, syntheses and report drafts when the current phase requires them for further
 research and independent review. Clearly identify these as provisional working products, not answers delivered to
 the user before the research is complete.
+
+The workflow starts every phase with its own instruction and tools. Between phases -- a Sister's message or a
+notification wakes you, or a progress line says what comes next -- answer or relay the message and end the turn: do
+not write a conclusion, request a review or create cards of your own, because the next phase's instruction is already
+on its way and does exactly that.
 """
 
 
 def system_context(session, names, system_prompt, *, sister_id=None):
     """Only the Research delta; the ordinary loader owns identity and duties.
 
-    SYSTEM.md can replace the default tool guidance, so preserve required current-tool
-    and navigation rules without rebuilding the role base or rewriting custom text.
+    SYSTEM.md replaces the default prompt, and with it every tool's guidelines. Research restores
+    them for the tools in play -- its own and those an extension brings, each tool's rules
+    travelling with it -- without rebuilding the role base or rewriting custom text. Under the
+    default prompt they are all there already, and nothing is repeated.
     """
     if sister_id is None:
         sections = [RESEARCH_LO_ORCHESTRATION, COORDINATOR_APPROVAL, COORDINATOR_RECEIPTS]
@@ -41,8 +55,6 @@ def system_context(session, names, system_prompt, *, sister_id=None):
         sections = [RESEARCH_SISTER_DISCIPLINE]
     sections.append(CURRENT_TOOLS_GUIDELINE)
     for name in dict.fromkeys(names):
-        if name not in {"misaka_research_view", "coverage_scan"}:
-            continue
         definition = session.getToolDefinition(name)
         sections.extend(getattr(definition, "promptGuidelines", ()) or ())
     # Exact owned strings only: no fuzzy deletion or rewriting of custom text.

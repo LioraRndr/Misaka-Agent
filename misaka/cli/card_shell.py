@@ -15,28 +15,6 @@ from misaka.core.platform import tasks as db
 ACTIVE_STATUSES = ("running", "review")
 
 
-def continue_flags(session_file, session_dir):
-    """Return engine flags that resume the card's session, or None if there is none.
-
-    The newest file in ``session_dir`` wins: after an in-pane fork the path recorded on
-    the card is the pre-fork line (still on disk) and the branched file is newer in the
-    same dir. The recorded path is the fallback for cards whose dir is empty."""
-    try:
-        files = [os.path.join(session_dir, n) for n in os.listdir(session_dir)
-                 if n.endswith(".jsonl")]
-    except OSError:
-        files = []
-    try:
-        newest = max(files, key=os.path.getmtime) if files else None
-    except OSError:
-        newest = None
-    if newest:
-        return ["--session", newest]
-    if session_file and os.path.isfile(session_file):
-        return ["--session", session_file]
-    return None
-
-
 def contract_flags(text):
     """Return engine flags that deliver ``text`` as the session's first message.
 
@@ -92,7 +70,7 @@ def launch(task_id, resume_only=False, say=None):
     from misaka.config import sessions as session_roots
 
     session_dir = session_roots.card_session_dir(task)
-    cont = continue_flags(task["session_file"], session_dir)
+    cont = worker.continue_flags(task["session_file"], session_dir)
     if resume_only:
         # Open the existing session only; never resend the contract, which would rerun the card.
         if not cont:

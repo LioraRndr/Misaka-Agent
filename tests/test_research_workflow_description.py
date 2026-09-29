@@ -14,7 +14,6 @@ from misaka.core.session_control import SessionControl
 
 @pytest.fixture
 def research(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *args: None)
     con = tasks.connect(str(tmp_path / "board.db"))
     run = runs.create(con, workspace=str(tmp_path), question="Description fixture")
     root = runs.nodes(con, run["id"])[0]
@@ -109,7 +108,7 @@ async def test_headless_root_and_branch_share_live_description(research, monkeyp
 
     con, run, root, session, control, _ = research
     previous = control.describe
-    branch = runs.create_node(con, run["id"], trigger="Child", parent_id=root["id"], depth=1) if child else root
+    branch = runs.create_node(con, run["id"], question="Child", parents=[root["id"]]) if child else root
     assert runs.acquire_driver(con, run["id"], "driver")
     runs.prepare_runner(con, "research_branches", branch["id"])
     run, branch = runs.get(con, run["id"]), runs.node(con, branch["id"])
@@ -220,6 +219,7 @@ async def test_root_description_outlives_closed_node_through_report_and_resume(r
         aid, path = runs.write_text(con, run["id"], "final", "Final", runs.run_path(run, "final.md"), "Fixture")
         return {"artifact": aid, "path": path}
     monkeypatch.setattr(report, "prepare", prepare)
+    monkeypatch.setattr(report, "review_body", lambda *a: "## deliverable\n`critique.md`\n")
     monkeypatch.setattr(workflow, "_submit_tasks", AsyncMock(return_value={"@final-review": "review"}))
     monkeypatch.setattr(workflow, "_drive_tasks", review)
     monkeypatch.setattr(report, "review_receipt", lambda *args: {})

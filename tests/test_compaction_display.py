@@ -18,7 +18,7 @@ SUMMARY = "[Session Arc Summary (d1, node 42)]\nT0 checked 130 titles.\n[Expand 
 def _entry(context_messages, scaffolds, **extra):
     return {"type": "compaction", "id": "c1", "summary": "LCM compressed", "tokensBefore": 120000,
             "firstKeptEntryId": "m9", "timestamp": 1700000000000,
-            "contextMessages": context_messages, "details": {"lcm": {"scaffolds": scaffolds}}, **extra}
+            "contextMessages": context_messages, "contextSummaries": scaffolds, **extra}
 
 
 KEPT = {"role": "assistant", "content": [{"type": "text", "text": "kept turn"}], "stopReason": "stop",
@@ -39,6 +39,21 @@ def test_a_fenced_summary_is_shown_without_its_fence():
     entry = _entry([{"role": "user", "content": fenced, "timestamp": 1}], scaffolds=[0])
     shown = session_manager.session_entry_to_display_messages(entry)
     assert shown[0].summary == SUMMARY
+
+
+def test_the_engine_names_its_summaries_on_the_entry_and_the_core_reads_nothing_else():
+    """2026-09-29: the core read the LCM plugin's own ``details`` to find its summaries. An engine
+    now names them in ``contextSummaries`` when it writes the entry; its details stay its own."""
+    manager = session_manager.SessionManager.inMemory("/fixture")
+    manager.appendMessage({"role": "user", "content": "start", "timestamp": 1})
+    entry_id = manager.appendCompaction("engine", "", 10, {"engine": {"scaffolds": [0]}},
+                                        contextMessages=[{"role": "user", "content": SUMMARY, "timestamp": 1}, KEPT],
+                                        contextSummaries=[0])
+    written = manager.getEntry(entry_id)
+    assert written["contextSummaries"] == [0]
+    assert session_manager._message_role(session_manager.session_entry_to_display_messages(written)[0]) == "compactionSummary"
+    unnamed = {**written, "contextSummaries": None}
+    assert session_manager._message_role(session_manager.session_entry_to_display_messages(unnamed)[0]) == "user"
 
 
 def test_the_models_view_is_unchanged():

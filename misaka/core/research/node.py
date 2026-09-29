@@ -1,8 +1,8 @@
 """Research node and Sister card processes.
 
-Every fork LO is a formal child node (``misaka research --node RUN NODE``), with its
-own session, depth and Sisters. In the panel the node process is a pane of its own: a
-fork Last Order runs as an interactive window in a new tab beside her parent, the
+Every node below the root is a process of its own (``misaka research --node RUN NODE``),
+with its own session, depth and Sisters. In the panel the node process is a pane of its own:
+its Last Order runs as an interactive window in a new tab beside her parent's, the
 routine driven from inside that window (``wiring.node.NodePart``), her Sisters gridded
 into her tab. Without a panel (a command-line run) nodes run headless in the background
 and Sessions opens their conversations read-only or attached. Exit codes of a headless
@@ -151,6 +151,14 @@ class PaneRunner:
                         self._said[tid] = str(error)
                         print(f"card {tid}: {error}", flush=True)
 
+    async def continue_card(self, task_id, say, *, expected_generation):
+        """Continue a settled card in her own conversation, in this tab: the daemon request
+        ``misaka_sister_message`` makes (a new generation under the daemon's claim)."""
+        from misaka.ui.panel import client as net
+        await asyncio.to_thread(net.request, "pane.continue_card", {
+            "task_id": task_id, "say": say, "expected_generation": expected_generation,
+            "place": {"grid": self.home}})
+
     async def stop(self, task_id, *, expected_generation=None, expected_claim_lock=None, research_owner=None, **_kwargs):
         from misaka.ui.panel import client as net
         params = {"task_id": task_id}
@@ -247,6 +255,15 @@ class HeadlessRunner:
                 [*CARD_ARGV, task_id], cwd=None, new_session=True)
             taken[row["assignee"]] = taken.get(row["assignee"], 0) + 1
 
+    async def continue_card(self, task_id, say, *, expected_generation):
+        """Continue a settled card in a child of its own: ``dispatch.run_task(say=...)`` claims it
+        as a new generation (``claim_resume``) and the turn goes on in her conversation. A child
+        that cannot claim (the card moved on, no admission slot) exits and the caller asks again."""
+        self._reap()
+        if task_id in self.flying:
+            return
+        self.flying[task_id] = self._processes.spawn([*CARD_ARGV, task_id, "--say", say], cwd=None, new_session=True)
+
     async def stop(self, task_id, **_kwargs):
         """A halt: this card's process and everything it started go now. The claim it dies
         holding is left to ``dispatch.reconcile`` -- the one path that knows how to settle or
@@ -311,8 +328,7 @@ def _run(label, routine, *, row_id, runner_key):
     def progress(event):
         from misaka.core.platform import notifications
         branch = runs.node(con, row_id)
-        payload = {**event, "node_id": branch["id"], "depth": branch["depth"],
-                   "issue_id": None}
+        payload = {**event, "node_id": branch["id"], "depth": branch["depth"]}
         notifications.publish(con, "research", branch["run_id"], "progress", payload)
         print(event["message"], flush=True)
         for item in event.get("tasks") or []:
@@ -360,12 +376,12 @@ def _run(label, routine, *, row_id, runner_key):
     return 3 if result in ("stopped", "budget") else 0
 
 
-def main_card(task_id):
-    """Run one ready card in this process: the entry point ``HeadlessRunner`` spawns. Claim,
-    admission, budget and settle are ``dispatch.run_task``'s and are not repeated here, so a
-    card started this way is the same card the daemon or a pane would have run. Exit 0 when
-    this process ran the card, 1 when it did not (no such card, someone else holds the claim,
-    the budget stopped, the assignee has no profile)."""
+def main_card(task_id, *, say=None):
+    """Run one ready card in this process, or with ``say`` continue a settled one: the entry point
+    ``HeadlessRunner`` spawns. Claim, admission, budget and settle are ``dispatch.run_task``'s and
+    are not repeated here, so a card started this way is the same card the daemon or a pane would
+    have run. Exit 0 when this process ran the card, 1 when it did not (no such card, someone else
+    holds the claim, the budget stopped, the assignee has no profile)."""
     from misaka.core.network import dispatch
     con = task_store.connect(os.path.expanduser(CFG["db"]))
     try:
@@ -373,7 +389,7 @@ def main_card(task_id):
         if row is None:
             print(f"card {task_id}: not on the board", flush=True)
             return 1
-        return 0 if dispatch.run_task(con, row, current_config()) else 1
+        return 0 if dispatch.run_task(con, row, current_config(), say=say) else 1
     finally:
         con.close()
 

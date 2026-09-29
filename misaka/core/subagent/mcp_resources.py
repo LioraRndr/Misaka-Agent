@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from misaka.core.extensions.types import ToolDefinition
-from misaka.core.mcp import CALL_TIMEOUT, MAX_LIST_PAGES
+from misaka.core.mcp import MAX_LIST_PAGES, call_timeout
 from misaka.core.platform.prompt_guard import untrusted
 
 
@@ -98,7 +98,7 @@ def resource_tools(clients: dict[str, Any]) -> list[ToolDefinition]:
                 return []
             result, cursor = [], None
             for _ in range(MAX_LIST_PAGES):
-                page = await client._request('resources/list', {'cursor': cursor} if cursor else {}, timeout=CALL_TIMEOUT, signal=signal)
+                page = await client._request('resources/list', {'cursor': cursor} if cursor else {}, timeout=call_timeout(), signal=signal)
                 result.extend({**item, 'server': client.name} for item in page.get('resources', []))
                 cursor = page.get('nextCursor')
                 if not cursor:
@@ -116,7 +116,7 @@ def resource_tools(clients: dict[str, Any]) -> list[ToolDefinition]:
         await client.ensure_started()
         if "resources" not in client.capabilities:
             raise ValueError(f"Server {client.name!r} does not support resources")
-        result = await client._request('resources/read', {'uri': params.uri}, timeout=CALL_TIMEOUT, signal=signal)
+        result = await client._request('resources/read', {'uri': params.uri}, timeout=call_timeout(), signal=signal)
         contents = []
         for item in result.get("contents", []):
             value = {key: item[key] for key in ("uri", "mimeType", "text") if key in item}

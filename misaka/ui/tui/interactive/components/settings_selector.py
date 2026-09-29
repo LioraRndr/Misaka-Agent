@@ -451,7 +451,8 @@ class SettingsSelectorComponent(Container):
             SettingItem(
                 id="thinking",
                 label="Thinking level",
-                description="Reasoning depth for thinking-capable models",
+                # MISAKA fork: in a Last Order or Sister window the default saved here is hers alone.
+                description="Default reasoning depth; in a Last Order or Sister window, hers alone",
                 currentValue=config.thinkingLevel,
                 submenu=lambda current_value, done: SelectSubmenu(
                     "Thinking Level",
@@ -469,7 +470,8 @@ class SettingsSelectorComponent(Container):
                 id="model-thinking",
                 label="Default thinking level per model",
                 description=(
-                    "Override the default thinking level for specific models. "
+                    "Override the default thinking level for specific models "
+                    "(an agent with her own default keeps it). "
                     f"{cycle_thinking_key} cycles in-session."
                 ),
                 currentValue=_model_thinking_summary(config.modelThinkingLevels),

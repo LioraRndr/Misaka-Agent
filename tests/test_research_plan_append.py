@@ -31,7 +31,6 @@ def validate(value):
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a, **k: None)
     con = tasks.connect(str(tmp_path / "board.db"))
     run = runs.create(con, workspace=str(tmp_path), question="fixture")
     root = runs.nodes(con, run["id"])[0]
@@ -76,7 +75,7 @@ async def test_append_during_the_wait_folds_onto_the_recorded_plan(state):
     assert "append" not in recorded["payload"]
     assert recorded["tool_call_id"] == "c2"
     assert runs.action(con, run["id"], root["id"], "start") is None    # a changed plan needs a fresh go-ahead
-    assert "2 task(s)" in result["content"][0]["text"]
+    assert "Recorded 2 card(s) and 0 decision(s)." in result["content"][0]["text"]
 
 
 async def test_append_is_validated_as_one_plan_and_a_bad_half_changes_nothing(state):
@@ -111,6 +110,44 @@ async def test_phase_tool_appends_within_the_planning_turn(state):
     assert runs.action(con, run["id"], root["id"], "plan")["payload"]["tasks"][0]["local_id"] == "a"
 
 
+async def test_a_refused_call_says_that_nothing_was_recorded(state):
+    """2026-09-27: after a refusal Last Order took her plan as accepted and sent an empty append."""
+    con, run, root = state
+    session_file = str(Path(run["workspace"]) / "session.jsonl")
+    tool = commands.tool(con, run, root, key="plan", name="misaka_research_assign", description="d",
+                         model=commands.Plan, validate=validate, session_dir=run["workspace"],
+                         session_file=session_file, merge=commands.merge_plan)
+    with pytest.raises(ValueError, match="Nothing from this call was recorded; send the corrected call in full"):
+        await tool.execute("c1", {**first_plan(), "tasks": [task("a", deliverable="备忘录：说明")]},
+                           None, None, ctx(session_file))
+    assert runs.action(con, run["id"], root["id"], "plan") is None
+
+
+def test_a_follow_up_round_keeps_the_first_plans_red_team():
+    """2026-09-27: a follow-up plan without `red_team` was refused, though the red team is always
+    the one the node's first plan named."""
+    follow = {"status": "ready", "plan_markdown": "gap", "tasks": [task("b")]}
+    with pytest.raises(ValueError, match="red team"):
+        planner.validate_plan(follow, ROSTER)
+    assert planner.validate_plan(follow, ROSTER, red_team_required=False)["red_team"] is None
+    named = {**follow, "red_team": {"assignee": "10043", "reason": "r"}}
+    assert planner.validate_plan(named, ROSTER, red_team_required=False)["red_team"] is None
+    assert "leave\n`red_team` out" in planner.SYNTHESIS_FOLLOWUP and "no conclusion yet" in planner.SYNTHESIS_FOLLOWUP
+
+
+async def test_an_accepted_follow_up_is_told_not_to_write_the_conclusion(state):
+    con, run, root = state
+    session_file = str(Path(run["workspace"]) / "session.jsonl")
+    tool = commands.tool(con, run, root, key="plan:2", name="misaka_research_assign", description="d",
+                         model=commands.Plan, validate=lambda value: planner.validate_plan(
+                             value, ROSTER, red_team_required=False),
+                         session_dir=run["workspace"], session_file=session_file, supersede=True,
+                         reply=lambda _payload: "Accepted: round 2 is recorded. Do not write the conclusion now.")
+    reply = await tool.execute("c1", {"status": "ready", "plan_markdown": "gap", "tasks": [task("b")]},
+                               None, None, ctx(session_file))
+    assert reply["content"][0]["text"] == "Accepted: round 2 is recorded. Do not write the conclusion now."
+
+
 def test_an_append_without_a_design_is_still_refused_as_a_first_plan():
     with pytest.raises(ValueError, match="plan_markdown"):
         validate({"status": "ready", "tasks": [task("a")], "red_team": {"assignee": "10043", "reason": "r"}})
@@ -126,3 +163,13 @@ def test_the_prompts_ask_for_full_granularity_and_offer_appending():
     nudge = planner.output_limit_nudge("misaka_research_assign")
     assert "`append: true`" in nudge and "do not redo it" in nudge and "compact" not in nudge
     assert "append" not in planner.output_limit_nudge("misaka_research_investigate")
+
+
+def test_an_accepted_plan_is_told_what_was_recorded_and_a_fork_left_in_prose():
+    """2026-09-27: the root's plan_markdown described a methodological fork but the call recorded
+    decisions=[]; the reply said only "queued", so nothing opened and nobody noticed."""
+    none = {"tasks": [{"local_id": "a"}], "decisions": []}
+    assert "a fork described" not in commands.plan_receipt(none, forks=False)
+    told = commands.plan_receipt(none, forks=True)
+    assert "Recorded 1 card(s) and 0 decision(s)." in told and "opens nothing" in told and "append=true" in told
+    assert "opens nothing" not in commands.plan_receipt({"tasks": [], "decisions": [{}]}, forks=True)

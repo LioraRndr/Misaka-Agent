@@ -15,7 +15,6 @@ from misaka.core.research import bundle, runs, workflow
 
 @pytest.fixture
 def state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runs, "_commit", lambda *a, **k: None)
     monkeypatch.setattr(repo, "enabled", lambda *a, **k: False)
     monkeypatch.setattr(bundle.corpus, "docs", lambda **k: [])
     monkeypatch.setattr(
@@ -985,7 +984,6 @@ def test_native_connection_context_finishes_publication(state, rollback):
 def test_caller_owned_sqlite_connection_uses_shared_transaction_callback(
     tmp_path, monkeypatch, rollback
 ):
-    monkeypatch.setattr(runs, "_commit", lambda *a: None)
     con = sqlite3.connect(":memory:", isolation_level=None)
     con.row_factory = sqlite3.Row
     # The shared Board schema initializes the same supported caller-owned connection.

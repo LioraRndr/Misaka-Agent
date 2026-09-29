@@ -7,9 +7,11 @@ Lock files live outside the disposable directory and contain no conversation dat
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from filelock import FileLock, ReadWriteLock, Timeout
@@ -20,7 +22,11 @@ from misaka.utils.values import read_field
 logger = logging.getLogger(__name__)
 _LOCK = threading.RLock()
 _LEASES: dict[Path, ReadWriteLock] = {}
+_IDENTITY: dict[Path, tuple | None] = {}
 _MARKER = ".misaka-lcm-cache"
+# A subagent's copy of this plugin joins the project store of the session that started it: the
+# parent sets this for the child on ``subagent_start`` (see ``extension.register``).
+PROJECT_ENV = "MISAKA_LCM_PROJECT"
 
 
 def project(ctx=None) -> Path:
@@ -74,21 +80,61 @@ def _paths(workspace):
     return root, FileLock(paths[2], timeout=30, preserve_lock_file=True), paths[3]
 
 
+def _marked(root):
+    """True for this plugin's cache, None for an empty or half-initialized one (the marker not
+    written yet), False for anything else."""
+    contents = list(root.iterdir())
+    marker = root / _MARKER
+    content = marker.read_text() if marker.is_file() and not marker.is_symlink() else None
+    if content == "misaka-lcm\n":
+        return True
+    if not contents or (content == "" and contents == [marker]):
+        return None
+    return False
+
+
+def _set_aside(root):
+    """Files at the cache path that this plugin did not mark are kept, under a name that says so,
+    rather than refused for as long as they sit there: a refusal failed every turn of every
+    session in the project (2026-09-27, when a project's `.misaka` was deleted under a running
+    session and a path-level open recreated the directory without its marker)."""
+    aside = root.with_name(f"{root.name}.unrecognized-{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(2)}")
+    root.rename(aside)
+    logger.warning("MISAKA LCM moved files it did not write from %s to %s; a fresh cache starts there.", root, aside)
+
+
 def _discard(root):
+    """Remove this plugin's cache; only the holder of the exclusive lease may."""
     if root.is_symlink():
         raise ValueError("MISAKA LCM cache must not be a symlink")
     if root.exists():
-        contents = list(root.iterdir())
-        if not contents:
-            root.rmdir()  # Interrupted initialization before the marker was written.
-            return
-        marker = root / _MARKER
-        if marker.is_symlink() or not marker.is_file():
-            raise ValueError(f"Not a MISAKA LCM cache; leave existing files untouched: {root}")
-        content = marker.read_text()
-        if content != "misaka-lcm\n" and not (content == "" and contents == [marker]):
-            raise ValueError(f"Not a MISAKA LCM cache; leave existing files untouched: {root}")
-        shutil.rmtree(root)
+        if _marked(root) is False:
+            _set_aside(root)
+        else:
+            shutil.rmtree(root)
+
+
+def _prepare(root):
+    """A marked cache directory at ``root``: a missing one is created and anything unmarked is set
+    aside first. Neither destroys anything, so the gate is enough -- a process that joins a project
+    whose directory went away restores it before any engine opens a database there."""
+    if root.is_symlink():
+        raise ValueError("MISAKA LCM cache must not be a symlink")
+    state = _marked(root) if root.exists() else None
+    if state is False:
+        _set_aside(root)
+    if state is not True:
+        root.mkdir(mode=0o700, exist_ok=True)
+        (root / _MARKER).write_text("misaka-lcm\n")
+
+
+def _identity(root, lock_path):
+    """The cache directory and lease file a process joined, as files rather than paths: a project
+    folder deleted or replaced while sessions run leaves other files at the same paths."""
+    try:
+        return tuple((info.st_dev, info.st_ino) for info in (os.stat(root), os.stat(lock_path)))
+    except OSError:
+        return None
 
 
 def acquire(workspace: Path) -> None:
@@ -107,15 +153,37 @@ def acquire(workspace: Path) -> None:
                 else:
                     try:
                         _discard(root)  # Orphan from an interrupted previous run.
-                        root.mkdir(mode=0o700)
-                        (root / _MARKER).write_text("misaka-lcm\n")
                     finally:
                         lease.release()
+                _prepare(root)
                 lease.acquire_read(timeout=30)
             _LEASES[workspace] = lease
+            _IDENTITY[workspace] = _identity(root, lock_path)
         except BaseException:
             lease.close()
             raise
+
+
+def current(workspace: Path):
+    """The cache this process's lease guards, as ``_identity`` names it, or None without a lease.
+    A lease whose directory or lease file is no longer the one on disk guards nothing -- its
+    engines write into a folder that was moved away, and other processes see a lease file nobody
+    holds -- so it is let go here, and the next ``acquire`` joins or restores the project's cache."""
+    workspace = workspace.resolve()
+    with _LOCK:
+        lease = _LEASES.get(workspace)
+        if lease is None:
+            return None
+        root = directory(workspace)
+        identity = _IDENTITY.get(workspace)
+        if identity is not None and identity == _identity(root, root.parent / "lcm.activity.sqlite"):
+            return identity
+        logger.warning("MISAKA LCM cache of %s was deleted or replaced while in use; rebuilding it "
+                       "from the session transcripts.", workspace)
+        lease.close()
+        del _LEASES[workspace]
+        _IDENTITY.pop(workspace, None)
+        return None
 
 
 def release(workspace: Path) -> None:
@@ -128,6 +196,7 @@ def release(workspace: Path) -> None:
         with gate:
             lease.close()
             del _LEASES[workspace]
+            _IDENTITY.pop(workspace, None)
             cleanup = ReadWriteLock(lock_path, is_singleton=False)
             try:
                 try:

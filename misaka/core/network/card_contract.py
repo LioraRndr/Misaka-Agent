@@ -20,9 +20,12 @@ def split_deliverable(value):
         name, detail = first, ""
         if any(char.isspace() for char in name) and not re.fullmatch(r"[^`]+\.[A-Za-z0-9]{1,16}", name):
             raise ValueError("Invalid deliverable: put one filename on its own line, in backticks if it contains spaces.")
-    if (not name or name in {".", ".."} or name != name.strip()
-            or any(char in '/\\:：`' or ord(char) < 32 or ord(char) == 127 for char in name)):
+    if any(char in '/\\' for char in name) or name in {".", ".."}:
         raise ValueError("Invalid deliverable: use a filename, not a directory or absolute path.")
+    if (not name or name != name.strip()
+            or any(char in ':：`' or ord(char) < 32 or ord(char) == 127 for char in name)):
+        raise ValueError("Invalid deliverable: its first line must be the file's name, such as `memo.md`, with the "
+                         f"requirements on the lines after it; the first line reads {name[:60]!r}.")
     return name, "\n".join(([detail] if detail else []) + rest).strip()
 
 
