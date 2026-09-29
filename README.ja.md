@@ -33,7 +33,7 @@ misaka           # MISAKA を開いて /research と入力
 
 必要なもの：macOS または Linux と [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd)、poppler、そしてモデルのプロバイダ（API キー、または ChatGPT や GitHub Copilot のサブスクリプション）。Claude のアカウントでもサインインできますが、その利用は Anthropic によってトークン単位の追加利用として課金されます。インストールはこのリポジトリから行ってください。PyPI の `misaka` は無関係のパッケージです。
 
-[はじめに](docs/getting-started.md)（英語）では、各手順と最初の研究の問いまでを順に案内しています。
+[はじめに](docs/getting-started.ja.md)では、各手順と最初の研究の問いまでを順に案内しています。
 
 ## できること
 
@@ -111,7 +111,7 @@ MISAKA がコミットするのは、あなたが頼んだときだけです。�
 
 | したいこと | 読むもの |
 |---|---|
-| インストールして最初の問いを走らせる | [はじめに](docs/getting-started.md) |
+| インストールして最初の問いを走らせる | [はじめに](docs/getting-started.ja.md) |
 | 研究を走らせ、舵を取る | [研究ガイド](docs/guide/research.md) |
 | チームを作る、Claude Code や Codex を加える | [チームガイド](docs/guide/team.md) |
 | パネルの使い方：タブ、ペイン、キー | [パネルガイド](docs/guide/panel.md) |
@@ -120,7 +120,7 @@ MISAKA がコミットするのは、あなたが頼んだときだけです。�
 | 問題を解決する | [トラブルシューティング](docs/guide/troubleshooting.md) |
 | コマンドや設定を調べる | [コマンド](docs/reference/commands.md)、[設定](docs/reference/configuration.md) |
 
-[docs/README.md](docs/README.md) はすべてのページの地図で、MISAKA で使う用語も説明しています。ドキュメントは今のところ英語版のみです。
+[docs/README.md](docs/README.md) はすべてのページの地図で、MISAKA で使う用語も説明しています。「はじめに」以外のドキュメントは、今のところ英語版のみです。
 
 ## データと費用
 
@@ -150,5 +150,7 @@ MISAKA のエージェントカーネルは [pi](https://github.com/earendil-wor
 ## ライセンス
 
 [Apache License 2.0](LICENSE)。サードパーティのコンポーネントはそれぞれのライセンスに従い、すべて [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) に記録しています。
+
+MISAKA を再配布したり、MISAKA をもとに作品を作ったりするときは、[NOTICE](NOTICE) の表記を残してください。Apache-2.0 は、配布物にこの表記を添えることを求めています。
 
 <p align="center"><em>以上、ミサカネットワークより通信を終わります、ってミサカはミサカは締めくくってみたり。</em></p>

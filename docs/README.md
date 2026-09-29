@@ -37,7 +37,7 @@ Find the page for what you want to do. If you have not installed MISAKA yet, sta
 
 ## All pages
 
-- [Getting started](getting-started.md): install, first run, first research question, updating and uninstalling
+- [Getting started](getting-started.md) (also in [简体中文](getting-started.zh-CN.md) and [日本語](getting-started.ja.md)): install, first run, first research question, updating and uninstalling
 - Guides: [research runs](guide/research.md), [the team](guide/team.md), [the panel](guide/panel.md),
   [models](guide/models.md), [documents and the web](guide/sources.md),
   [troubleshooting](guide/troubleshooting.md)

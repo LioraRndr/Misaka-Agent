@@ -13,7 +13,7 @@ authors = [{ name = "makiko", email = "nishikinokki@gmail.com" }]
 # and ghostty are all MIT and flow into Apache-2.0. Per-file upstream notices stay where they are and
 # THIRD_PARTY_NOTICES.md indexes them.
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 # The name "misaka" on PyPI belongs to an unrelated package: this one installs from the repository (README).
 classifiers = [
     "Programming Language :: Python :: 3",

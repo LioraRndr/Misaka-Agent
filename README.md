@@ -205,4 +205,7 @@ support from [FrontierAgent](https://github.com/ApodexAI/FrontierAgent).
 [Apache License 2.0](LICENSE). Third-party components keep their own licences, recorded in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+If you redistribute MISAKA or build on it, keep the attribution in [NOTICE](NOTICE): Apache-2.0
+requires it to travel with your distribution.
+
 <p align="center"><em>Misaka Network, signing off, says Misaka Misaka.</em></p>

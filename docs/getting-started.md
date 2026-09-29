@@ -1,5 +1,7 @@
 # Getting started
 
+English · [简体中文](getting-started.zh-CN.md) · [日本語](getting-started.ja.md)
+
 This page takes you from nothing installed to your first research report. It takes about ten
 minutes, most of it the setup wizard.
 
@@ -164,8 +166,8 @@ misaka update --apply    # bring me up to date
 
 `--apply` asks once more, then updates through the tool you installed with and keeps your
 extras. First it saves a copy of your settings, credentials and board in
-`~/.misaka/state/backups/`. It waits while a research run or a card is running, including a run
-waiting for your approval: let them finish, or stop them first.
+`~/.misaka/state/backups/`. While a research run or a card is running (a run waiting for your
+approval counts), it stops and asks you to let them finish or stop them first.
 
 Your data moves forward with each version, and an older version cannot read what a newer one has
 written. To go back to an older version, restore that saved copy as well.

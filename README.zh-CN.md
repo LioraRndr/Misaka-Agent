@@ -33,7 +33,7 @@ misaka           # 打开 MISAKA，输入 /research
 
 需要 macOS 或 Linux，装好 [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd) 和 poppler，以及一个模型服务商：API 密钥，或 ChatGPT、GitHub Copilot 的订阅。Claude 账号也能登录，这部分用量由 Anthropic 按 token 另计为额外用量。请从本仓库安装：PyPI 上的 `misaka` 是另一个无关的项目。
 
-[入门指南](docs/getting-started.md)（英文）会一步步带你装好，并跑通第一个研究问题。
+[入门指南](docs/getting-started.zh-CN.md)会一步步带你装好，并跑通第一个研究问题。
 
 ## 它能做什么
 
@@ -111,7 +111,7 @@ MISAKA 只在你要求时提交。如果项目是 git 仓库，用 `/commit` 提
 
 | 想要 | 阅读 |
 |---|---|
-| 安装并跑通第一个问题 | [入门指南](docs/getting-started.md) |
+| 安装并跑通第一个问题 | [入门指南](docs/getting-started.zh-CN.md) |
 | 运行和引导研究 | [研究指南](docs/guide/research.md) |
 | 组建团队，加入 Claude Code 或 Codex | [团队指南](docs/guide/team.md) |
 | 熟悉面板：标签页、窗格、按键 | [面板指南](docs/guide/panel.md) |
@@ -120,7 +120,7 @@ MISAKA 只在你要求时提交。如果项目是 git 仓库，用 `/commit` 提
 | 解决问题 | [排障](docs/guide/troubleshooting.md) |
 | 查命令或设置 | [命令](docs/reference/commands.md)、[配置](docs/reference/configuration.md) |
 
-[docs/README.md](docs/README.md) 是全部文档的地图，还解释了 MISAKA 用到的各个词。以上文档目前只有英文版。
+[docs/README.md](docs/README.md) 是全部文档的地图，还解释了 MISAKA 用到的各个词。除入门指南外，以上文档目前只有英文版。
 
 ## 你的数据与费用
 
@@ -150,5 +150,7 @@ MISAKA 的 agent 内核是 [pi](https://github.com/earendil-works/pi) 的 Python
 ## 许可证
 
 [Apache License 2.0](LICENSE)。第三方组件保留各自的许可证，记录在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+基于 MISAKA 再发布或改编时，请保留 [NOTICE](NOTICE) 里的署名：Apache-2.0 要求随发行物一并附上这份署名。
 
 <p align="center"><em>以上，御坂网络通信结束，御坂御坂如此说道。</em></p>
