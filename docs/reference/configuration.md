@@ -141,7 +141,9 @@ can still search what was said earlier: in her own conversation,
 and in the other conversations running in the same project. Your conversations themselves are
 kept in `~/.misaka/state/sessions/`; the search index is a cache in `<project>/.misaka/lcm/`,
 filled from the conversations as they open and removed when the last MISAKA process in the
-project exits. Don't commit or sync it.
+project exits. Don't commit or sync it. A project on a drive that cannot keep that folder
+private, such as a Windows drive opened from WSL, keeps it in
+`~/.misaka/state/plugins/misaka-lcm/projects/` instead.
 
 | Setting | Default | Meaning |
 |---|---|---|

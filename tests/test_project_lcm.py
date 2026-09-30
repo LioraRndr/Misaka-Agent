@@ -8,6 +8,7 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -137,6 +138,37 @@ def test_project_isolation_shared_roles_and_session_switch(tmp_path):
     ce.release_project(sister)
     assert not storage.directory(storage.project(a)).exists()
     assert Path(config_bridge.database_path(b)).is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_project_on_a_drive_without_private_permissions_keeps_its_cache_in_the_home(tmp_path, monkeypatch):
+    """2026-09-30: under WSL a project on /mnt/c shows every directory as 0777 whatever chmod
+    asks, and the store refused its database every turn. The probe stands in for such a drive."""
+    made = tempfile.mkdtemp
+
+    def mapped(*args, **kwargs):
+        path = made(*args, **kwargs)
+        if kwargs.get("prefix") == ".misaka-lcm-probe-":
+            os.chmod(path, 0o777)
+        return path
+
+    monkeypatch.setattr(storage, "_PRIVATE", {})
+    monkeypatch.setattr(storage.tempfile, "mkdtemp", mapped)
+    a, b = session(tmp_path / "a"), session(tmp_path / "b")
+    say(a, "ALPHA_CANARY")
+    say(b, "BETA_CANARY")
+    for ctx in (a, b):
+        ce.sync(ctx)
+    roots = [storage.directory(storage.project(ctx)) for ctx in (a, b)]
+    assert roots[0] != roots[1]
+    for name, ctx, root in zip("ab", (a, b), roots):
+        assert root.parent.parent == storage.plugin_home() / "projects"
+        assert Path(config_bridge.database_path(ctx)) == root / "lcm.db"
+        assert count(ce.bound_engine(ctx)) == 1
+        assert not (tmp_path / name / ".misaka" / "lcm").exists()
+        ce.close(ctx)
+        ce.release_project(ctx)
+        assert not root.exists()
 
 
 def test_project_marker_preserves_child_worktree_identity(tmp_path):

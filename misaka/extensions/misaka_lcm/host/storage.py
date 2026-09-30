@@ -6,10 +6,12 @@ Lock files live outside the disposable directory and contain no conversation dat
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
 import shutil
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 _LOCK = threading.RLock()
 _LEASES: dict[Path, ReadWriteLock] = {}
 _IDENTITY: dict[Path, tuple | None] = {}
+_PRIVATE: dict[Path, bool] = {}
 _MARKER = ".misaka-lcm-cache"
 # A subagent's copy of this plugin joins the project store of the session that started it: the
 # parent sets this for the child on ``subagent_start`` (see ``extension.register``).
@@ -64,11 +67,38 @@ def plugin_home() -> Path:
     return home.path("plugins") / "misaka-lcm"
 
 
+def _private(folder: Path) -> bool:
+    """Whether a directory made in ``folder`` keeps owner-only permissions. The store refuses a
+    database whose directory others can write, and a drive that maps another system's permissions
+    -- a Windows drive under WSL, a network share -- shows every directory as writable by all,
+    whatever chmod asks for (2026-09-30, a project under /mnt/c failed every turn)."""
+    if os.name != "posix":
+        return True
+    with _LOCK:
+        if folder not in _PRIVATE:
+            try:
+                probe = Path(tempfile.mkdtemp(prefix=".misaka-lcm-probe-", dir=folder))
+            except OSError:
+                return True  # the store's own checks say what is wrong with this folder
+            try:
+                _PRIVATE[folder] = not probe.stat().st_mode & 0o022
+            finally:
+                probe.rmdir()
+        return _PRIVATE[folder]
+
+
 def directory(workspace: Path) -> Path:
     """The project's own store; a workspace that is no project (its config directory is the
-    home) keeps it in the plugin's own directory instead."""
+    home) keeps it in the plugin's own directory instead, and so does a project on a drive that
+    cannot keep it private, in a directory of its own there."""
     project_dir = home.project_dir(workspace)
-    return project_dir / "lcm" if project_dir is not None else plugin_home() / "lcm"
+    if project_dir is None:
+        return plugin_home() / "lcm"
+    if _private(project_dir if project_dir.is_dir() else Path(workspace)):
+        return project_dir / "lcm"
+    resolved = Path(workspace).resolve()
+    key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:12]
+    return plugin_home() / "projects" / f"{resolved.name}-{key}" / "lcm"
 
 
 def _paths(workspace):
