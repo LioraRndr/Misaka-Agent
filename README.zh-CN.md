@@ -18,19 +18,20 @@
 与协调者 **Last Order**（最后之作）一起拆解问题，完善研究计划，把研究的各个分支领域调查任务派发给善于报告-联络-讨论的 **Sisters**（妹妹们），将各位专家的调研报告汇总归纳，阅读和撰写，与评审员完成答辩，将结论无法涵盖的方向转化为新的研究。用图论算法来管理研究分支图，最终报告以研究论文的形式写进你的项目文件夹，每一处引用都可溯源。
 
 <p align="center">
-  <img src="assets/tui.png" alt="MISAKA 面板：左侧是空间、会话和 agent，右侧是 Last Order 的窗口" width="820">
+  <img src="assets/tui.png" alt="MISAKA 面板：左侧为空间、会话与 agent，右侧为 Last Order 的窗口" width="820">
 </p>
 
+## 核心设计
+
 <table>
-<tr><td><b>材料没回来，不下结论</b></td><td>专家交回材料之前，Last Order 不替问题下结论，只把它拆成子问题和前提问题，理清它们之间怎样相互牵动。观点从材料里长出来；写最终报告时，她也只是把研究得出的论点编排成文，与主流相左的观点不会被磨平。</td></tr>
-<tr><td><b>专家各持其术</b></td><td>每位 Sister 带着自己的专长、技能和模型钻研自己的领域：Claude、GPT、Gemini，或你本机上的模型；Claude Code 和 Codex 也能入队领任务卡。Last Order 不必操心工具怎么用，上下文都留给专家交上来的材料。不需思考手段，便可专精目的。</td></tr>
-<tr><td><b>症候阅读</b></td><td>红队 Sister 核对事实、检查推理之外，还读 Last Order 的思考过程，找出结论没有说出口、却在暗中撑着论证的地方。随后的歧路审把这些缺席分开处理：这条线自己补得上的疏漏，就在本节点补齐；被它的前提挡在视野之外的方向，交给 Last Order 决定是否另开一项研究，不开也要写明理由。阿尔都塞在症候阅读里分辨过这两种“没看见”：一种是看漏了，一种是问题式根本不让你看见。</td></tr>
-<tr><td><b>一张可能性的图</b></td><td>每个新方向都从 Last Order 的会话里分叉出去，带着此前全部的思考，成为一个有自己团队和红队的节点。图一层一层往下长：同一种可能只开一次，两条线都提出的问题只研究一次；殊途同归的线会汇合，能统合的统合，统合不了的把分歧划清。</td></tr>
-<tr><td><b>问题本身也会问错</b></td><td>研究可以得出这样的结论：问题建立在概念混乱或意识形态预设之上，照原样问不下去。这是研究的正当结果；要改动的若是你提的问题，Last Order 会先征得你同意。</td></tr>
-<tr><td><b>去翻常识之外的那部分</b></td><td>一问一答，模型给出的多半是它最常说的那一片。每份计划都附一张覆盖表，空着的格子就是事先声明的缺口；覆盖图取自各学科给自己文献编的分类目录，文献扫描能看出一个问题在学术史里的位置。</td></tr>
-<tr><td><b>可溯源</b></td><td>引文追得到页：PageIndex 给长文档编出目录，agent 按章节读书、按印刷页码引用，还能查到一段引文在第几页；扫描件用中、英、日文做 OCR，DjVu 也读得了。记忆追得到原话：对话超出模型的容量时，无损上下文管理（LCM）把它压成摘要，每条摘要都能追回原文，项目里的所有 agent 检索同一份记忆。</td></tr>
-<tr><td><b>有案可查</b></td><td>计划、任务卡、结论的每一版、批评和出处清单，都是项目里的 Markdown 文件，项目本身是一个 git 仓库。MISAKA 只在你要求、并且看过文件之后才提交；一个论证在批评下怎样一步步改变，都留在历史里。</td></tr>
-<tr><td><b>你来掌舵</b></td><td>每份计划都等你点头，点头就是正常聊天。每个分支在面板里有自己的标签页，每个 agent 都在一个你随时能走进去的窗格里。研究可以停下，再接着跑。</td></tr>
+<tr><td><b>手段与目的的分工</b></td><td>每位 Sister 配备独立的专长、技能与模型（Claude、GPT、Gemini 或本地模型），负责各自领域的检索与研读；Claude Code 与 Codex 亦可作为成员承接任务。检索与工具操作主要由专家承担，Last Order 的上下文因而专用于研读专家提交的材料。不需思考手段，便可专精目的。</td></tr>
+<tr><td><b>症候阅读</b></td><td>红队在核查事实与推理之外，同时研读 Last Order 的推理过程，指认结论未曾言明、却支撑其论证之处。其后的歧路审将此类缺席区分为两类：研究线自身可以弥补的疏漏，在本节点内补足；为其前提所遮蔽的方向，交由 Last Order 决定是否另立研究，不予开立者须载明理由。此即阿尔都塞在症候阅读中区分的两种“不可见”：视而未见者，与问题式所不容看见者。</td></tr>
+<tr><td><b>可能性的有向无环图</b></td><td>每一新方向均自 Last Order 的会话分叉，承继此前的全部推理，成为配备独立团队与红队的节点。研究图逐层展开：同一可能只开立一次，多条研究线共同提出的问题只研究一次；殊途同归的研究线在汇合处相互对质，可统合者统合，不可调和者划清分歧。</td></tr>
+<tr><td><b>问题的消解</b></td><td>研究可以论证某一问题建立于概念混淆或意识形态预设之上、无法按原样成立，此即正当的研究结论。若由此须改动你所提出的问题，Last Order 将事先征得你的同意。</td></tr>
+<tr><td><b>越出 doxa</b></td><td>单次问答的回答，往往止于模型最高频的说法，即一种广为接受而未经检视的 doxa。每份研究计划须附覆盖表，空缺即事先声明的研究缺口；覆盖图取自各学科为自身文献编制的分类体系，其空白处标示出一个领域未曾视为问题的方向，文献扫描则标定问题在学术史中的位置。</td></tr>
+<tr><td><b>可溯源</b></td><td>引文可溯至页码：PageIndex 为长文档生成章节目录，agent 按章研读、按印刷页码引用，并可定位任一引文所在页；扫描件支持中、英、日文 OCR 与 DjVu。上下文可溯至原文：对话超出模型容量时，无损上下文管理（LCM）将其压缩为摘要，每条摘要均可回溯至原始文本，项目内所有 agent 共享同一检索记忆。</td></tr>
+<tr><td><b>研究过程可审计</b></td><td>计划、任务卡、结论的各个版本、批评意见与出处清单，均以 Markdown 文件保存在项目中，项目本身为 git 仓库。MISAKA 仅在你要求并确认文件后提交，论证在批评中的演变完整保留于版本历史。</td></tr>
+<tr><td><b>由你主导</b></td><td>每份计划均须经你同意方可执行，确认通过自然对话完成。每个分支在面板中拥有独立标签页，每个 agent 运行于可随时进入的窗格；研究可中止，亦可恢复。</td></tr>
 </table>
 
 ## 快速开始
@@ -40,113 +41,113 @@ uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misak
 
 mkdir my-research
 cd my-research
-misaka setup     # 登录、选模型、创建最初的两位 Sister
-misaka           # 打开 MISAKA，输入 /research
+misaka setup     # 登录、选择模型、创建最初的两位 Sister
+misaka           # 启动 MISAKA，输入 /research
 ```
 
-需要 macOS、Linux 或 Windows（x86_64 或 arm64），装好 [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd) 和 poppler，以及一个模型服务商：API 密钥，或 ChatGPT、GitHub Copilot 的订阅。Claude 账号也能登录，这部分用量由 Anthropic 按 token 另计为额外用量。请从本仓库安装：PyPI 上的 `misaka` 是另一个无关的项目。
+运行环境为 macOS、Linux 或 Windows（x86_64 或 arm64）。需预先安装 [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd) 与 poppler，并准备一个模型服务商：API 密钥，或 ChatGPT、GitHub Copilot 订阅。亦支持以 Claude 账号登录，相应用量由 Anthropic 按 token 另行计为额外用量。请从本仓库安装：PyPI 上的 `misaka` 为另一无关项目。
 
-[入门指南](docs/getting-started.zh-CN.md)会一步步带你装好，并跑通第一个研究问题。
+[入门指南](docs/getting-started.zh-CN.md)逐步介绍安装流程，并引导你完成第一个研究问题。
 
-## 一次研究怎么进行
+## 研究流程
 
 > *计划写好啦！只要你点头，御坂御坂马上开工！御坂御坂双手捧着计划书说道。*
 
-一次研究，是一张由种种可能长成的图。你的问题是第一个节点，结论放下的每一种可能，一层层长成它下面的节点。
+一次研究即一张由可能性构成的图：你的问题是根节点，结论所放弃的每一种可能，逐层成为其下的节点。
 
 <p align="center">
   <img src="assets/research-graph.zh-CN.svg" alt="一次研究是一张图：你的问题；第 1 层是另一个假说、另一种方法和对问题本身的批判；第 2 层是其中一条放下的路、两条线都提出而只研究一次的问题，以及殊途同归的汇合；最后是报告" width="820">
 </p>
 
-1. **每个节点都是一项完整的研究。** Last Order 和你商量计划，你点头才开工。材料回来之前，她只拆问题、不下结论；Sisters 并行做任务卡，每条发现都记下出处，Last Order 读完再写结论。
-2. **红队与歧路审。** 红队 Sister 核对事实、检查推理，读出结论没说出口的东西；再开一个新会话做歧路审，把结论放下的可能和留下的缺口分开。Last Order 在本节点逐条回应、补上缺口，改过的结论再交回复审。
-3. **研究图一层层长出来。** 只有前提不同、真正的另一种可能，才会从 Last Order 的会话分叉成新节点，带着此前全部的思考，各有自己的 Last Order、Sisters 和红队，一直展开到你选定的深度。两条线都提出的问题只研究一次，同一种可能只开一次，殊途同归的线会汇合，在汇合处对质。
-4. **报告。** 所有节点结束后，Last Order 通读全部节点，把研究得出的论点编排成一篇研究论文：有注释、参考文献，附录记下每一条研究线、答案承担的代价和没走的路。初稿先交独立红队审查，再由 Last Order 对每条异议作出裁决，写成终稿。
+1. **每个节点都是一项完整的研究。** Last Order 与你商定计划，经你同意后开始执行。专家材料提交之前，Last Order 只拆解子问题与前提问题，不预设结论；Sisters 并行完成任务卡，每项发现均注明出处，Last Order 研读后撰写结论。
+2. **红队与歧路审。** 红队 Sister 核查事实与推理，并指认结论未曾言明之处；随后在新会话中进行歧路审，区分结论所放弃的可能与遗留的缺口。Last Order 在本节点内逐条回应并补足缺口，修订后的结论再次送审。
+3. **研究图逐层展开。** 仅前提不同的真正替代可能，才会自 Last Order 的会话分叉为新节点，承继此前的全部推理，并各自配备 Last Order、Sisters 与红队，逐层展开至设定深度。多条研究线共同提出的问题只研究一次，同一可能只开立一次，殊途同归的研究线在汇合处相互对质。
+4. **报告。** 全部节点结束后，Last Order 通览各节点，将研究所得论点编排为一篇研究论文，附注释与参考文献，并以附录记录每条研究线、答案承担的代价与未采纳的路径。初稿经独立红队审查后，由 Last Order 对每条异议作出裁决，形成终稿。
 
-深度、并发、跟进和恢复研究，见[研究指南](docs/guide/research.md)（英文）。
+研究深度、并发、进度跟踪与恢复，详见[研究指南](docs/guide/research.md)（英文）。
 
-## 你会得到什么
+## 研究产出
 
 > *引用的每一份材料都已归档，随时可以核查，御坂如此报告。*
 
-所有产出都写进你的项目文件夹：
+全部产出均写入你的项目文件夹：
 
 ```text
 my-research/
-├── final/<run>-final.md     最终报告，连同它承担的代价和没有走的路
-├── final/<run>-sources/     报告引用的每一个文件，链接在原处
-└── nodes/<node>/            每一项研究
-    ├── plan.md              Last Order 的计划，以及为什么选这几位 Sister
-    ├── cards/<card>/        每位 Sister 的工作成果，以及红队的批评
-    ├── synthesis.md         结论（修改后是 synthesis-2.md）
-    └── SOURCES.md           结论引用的每个文件，以及哪些论断以它为依据
+├── final/<run>-final.md     最终报告，含所承担的代价与未采纳的路径
+├── final/<run>-sources/     报告引用的全部文件（链接至原位置）
+└── nodes/<node>/            各项研究
+    ├── plan.md              Last Order 的研究计划及 Sister 的选派理由
+    ├── cards/<card>/        各 Sister 的工作成果与红队批评
+    ├── synthesis.md         结论（修订版依次为 synthesis-2.md 等）
+    └── SOURCES.md           结论引用的文件及其所支撑的论断
 ```
 
-MISAKA 只在你要求时提交。如果项目是 git 仓库，用 `/commit` 提交，提交前你会先看到文件并确认。
+MISAKA 仅在你要求时提交。若项目为 git 仓库，可使用 `/commit` 提交，提交前将列出文件供你确认。
 
 ## 常用命令
 
-| 想要 | 输入 |
+| 用途 | 命令 |
 |---|---|
-| 打开 MISAKA | `misaka` |
-| 开始一次研究 | `/research`，然后输入你的问题 |
-| 查看、停止或恢复研究 | `/research status`、`/research stop`、`/research resume` |
-| 单独和一位 Sister 对话 | `/sister 10032` |
-| 创建一位 Sister | `misaka create 10036 --desc "实证计量与因果识别"` |
-| 索引你的文档 | `misaka doc scan sources/` |
-| 选模型、登录 | `/model`、`/login` |
-| 查看全部命令 | 对话里输入 `/`，终端里用 `misaka --help` |
-| 查看面板的按键 | 先按 `ctrl+b`，再按 `?`（[面板指南](docs/guide/panel.md)） |
+| 启动 MISAKA | `misaka` |
+| 开始研究 | `/research`，随后输入问题 |
+| 查看、中止或恢复研究 | `/research status`、`/research stop`、`/research resume` |
+| 与单个 Sister 对话 | `/sister 10032` |
+| 创建 Sister | `misaka create 10036 --desc "实证计量与因果识别"` |
+| 为文档建立索引 | `misaka doc scan sources/` |
+| 选择模型、登录 | `/model`、`/login` |
+| 查看全部命令 | 对话中输入 `/`，终端中运行 `misaka --help` |
+| 查看面板快捷键 | 先按 `ctrl+b`，再按 `?`（见[面板指南](docs/guide/panel.md)） |
 | 更新 | `misaka update --apply` |
 
-完整列表见[命令参考](docs/reference/commands.md)（英文）。
+完整命令列表见[命令参考](docs/reference/commands.md)（英文）。
 
 ## 文档
 
-| 想要 | 阅读 |
+| 主题 | 文档 |
 |---|---|
-| 安装并跑通第一个问题 | [入门指南](docs/getting-started.zh-CN.md) |
-| 运行和引导研究 | [研究指南](docs/guide/research.md) |
-| 组建团队，加入 Claude Code 或 Codex | [团队指南](docs/guide/team.md) |
-| 熟悉面板：标签页、窗格、按键 | [面板指南](docs/guide/panel.md) |
-| 登录、选模型、接本地模型 | [模型指南](docs/guide/models.md) |
-| 使用你的文档和网络 | [文档与网络](docs/guide/sources.md) |
-| 解决问题 | [排障](docs/guide/troubleshooting.md) |
-| 查命令或设置 | [命令](docs/reference/commands.md)、[配置](docs/reference/configuration.md) |
+| 安装并运行第一个研究问题 | [入门指南](docs/getting-started.zh-CN.md) |
+| 运行与引导研究 | [研究指南](docs/guide/research.md) |
+| 组建团队，接入 Claude Code 或 Codex | [团队指南](docs/guide/team.md) |
+| 面板：标签页、窗格与快捷键 | [面板指南](docs/guide/panel.md) |
+| 登录、选择模型、接入本地模型 | [模型指南](docs/guide/models.md) |
+| 文档与网络资源的使用 | [文档与网络](docs/guide/sources.md) |
+| 故障排查 | [排障](docs/guide/troubleshooting.md) |
+| 命令与配置参考 | [命令](docs/reference/commands.md)、[配置](docs/reference/configuration.md) |
 
-[docs/README.md](docs/README.md) 是全部文档的地图，还解释了 MISAKA 用到的各个词。除入门指南外，以上文档目前只有英文版。
+[docs/README.md](docs/README.md) 提供全部文档的索引及术语说明。除入门指南外，上述文档目前仅提供英文版。
 
-## 你的数据与费用
+## 数据与费用
 
-MISAKA 保存的一切都在你自己的机器上：设置、凭据和历史在 `~/.misaka/`，研究产出在你的项目文件夹。提示词只发给你配置的模型服务商。网页搜索发给你配置的搜索服务；没有配置、或配置的服务出错时，改用 Exa、Parallel、Firecrawl 和 Keenable 的免费公共接口（用 `misaka web set keyless_fallback false` 关闭）。文献扫描会把问题的检索词发给 OpenAlex。MISAKA 不发送任何遥测数据。
+MISAKA 的全部数据均保存在本地：设置、凭据与历史位于 `~/.misaka/`，研究产出位于项目文件夹。提示词仅发送至你配置的模型服务商。网页搜索发送至你配置的搜索服务；未配置或服务出错时，改用 Exa、Parallel、Firecrawl 与 Keenable 的免费公共接口（可通过 `misaka web set keyless_fallback false` 关闭）。文献扫描会将检索词发送至 OpenAlex。MISAKA 不发送任何遥测数据。
 
-一次研究会铺得很开：默认最多同时跑四个分支，每个分支最多四位 Sister 同时工作（以机器内存允许为限），所以一次深度研究会发出大量模型调用。想省钱就选小一点的深度；想给所有研究设一个硬上限，在 `~/.misaka/settings.json` 里设置 `research.token_cap`。
+一次研究的调用规模可能相当可观：默认最多同时运行四个分支，每个分支最多四位 Sister 并行工作（以机器内存为限），深度研究因此会产生大量模型调用。如需控制成本，可选择较小的研究深度；如需为所有研究设定硬性上限，可在 `~/.misaka/settings.json` 中设置 `research.token_cap`。
 
 ## 名字的由来
 
-MISAKA 的名字取自镰池和马的《魔法禁书目录》和《某科学的超电磁炮》。在原作里，妹妹们（Sisters）是「超电磁炮」御坂美琴的克隆体，通过御坂网络共享记忆。
+MISAKA 之名取自镰池和马的《魔法禁书目录》与《某科学的超电磁炮》。在原作中，妹妹们（Sisters）是「超电磁炮」御坂美琴的克隆体，经由御坂网络共享记忆。
 
 | 原作 | MISAKA |
 |---|---|
-| **御坂美琴**，所有妹妹的本体 | `MISAKA.md`：每个 agent 在读自己的设定之前，都会先读这份共同身份 |
-| **妹妹们**，以编号相称：御坂 10032 号、10033 号…… | 你的专家们，每人有编号、专长和自己的 `SOUL.md` |
-| **最后之作**（Last Order），御坂 20001 号，御坂网络的司令塔 | 你与之对话的协调者 |
-| **御坂网络**，一位妹妹学到的，其他妹妹也能想起来 | 项目里的对话，其中每个 agent 都能检索 |
+| **御坂美琴**，所有妹妹的本体 | `MISAKA.md`：每个 agent 在读取自身设定之前，先读取这份共同身份 |
+| **妹妹们**，以编号相称：御坂 10032 号、10033 号…… | 你的专家，各有编号、专长与独立的 `SOUL.md` |
+| **最后之作**（Last Order），御坂 20001 号，御坂网络的司令塔 | 与你对话的协调者 |
+| **御坂网络**，一位妹妹之所学，其他妹妹亦能忆起 | 项目内的对话记录，所有 agent 均可检索 |
 
-本文里那些「御坂如此说道」只是点缀；你的 agent 怎么说话，取决于她们各自的 `SOUL.md`。想让她们也这样说话，在 `SOUL.md` 里加一句就行。
+文中「御坂如此说道」之类的语句仅作点缀；各 agent 的说话方式由其 `SOUL.md` 决定，如需相同口吻，在 `SOUL.md` 中加入一句即可。
 
-MISAKA 是独立项目，与原作作者及出版方没有任何关联，也未获其认可。
+MISAKA 为独立项目，与原作作者及出版方无任何关联，亦未获其认可。
 
-## 基于
+## 技术基础
 
-MISAKA 的 agent 内核是 [pi](https://github.com/earendil-works/pi) 的 Python 移植，面板移植自 [herdr](https://github.com/herdrdev/herdr)，每个窗格背后是 [ghostty](https://github.com/ghostty-org/ghostty) 的终端库。长对话管理基于 [hermes-lcm](https://github.com/stephenschoettler/hermes-lcm)，文档结构基于 [PageIndex](https://github.com/VectifyAI/PageIndex)；网页工具和技能移植自 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Office 支持移植自 [FrontierAgent](https://github.com/ApodexAI/FrontierAgent)。[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 记录了每一部分的来源。
+MISAKA 的 agent 内核为 [pi](https://github.com/earendil-works/pi) 的 Python 移植，面板移植自 [herdr](https://github.com/herdrdev/herdr)，各窗格的终端仿真基于 [ghostty](https://github.com/ghostty-org/ghostty) 的终端库。长对话管理基于 [hermes-lcm](https://github.com/stephenschoettler/hermes-lcm)，文档结构解析基于 [PageIndex](https://github.com/VectifyAI/PageIndex)；网页工具与技能移植自 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Office 支持移植自 [FrontierAgent](https://github.com/ApodexAI/FrontierAgent)。各部分来源详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-选 pi 作底座，是因为它的内核简单，又有成熟的社区在维护，能直接跟上上游的更新。MISAKA 的图管的是研究的内容和可能：节点是一项做完的研究，边是一次带着思考分叉出去的追问。
+MISAKA 以 pi 为底座，因其内核简洁，且有成熟社区维护，可直接跟进上游更新。MISAKA 的图所治理的是研究的内容与可能性：节点为一项完成的研究，边为一次承载推理的分叉追问。
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)。第三方组件保留各自的许可证，记录在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目以 [Apache License 2.0](LICENSE) 发布。第三方组件保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-基于 MISAKA 再发布或改编时，请保留 [NOTICE](NOTICE) 里的署名：Apache-2.0 要求随发行物一并附上这份署名。
+再发布或基于 MISAKA 进行改编时，请保留 [NOTICE](NOTICE) 中的署名：Apache-2.0 要求该署名随发行物一并提供。
 
 <p align="center"><em>以上，御坂网络通信结束，御坂御坂如此说道。</em></p>
