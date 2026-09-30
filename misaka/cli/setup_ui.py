@@ -20,6 +20,7 @@ import getpass
 import json
 import math
 import os
+import queue
 import select
 import shutil
 import sys
@@ -336,25 +337,20 @@ def prompt_cancellable(question: str, cancel: threading.Event) -> str:
     be answered by a thread still sitting in ``input()``. A plain ``input()`` cannot be
     interrupted, so this polls instead.
     """
-    import termios
-    import tty
-    fd = sys.stdin.fileno()
     # The flows word their own prompts and some end in a colon already ("...paste the
     # authorization code / redirect URL here:"); appending a second one reads as a typo.
     label = question.rstrip().rstrip(":")
     sys.stdout.write(f"  {label}: ")
     sys.stdout.flush()
-    try:
-        old_attrs = termios.tcgetattr(fd)
-    except (termios.error, OSError):
+    keys = _cbreak()
+    if keys is None:
         return input()
     typed = ""
     try:
-        tty.setcbreak(fd)
         while not cancel.is_set():
-            if not select.select([fd], [], [], 0.1)[0]:
+            if not keys.ready(0.1):
                 continue
-            char = os.read(fd, 1)
+            char = keys.read(1)
             if not char or char in (b"\r", b"\n"):
                 break
             if char == b"\x03":
@@ -372,7 +368,7 @@ def prompt_cancellable(question: str, cancel: threading.Event) -> str:
             sys.stdout.write(decoded)
             sys.stdout.flush()
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+        keys.restore()
         print()
     return "" if cancel.is_set() else typed.strip()
 
@@ -413,8 +409,10 @@ def run_steps(steps: list[tuple[str, Callable[[], None]]]) -> None:
 def _menu_usable() -> bool:
     if not _tty() or os.environ.get("MISAKA_SETUP_PLAIN"):
         return False
+    if os.name == "nt":
+        return True                     # the console stands in for termios (see _cbreak)
     try:
-        import termios  # noqa: F401 - absent on Windows, which gets the numbered prompt
+        import termios  # noqa: F401
         import tty  # noqa: F401
     except ImportError:
         return False
@@ -447,14 +445,78 @@ def _numbered(question: str, choices: list[str], default: int, description: str 
 _ARROWS = {"[A": "up", "[B": "down", "[D": "left", "OA": "up", "OB": "down", "OD": "left"}
 
 
-def _read_key(fd: int) -> str:
-    data = os.read(fd, 1)
+class _TtyKeys:
+    """A tty in cbreak mode."""
+
+    def __init__(self, fd: int, old: list) -> None:
+        self._fd, self._old = fd, old
+
+    def ready(self, timeout: float) -> bool:
+        return bool(select.select([self._fd], [], [], timeout)[0])
+
+    def read(self, size: int) -> bytes:
+        return os.read(self._fd, size)
+
+    def restore(self) -> None:
+        import termios
+        termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
+
+
+class _ConsoleKeys:
+    """A Windows console in raw VT input mode, read on ``win_console``'s reader thread."""
+
+    def __init__(self, fd: int, saved) -> None:
+        from misaka.utils import win_console
+        self._saved, self._pending = saved, b""
+        self._chunks: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+        self._reader = win_console.ConsoleInput(fd, lambda text: self._chunks.put(text.encode())).start()
+
+    def ready(self, timeout: float | None) -> bool:
+        if not self._pending:
+            try:
+                self._pending = self._chunks.get(timeout=timeout)
+            except queue.Empty:
+                return False
+        return True
+
+    def read(self, size: int) -> bytes:
+        self.ready(None)
+        data, self._pending = self._pending[:size], self._pending[size:]
+        return data
+
+    def restore(self) -> None:
+        from misaka.utils import win_console
+        self._reader.stop()
+        win_console.restore(self._saved, flush_input=False)
+
+
+def _cbreak() -> _TtyKeys | _ConsoleKeys | None:
+    """Keys as they are pressed, for the menu and the code prompt; None when stdin cannot give
+    them. A tty goes into cbreak mode. Windows has no termios: the console goes into its raw VT
+    input mode instead, where the arrows arrive as the same escape sequences."""
+    fd = sys.stdin.fileno()
+    if os.name == "nt":
+        from misaka.utils import win_console
+        saved = win_console.enter_raw_mode(fd, sys.stdout.fileno())
+        return None if saved is None else _ConsoleKeys(fd, saved)
+    import termios
+    import tty
+    try:
+        old = termios.tcgetattr(fd)
+    except (termios.error, OSError):
+        return None
+    tty.setcbreak(fd)
+    return _TtyKeys(fd, old)
+
+
+def _read_key(keys: _TtyKeys | _ConsoleKeys) -> str:
+    data = keys.read(1)
     if not data:
         return "esc"                                  # stdin closed under us
     if data == b"\x1b":
-        if not select.select([fd], [], [], 0.05)[0]:  # a bare Esc, not the head of an arrow sequence
+        if not keys.ready(0.05):                     # a bare Esc, not the head of an arrow sequence
             return "esc"
-        data += os.read(fd, 8)
+        data += keys.read(8)
         return _ARROWS.get(data[1:3].decode("ascii", "replace"), "")
     if data in (b"\r", b"\n"):
         return "enter"
@@ -467,10 +529,7 @@ def _radiolist(question: str, choices: list[str], default: int, description: str
     """The menu, drawn in place with the theme's colours rather than on an alternate screen, so
     the logo and the answers so far stay in view; erased once a choice is made, and the caller
     echoes the choice on one line."""
-    import termios
-    import tty
-
-    fd, out = sys.stdin.fileno(), sys.stdout
+    out = sys.stdout
     _mode, colours = _palette()
     accent, selected = ink("accent"), _sgr(_rgb(colours["selectedBg"]), background=True)
     header = ["  " + color(question, BOLD)]
@@ -510,18 +569,16 @@ def _radiolist(question: str, choices: list[str], default: int, description: str
         out.write(("" if first else f"\x1b[{block}A") + "".join(f"\r\x1b[2K{line}\n" for line in lines))
         out.flush()
 
-    try:
-        old = termios.tcgetattr(fd)
-    except (termios.error, OSError):
+    keys = _cbreak()
+    if keys is None:
         return _numbered(question, choices, default, description)
     result, drawn = -1, False
     try:
-        tty.setcbreak(fd)
         out.write("\x1b[?25l")
         draw(True)
         drawn = True
         while True:
-            key = _read_key(fd)
+            key = _read_key(keys)
             if key in ("up", "k"):
                 cursor = (cursor - 1) % len(choices)
             elif key in ("down", "j"):
@@ -544,7 +601,7 @@ def _radiolist(question: str, choices: list[str], default: int, description: str
     except KeyboardInterrupt:
         result = -1
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        keys.restore()
         out.write("\x1b[?25h")
         if drawn:
             out.write(f"\x1b[{block}A\r\x1b[J")   # the menu goes; the caller's echo takes its place
