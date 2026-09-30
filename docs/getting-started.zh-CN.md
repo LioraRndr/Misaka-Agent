@@ -4,7 +4,7 @@
 
 这一页带你从零开始，一直到拿到第一份研究报告。全程大约十分钟，大部分时间花在设置向导上。
 
-**你需要**一台 Mac、Linux 或 Windows 10/11 电脑、一个终端（Windows 上用 Windows Terminal），以及至少一个模型服务商的使用权限：API 密钥，或者可以登录使用的订阅，比如 ChatGPT 或 GitHub Copilot。Claude 账号也能登录，但这部分用量由 Anthropic 按 token 另计为额外用量，不走套餐额度。
+**你需要**一台 Mac、Linux 或 Windows 10/11 电脑（x86_64 或 ARM64）、一个终端（Windows 上用 Windows Terminal），以及至少一个模型服务商的使用权限：API 密钥，或者可以登录使用的订阅，比如 ChatGPT 或 GitHub Copilot。Claude 账号也能登录，但这部分用量由 Anthropic 按 token 另计为额外用量，不走套餐额度。
 
 除本页外，其余文档目前只有英文版。
 
@@ -141,6 +141,8 @@ misaka update --apply    # 更新到最新
 
 你的数据会随每个版本一起往前带，而旧版本读不了新版本写下的数据。想退回旧版本的话，也要把那份备份一起恢复。
 
+Windows 上的 0.18.1 和 0.18.2 没法自己更新：关掉所有 MISAKA 窗口，运行一次 `uv tool upgrade misaka`。从 0.18.3 起，Windows 上也可以直接用 `misaka update --apply`。
+
 ## 卸载
 
 ```sh
@@ -149,3 +151,5 @@ misaka uninstall             # 询问要删除什么
 ```
 
 默认保留数据：删掉程序，`~/.misaka/` 留着，重新安装后可以接着用。`--full` 连数据一起删除（删除前会提议备份），`--data` 只删除数据。请先关闭面板。你的项目文件夹会保留报告、资料和设置；`--full` 只会删掉 MISAKA 在其中留下的缓存。
+
+在 Windows 上还要关掉其他所有 MISAKA 窗口，因为 Windows 删不掉正在运行的程序。程序会在这条命令退出后随即删除。

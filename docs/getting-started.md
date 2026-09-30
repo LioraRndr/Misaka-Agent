@@ -5,8 +5,8 @@ English · [简体中文](getting-started.zh-CN.md) · [日本語](getting-start
 This page takes you from nothing installed to your first research report. It takes about ten
 minutes, most of it the setup wizard.
 
-**You will need** a Mac, a Linux machine or a Windows 10/11 PC, a terminal (on Windows, Windows
-Terminal), and access to at least one model provider: an API key, or a subscription you sign in
+**You will need** a Mac, a Linux machine or a Windows 10/11 PC (x86_64 or ARM64), a terminal (on
+Windows, Windows Terminal), and access to at least one model provider: an API key, or a subscription you sign in
 with, such as ChatGPT or GitHub Copilot. A Claude account can sign in too; Anthropic bills that use
 per token as extra usage, outside your plan's limits.
 
@@ -173,6 +173,9 @@ approval counts), it stops and asks you to let them finish or stop them first.
 Your data moves forward with each version, and an older version cannot read what a newer one has
 written. To go back to an older version, restore that saved copy as well.
 
+On Windows, 0.18.1 and 0.18.2 cannot update themselves: close every MISAKA window and run
+`uv tool upgrade misaka` once. From 0.18.3 on, `misaka update --apply` works there too.
+
 ## Uninstalling
 
 ```sh
@@ -184,3 +187,6 @@ Keeping your data is the default: the program goes and `~/.misaka/` stays, so a 
 up where you left off. `--full` removes your data too, after offering a backup, and `--data`
 removes only the data. Close the panel first. Your project folders keep your reports, sources and
 settings; `--full` removes only MISAKA's caches inside them.
+
+On Windows, close every other MISAKA window too, since Windows cannot remove a program that is
+running. The program goes as soon as the command exits.

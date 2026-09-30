@@ -2,7 +2,8 @@
 
 When you type `misaka`, the **panel** opens: one terminal screen where Last Order and every
 Sister she starts each run in a pane of their own, so you can watch several agents work at once
-and step into any of them. If you have used tmux, it will feel familiar.
+and step into any of them. If you have used tmux, it will feel familiar. On Windows, open it in
+Windows Terminal.
 
 This page explains what is on the screen, the keys and the mouse, and how to find your way
 between agents, conversations and folders.

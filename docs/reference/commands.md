@@ -105,6 +105,9 @@ The panel runs on a background process that owns every pane. You rarely need the
 | `misaka uninstall --data` | remove your data and keep the program |
 | `misaka uninstall --dry-run` | list what would be removed (`--yes` skips the questions) |
 
+On Windows, `misaka uninstall` refuses while MISAKA runs in another window, and removes the
+program once it has exited.
+
 ## Chat commands
 
 ### Research

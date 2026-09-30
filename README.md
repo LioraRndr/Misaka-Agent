@@ -16,14 +16,24 @@
 <p align="center">English · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a></p>
 
 You ask a question. **Last Order**, the coordinator, plans the research with you and hands the
-parts to **Sisters**, specialist agents you create, who work in parallel in your terminal.
-Before any conclusion stands, a red-team Sister challenges it and Last Order answers every
-objection. The paths the conclusion did not take become research of their own. The report
-lands in your project folder, next to every file it cites.
+parts to **Sisters**, the specialists you create. They work in parallel in your terminal, a red
+team attacks every conclusion, and the paths a conclusion passed over become research of their
+own. The report arrives in your project folder as a research article, beside every file it cites.
 
 <p align="center">
   <img src="assets/tui.png" alt="The MISAKA panel: spaces, sessions and agents beside Last Order's window" width="820">
 </p>
+
+<table>
+<tr><td><b>Conclusions that survive a red team</b></td><td>Every conclusion faces a red-team Sister. Last Order answers each objection on the record: she revises, rebuts, or accepts it as a cost the answer carries.</td></tr>
+<tr><td><b>The roads not taken, explored</b></td><td>Hypotheses, methods and readings a conclusion passed over become research of their own, each with its own team and red team. A question two lines raise is researched once, and lines that meet are joined.</td></tr>
+<tr><td><b>Evidence you can open</b></td><td>Every finding names its source and page. Each conclusion keeps the files it cites beside it, and agents find the page a quotation is on.</td></tr>
+<tr><td><b>Claims labelled for what they are</b></td><td>Facts, inferences, interpretations and value judgements are declared as such. Where the evidence cannot decide, rival conclusions stand side by side.</td></tr>
+<tr><td><b>A team of different minds</b></td><td>Each Sister has her own specialty, skills and model: Claude, GPT, Gemini, or one on your own machine. Claude Code and Codex join as teammates and take cards like any Sister.</td></tr>
+<tr><td><b>Research you steer</b></td><td>Every plan waits for your word, given in plain conversation. Each branch has its own tab in the panel, with every agent in a pane you can step into. Runs stop and resume.</td></tr>
+<tr><td><b>A scholar's library</b></td><td>PDFs, EPUB, DjVu and Office files are indexed by chapter, and scans are read with OCR in English, Chinese and Japanese. Web search needs no key; literature scans show where a question sits in the scholarship.</td></tr>
+<tr><td><b>A memory the team shares</b></td><td>Long conversations are summarised as they grow and stay searchable by every agent in the project.</td></tr>
+</table>
 
 ## Quick start
 
@@ -36,7 +46,7 @@ misaka setup     # sign in, pick a model, create your first two Sisters
 misaka           # open MISAKA and type /research
 ```
 
-You need macOS, Linux or Windows with [uv](https://docs.astral.sh/uv/), git,
+You need macOS, Linux or Windows (x86_64 or arm64) with [uv](https://docs.astral.sh/uv/), git,
 [ripgrep](https://github.com/BurntSushi/ripgrep), [fd](https://github.com/sharkdp/fd) and
 poppler, and access to a model provider: an API key, or a ChatGPT or GitHub Copilot subscription.
 A Claude account signs in too; Anthropic bills that use per token as extra usage. Install from
@@ -45,62 +55,50 @@ this repository: the `misaka` package on PyPI is an unrelated project.
 [Getting started](docs/getting-started.md) walks you through each step and your first research
 question.
 
-## What it does
-
-- **A team you design.** Each Sister has a specialty, which Last Order assigns work by, and her
-  own skills, tools and model: one can run on Claude, another on GPT, another on a model on your
-  own machine. Claude Code and Codex can join the team too.
-- **Research that argues back.** Every conclusion is challenged by a red-team Sister, and Last
-  Order answers each objection: she revises the conclusion, rebuts the objection, or accepts it
-  as a cost, on the record.
-- **The paths not taken, explored.** Other hypotheses, methods and readings that a
-  conclusion passed over become branches of the research, each with its own team and red team,
-  to the depth you choose.
-- **Claims kept apart.** Facts, inferences, interpretations and value judgements are declared as
-  such. When the evidence can't decide, rival conclusions stay side by side.
-- **Traceable to the file.** Every node keeps its plan, each Sister's work, the conclusion and
-  its critique, with a list of every file cited and a link to each one.
-- **You stay in charge.** By default every plan waits for your go-ahead, given in plain
-  conversation. Each branch has its own tab where you can talk to it. Runs can be stopped and
-  resumed.
-- **Your library and the web.** Index PDFs, EPUBs, DjVu, Word, Excel and PowerPoint files and
-  notes. Agents read by chapter or page and find the page a quotation is on. Web search works
-  without a key.
-- **Long memory.** Long conversations are summarised as they grow, and an agent can still search
-  what was said earlier, in her own conversation and in the others running in the project.
-
 ## How a research run works
 
 > *The plan's ready! Misaka Misaka starts the moment you say so, says Misaka Misaka, holding it out with both hands.*
 
+A run is a graph of possibilities. Your question is its first node, and the possibilities a
+conclusion passed over become the nodes below it, one level at a time.
+
 ```mermaid
 flowchart TD
-    Q(["Your question"]) --> P["Last Order drafts a plan"]
-    P -->|"you agree"| C["Sisters work their cards in parallel"]
-    C --> N["Last Order writes the conclusion"]
-    N --> R["A red-team Sister challenges it<br/>and digs out the paths it did not take"]
-    R --> A["Last Order answers every objection<br/>and fills every gap, revising where needed"]
-    A --> B{"Possibilities<br/>not taken?"}
-    B -->|"real alternatives"| P
-    B -->|"none left"| F["Report: a research article,<br/>reviewed before it is final"]
-    F --> O(["Final report with its sources"])
+    Q(["Your question"]) --> R
+    subgraph L0["level 0"]
+        R["the question as asked"]
+    end
+    subgraph L1["level 1: what its conclusion passed over"]
+        A["another hypothesis"]
+        B["another method"]
+        C["a critique of the question"]
+    end
+    subgraph L2["level 2"]
+        A1["a path A passed over"]
+        M["a question A and B both raise,<br/>researched once"]
+        J["B and C, joined where<br/>they reach the same place"]
+    end
+    R --> A & B & C
+    A --> A1
+    A & B --> M
+    B & C -.-> J
+    L2 --> F(["Report: a research article<br/>that surveys every node"])
 ```
 
-1. **Plan.** Last Order works out what the question really asks, gives each part to the Sister
-   whose specialty fits, and names a red team. You talk the plan over; she starts when you agree.
-2. **Cards.** Each assignment becomes a card. The Sisters work their cards in parallel and
-   record each finding with its source. Last Order can send them out again before she
-   concludes.
-3. **Red team.** Last Order writes the conclusion. The red-team Sister challenges it, then reads
-   it again for the possibilities it did not take and the gaps it left. Last Order answers every
-   objection and fills every gap inside the node; a revised conclusion goes back for review.
-4. **Branches.** Only real alternatives, resting on different premises, open as new research, one
-   level at a time. Alternatives that ask the same question become one branch, no possibility is
-   opened twice, and lines that arrive at the same place can be joined.
-5. **Report.** When every branch has concluded, Last Order surveys them all and drafts the answer
+1. **Every node is a piece of research.** Last Order plans it with you and starts when you agree.
+   The Sisters work their cards in parallel and record each finding with its source, and Last
+   Order writes the conclusion.
+2. **A red team reviews it.** A red-team Sister challenges the conclusion, then reads it again for
+   the possibilities it passed over and the gaps it left. Last Order answers every objection and
+   fills every gap inside the node; a revised conclusion goes back for review.
+3. **The graph grows.** Only real alternatives, resting on different premises, open as new nodes,
+   each with its own Last Order, Sisters and red team, level by level down to the depth you
+   choose. A question two lines raise is researched once, no possibility is opened twice, and
+   lines that reach the same place are joined, where they confront each other.
+4. **The report.** When every node has closed, Last Order surveys them all and writes the answer
    as a research article, with notes, a bibliography and appendices that record every line of
    inquiry, the costs the answer accepts and the paths not taken. An independent red team reviews
-   the draft, and she rules on each objection in the final report.
+   the draft, and Last Order rules on each objection in the final report.
 
 The [research guide](docs/guide/research.md) covers depth, parallelism, following a run and
 resuming it.

@@ -36,8 +36,9 @@ and try again.
 ## The panel
 
 **`The panel's terminal library (libghostty-vt) is not available ...`, and plain chat opens.**
-There is no panel build for this system. Everything works in plain chat, one agent at a time.
-If you build libghostty-vt yourself, point `MISAKA_GHOSTTY_VT` at it.
+The line below the message names the file MISAKA tried and why it would not load; usually there
+is no panel build for this system. Everything works in plain chat, one agent at a time. If you
+build libghostty-vt yourself, point `MISAKA_GHOSTTY_VT` at it.
 
 **`The panel could not start: ...`**
 The rest of the message says why. Meanwhile `misaka chat` opens plain chat with Last Order.
@@ -194,6 +195,16 @@ A terminal keeps the PATH it was opened with. Open a new terminal and run `misak
 
 **Shift+Enter sends the message instead of starting a new line.**
 The terminal did not report Shift with Enter. `ctrl+j` starts a new line everywhere.
+
+**`misaka update --apply` stops with `os error 32`.**
+Versions 0.18.1 and 0.18.2 cannot replace the `misaka.exe` they run from. The new version may
+already be installed; either way, close every MISAKA window and run `uv tool upgrade misaka`
+once. From 0.18.3 on, `misaka update --apply` works on Windows.
+
+**`misaka uninstall` says MISAKA is still running in another window.**
+Windows cannot remove a program or files that are in use. Close the windows it lists and run it
+again. The program goes once the command has exited, and what `uv` reported is written to the
+log file it names.
 
 ## Reporting a problem
 

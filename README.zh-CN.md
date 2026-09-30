@@ -10,64 +10,76 @@
 <p align="center">
   <a href="LICENSE"><img alt="Licence: Apache 2.0" src="https://img.shields.io/badge/licence-Apache_2.0-blue"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB">
-  <img alt="macOS and Linux" src="https://img.shields.io/badge/runs_on-macOS_%7C_Linux-555">
+  <img alt="macOS, Linux and Windows" src="https://img.shields.io/badge/runs_on-macOS_%7C_Linux_%7C_Windows-555">
 </p>
 
 <p align="center"><a href="README.md">English</a> · 简体中文 · <a href="README.ja.md">日本語</a></p>
 
-你提出一个问题。协调者 **Last Order**（最后之作）和你一起定下研究计划，再把各个部分交给 **Sisters**（妹妹们）：由你创建的专家 agent，在你的终端里并行工作。任何结论成立之前，都要先由一位红队 Sister 提出质疑，Last Order 逐条回应。结论没有走的路，会各自成为新的研究。最终报告写进你的项目文件夹，旁边就是它引用的每一份文件。
+你提出一个问题。协调者 **Last Order**（最后之作）和你一起定下研究计划，把各部分交给 **Sisters**（妹妹们），也就是由你创建的专家 agent。她们在你的终端里并行工作；每个结论都要经受红队的质疑，结论没有走的路会各自成为新的研究。最终报告以研究论文的形式写进你的项目文件夹，旁边就是它引用的每一份文件。
 
 <p align="center">
   <img src="assets/tui.png" alt="MISAKA 面板：左侧是空间、会话和 agent，右侧是 Last Order 的窗口" width="820">
 </p>
+
+<table>
+<tr><td><b>经得起红队的结论</b></td><td>每个结论都要面对一位红队 Sister 的质疑。Last Order 逐条作答并留有记录：修改结论、反驳异议，或承认这是答案要承担的代价。</td></tr>
+<tr><td><b>没走的路，也去走一遍</b></td><td>结论放下的假说、方法和读法会成为新的研究，各有自己的团队和红队。两条线都提出的问题只研究一次，殊途同归的线会汇合。</td></tr>
+<tr><td><b>打得开的证据</b></td><td>每条发现都写明出处和页码。每个结论旁边就放着它引用的文件，agent 能查到一段引文在第几页。</td></tr>
+<tr><td><b>论断各归其类</b></td><td>事实、推断、诠释和价值判断各自申明。证据分不出高下时，相互竞争的结论并列保留。</td></tr>
+<tr><td><b>不同头脑组成的团队</b></td><td>每位 Sister 都有自己的专长、技能和模型：Claude、GPT、Gemini，或你本机上的模型。Claude Code 和 Codex 也能作为队员加入，像 Sister 一样领任务卡。</td></tr>
+<tr><td><b>由你掌舵的研究</b></td><td>每份计划都等你点头，点头就是正常聊天。每个分支在面板里有自己的标签页，每个 agent 都在一个你随时能进去的窗格里。研究可以停下，再接着跑。</td></tr>
+<tr><td><b>学者的资料库</b></td><td>PDF、EPUB、DjVu 和 Office 文件按章节建立索引，扫描件用英文、中文和日文做 OCR。网页搜索不用配密钥，文献扫描能看出一个问题在学术史中的位置。</td></tr>
+<tr><td><b>团队共享的记忆</b></td><td>对话变长时会自动摘要，项目里的每个 agent 都能检索。</td></tr>
+</table>
 
 ## 快速开始
 
 ```sh
 uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misaka-Agent.git"
 
-mkdir my-research && cd my-research
+mkdir my-research
+cd my-research
 misaka setup     # 登录、选模型、创建最初的两位 Sister
 misaka           # 打开 MISAKA，输入 /research
 ```
 
-需要 macOS 或 Linux，装好 [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd) 和 poppler，以及一个模型服务商：API 密钥，或 ChatGPT、GitHub Copilot 的订阅。Claude 账号也能登录，这部分用量由 Anthropic 按 token 另计为额外用量。请从本仓库安装：PyPI 上的 `misaka` 是另一个无关的项目。
+需要 macOS、Linux 或 Windows（x86_64 或 arm64），装好 [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd) 和 poppler，以及一个模型服务商：API 密钥，或 ChatGPT、GitHub Copilot 的订阅。Claude 账号也能登录，这部分用量由 Anthropic 按 token 另计为额外用量。请从本仓库安装：PyPI 上的 `misaka` 是另一个无关的项目。
 
 [入门指南](docs/getting-started.zh-CN.md)会一步步带你装好，并跑通第一个研究问题。
-
-## 它能做什么
-
-- **团队由你组建。** 每位 Sister 有自己的专长（Last Order 据此分派任务），也有自己的技能、工具和模型：一位跑 Claude，一位跑 GPT，还有一位可以跑你本机上的模型。Claude Code 和 Codex 也能加入团队。
-- **研究会自我反驳。** 每个结论都要经过红队 Sister 的质疑，Last Order 逐条回应：修改结论、反驳异议，或者承认这是代价，全部留有记录。
-- **没走的路也会去走。** 结论没有采纳的假说、方法和读法，会成为研究的分支，各有自己的团队和红队，一直展开到你选定的深度。
-- **论断分门别类。** 事实、推断、诠释和价值判断各自申明。证据分不出高下时，相互竞争的结论并列保留。
-- **一路追溯到文件。** 每个节点都保留计划、每位 Sister 的工作、结论和对它的批评，并列出每一个被引用的文件，每个都能直接打开。
-- **始终由你做主。** 默认情况下，每份计划都等你点头，而点头就是正常聊天。每个分支都有自己的标签页，可以直接和它对话。研究可以停下，之后再接着跑。
-- **你的资料库和网络。** 可以索引 PDF、EPUB、DjVu、Word、Excel、PowerPoint 文件和笔记。agent 按章节或页码阅读，能查到一段引文在第几页。网页搜索不用配密钥也能用。
-- **长久的记忆。** 对话变长时会自动摘要，agent 仍能检索之前说过的话：她自己的对话，以及同一项目里正在进行的其他对话。
 
 ## 一次研究怎么进行
 
 > *计划写好啦！只要你点头，御坂御坂马上开工！御坂御坂双手捧着计划书说道。*
 
+一次研究是一张由各种可能组成的图。你的问题是第一个节点，结论放下的可能一层一层成为它下面的节点。
+
 ```mermaid
 flowchart TD
-    Q(["你的问题"]) --> P["Last Order<br/>起草计划"]
-    P -->|"你同意"| C["Sisters 并行<br/>处理任务卡"]
-    C --> N["Last Order<br/>写出结论"]
-    N --> R["红队 Sister<br/>提出质疑，<br/>找出没走的路"]
-    R --> A["Last Order<br/>逐条回应，<br/>补上缺口，<br/>有错就修改"]
-    A --> B{"还有没走的<br/>可能？"}
-    B -->|"真正不同的可能"| P
-    B -->|"没有了"| F["报告：<br/>一篇研究论文，<br/>审查后定稿"]
-    F --> O(["最终报告<br/>和它的出处"])
+    Q(["你的问题"]) --> R
+    subgraph L0["第 0 层"]
+        R["问题本身"]
+    end
+    subgraph L1["第 1 层：结论放下的可能"]
+        A["另一个假说"]
+        B["另一种方法"]
+        C["对问题本身的批判"]
+    end
+    subgraph L2["第 2 层"]
+        A1["A 放下的一条路"]
+        M["A 和 B 都提出的问题，<br/>只研究一次"]
+        J["B 与 C 殊途同归，<br/>在此汇合"]
+    end
+    R --> A & B & C
+    A --> A1
+    A & B --> M
+    B & C -.-> J
+    L2 --> F(["报告：一篇通读<br/>所有节点的研究论文"])
 ```
 
-1. **计划。** Last Order 先弄清这个问题到底在问什么，把每一部分交给专长对口的 Sister，并指定红队。你们商量计划，你同意后她才开工。
-2. **任务卡。** 每项任务变成一张卡。Sisters 并行处理，每一条发现都记下出处。下结论之前，Last Order 可以再派她们出去一轮。
-3. **红队。** Last Order 写出结论，红队 Sister 提出质疑，然后再读一遍，找出结论没有走的可能和它留下的缺口。Last Order 在本节点内逐条回应、补上每个缺口；修改后的结论再交回复审。
-4. **分支。** 只有前提不同的真正另一种可能，才会开成新的研究，一层一层展开。问同一个问题的可能合并成一个分支，同一个可能只开一次，殊途同归的几条线可以汇合。
-5. **报告。** 所有分支都得出结论后，Last Order 通读全部分支，把答案写成一篇研究论文：有注释、参考文献，附录记下每一条研究线索、答案承担的代价和没有走的路。草稿交独立红队审查，她再在最终报告里对每一条异议作出裁决。
+1. **每个节点都是一项完整的研究。** Last Order 和你商量计划，你同意后才开工。Sisters 并行处理任务卡，每条发现都记下出处，最后由 Last Order 写出结论。
+2. **红队审查。** 红队 Sister 质疑结论，再读一遍，找出它放下的可能和留下的缺口。Last Order 在本节点内逐条回应、补上缺口；修改后的结论再交回复审。
+3. **研究图一层层长出来。** 只有前提不同的真正另一种可能，才会开成新节点，各有自己的 Last Order、Sisters 和红队，一层一层展开到你选定的深度。两条线都提出的问题只研究一次，同一个可能只开一次，殊途同归的线会汇合，并在汇合处相互对质。
+4. **报告。** 所有节点都结束后，Last Order 通读全部节点，把答案写成一篇研究论文：有注释、参考文献，附录记下每一条研究线索、答案承担的代价和没有走的路。草稿交独立红队审查，Last Order 再在最终报告里对每一条异议作出裁决。
 
 深度、并发、跟进和恢复研究，见[研究指南](docs/guide/research.md)（英文）。
 
