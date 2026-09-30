@@ -114,6 +114,22 @@ def suppress_platform_ver_console() -> None:
         pass
 
 
+# MISAKA fork: not in Hermes, whose console shim it cannot help (its #88838/#89599).
+def release_launcher() -> None:
+    """Take the console-script launcher off ``sys.path``.
+
+    ``misaka.exe`` (uv's launcher, and pip's) runs itself as a zip archive holding only the
+    ``__main__.py`` that imported this package, so the ``.exe`` stays on ``sys.path``. The first
+    ``importlib.metadata`` lookup -- the version, read at startup -- then opens it as a zip and
+    caches it open for the life of the process, without delete sharing, and Windows will neither
+    rename nor replace an executable held that way: ``misaka update`` could not set it aside while
+    any ``misaka`` ran. Nothing more is imported from the archive once its ``__main__`` runs.
+    """
+    if _IS_WINDOWS:
+        sys.path[:] = [entry for entry in sys.path if not entry.lower().endswith(".exe")]
+
+
 apply_windows_utf8_bootstrap()
 enable_windows_vt()
 suppress_platform_ver_console()
+release_launcher()

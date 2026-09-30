@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import closing
 from pathlib import Path
@@ -139,11 +141,17 @@ def _program_command(install: update.Install) -> list[str] | None:
     return None
 
 
+def _writable_retry(function, path, _error) -> None:
+    """Windows will not delete a read-only file (git's objects are): clear the flag, try again."""
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
 def _remove(path: str) -> tuple[bool, str]:
     """Directories go whole; everything else is unlinked, sockets and lock files included."""
     try:
         if os.path.isdir(path) and not os.path.islink(path):
-            shutil.rmtree(path)
+            shutil.rmtree(path, onexc=_writable_retry if os.name == "nt" else None)
         elif os.path.lexists(path):
             os.unlink(path)
         else:
@@ -151,6 +159,76 @@ def _remove(path: str) -> tuple[bool, str]:
     except OSError as error:
         return False, str(error)
     return True, ""
+
+
+# -- Windows: it deletes neither a running program nor a file a process holds open ----------------
+
+def _this_install(exe: str | None) -> bool:
+    """Whether ``exe`` belongs to this install: its environment's interpreter, or a launcher."""
+    exe = os.path.normcase(exe or "")
+    return bool(exe) and (exe.startswith(os.path.normcase(sys.prefix) + os.sep)
+                          or exe in {os.path.normcase(str(path)) for path in update._launchers()})
+
+
+def _holders(*, daemon: bool) -> list[str]:
+    """Other processes running this install, as ``pid  command``: a ``misaka`` open in another
+    window, and with ``daemon`` the panel daemon too. Removing the program or the home under one
+    stops half-way on Windows and leaves a broken install, the reason Hermes refuses to update
+    over its own (``list_venv_holders``)."""
+    import psutil
+    mine = {os.getpid(), *(parent.pid for parent in psutil.Process().parents())}
+    found = {}
+    for proc in psutil.process_iter(["pid", "ppid", "exe", "cmdline"]):
+        command = " ".join(proc.info.get("cmdline") or [])
+        if proc.info["pid"] in mine or not _this_install(proc.info.get("exe")) or (
+                not daemon and "misaka.ui.panel.daemon" in command):
+            continue
+        found[proc.info["pid"]] = (proc.info["ppid"], command or proc.info.get("exe"))
+    # One line per window: a launcher's interpreter is listed under the launcher.
+    return [f"{pid}  {command}" for pid, (parent, command) in found.items() if parent not in found]
+
+
+def _release_own_files(root: Path) -> None:
+    """Close what this process holds open in the home: the log file every MISAKA process keeps."""
+    import logging
+    logger = logging.getLogger()
+    for handler in list(logger.handlers):
+        filename = getattr(handler, "baseFilename", None)
+        if filename and Path(filename).is_relative_to(root):
+            logger.removeHandler(handler)
+            handler.close()
+
+
+def _remove_after_exit(remover: list[str]) -> Path | None:
+    """Run ``remover`` once this command's processes have exited, since Windows will not delete
+    the program they run: a detached PowerShell waits for them, runs it and logs what it said,
+    the way Hermes's desktop app uninstalls through a detached cleanup script. The log's path, or
+    None when the helper could not start."""
+    import base64
+
+    import psutil
+    executable = shutil.which(remover[0])
+    if executable is None:
+        return None
+    waits = [os.getpid(), *(parent.pid for parent in psutil.Process().parents() if _this_install(parent.exe()))]
+    log = Path(tempfile.gettempdir()) / f"misaka-uninstall-{time.strftime('%Y%m%d-%H%M%S')}.log"
+
+    def quoted(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+    script = (f"Wait-Process -Id {','.join(map(str, waits))} -Timeout 120 -ErrorAction SilentlyContinue; "
+              f"& {quoted(executable)} {' '.join(quoted(arg) for arg in remover[1:])} 2>&1 "
+              f"| ForEach-Object {{ \"$_\" }} | Out-File -FilePath {quoted(str(log))} -Encoding utf8")
+    try:
+        # Its own hidden console, not DETACHED_PROCESS: PowerShell does not run without one. That
+        # console is also why closing this window does not stop it.
+        subprocess.Popen(                 # encoded, so nothing re-parses the script as a command line
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+             base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)  # windows-footgun: ok - Windows only
+    except OSError:
+        return None
+    return log
 
 
 def _choose(mode: str | None, assume_yes: bool) -> str | None:
@@ -244,6 +322,12 @@ def run(*, mode: str | None = None, assume_yes: bool = False, dry_run: bool = Fa
                       "Let research runs and cards finish, or stop them (`/research stop` in the run's Last Order",
                       "window). Then close the panel from a plain terminal with `misaka net stop`, and run this again.")
         return 2
+    others = _holders(daemon=False) if os.name == "nt" else []
+    if others:
+        ui.print_error("MISAKA is still running in another window:")
+        ui.print_info(*[f"    {line}" for line in others], "",
+                      "Windows cannot remove a program or files that are in use. Close those, then run this again.")
+        return 2
 
     try:
         mode = _choose(mode, assume_yes)
@@ -267,6 +351,16 @@ def run(*, mode: str | None = None, assume_yes: bool = False, dry_run: bool = Fa
         return 1
 
     update.stop_daemon()
+    if os.name == "nt":
+        deadline = time.monotonic() + 10
+        while (others := _holders(daemon=True)) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if others:
+            ui.print_error("These MISAKA processes did not exit; nothing was removed:")
+            ui.print_info(*[f"    {line}" for line in others])
+            return 1
+        if removes_data:
+            _release_own_files(root)
     failed = False
     if removes_data:
         for path in [*links, *derived, str(root)]:
@@ -284,6 +378,15 @@ def run(*, mode: str | None = None, assume_yes: bool = False, dry_run: bool = Fa
             else "remove it with the tool that installed it."))
         return 1 if failed else 0
     ui.print_info("", f"Removing the program: {' '.join(remover)}")
+    if os.name == "nt":
+        log = _remove_after_exit(remover)
+        if log is None:
+            ui.print_error(f"{remover[0]} could not be started after this command; the program is still installed.")
+            return 1
+        ui.print_success("MISAKA is uninstalled as soon as this command exits"
+                         + ("." if removes_data else f"; your data stays in {ui.tilde(str(root))}."))
+        ui.print_info(f"    What {remover[0]} reports goes to {ui.tilde(str(log))}.")
+        return 1 if failed else 0
     try:
         result = subprocess.run(remover, check=False)
     except OSError as error:

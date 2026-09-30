@@ -216,6 +216,9 @@ def _uninstall_setup(monkeypatch, *, blocking=(), panes=()):
     monkeypatch.setattr(update, "running_work", lambda: (list(blocking), list(panes)))
     monkeypatch.setattr(update, "stop_daemon", lambda: None)
     monkeypatch.setattr(uninstall.subprocess, "run", lambda command, check=False: ran.append(command) or SimpleNamespace(returncode=0))
+    # Windows: no other process of this install, and the program goes after this one exits.
+    monkeypatch.setattr(uninstall, "_holders", lambda *, daemon: [])
+    monkeypatch.setattr(uninstall, "_remove_after_exit", lambda command: ran.append(command) or Path("uninstall.log"))
     return ran
 
 

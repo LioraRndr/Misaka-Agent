@@ -781,11 +781,13 @@ def main(argv=None):
                 if setup.run() != 0:
                     return 1
             from misaka.ui.panel import ghostty
-            if ghostty.unavailable():
+            if reason := ghostty.unavailable():
                 # The panel's terminal emulator is a prebuilt library; a platform without a
                 # build it can load (a musl system, an unusual architecture) still gets plain chat.
+                # The reason names the file and the loader's error: the chat redraws over this line
+                # at once, so it is often read from a screenshot of the scrollback.
                 print("The panel's terminal library (libghostty-vt) is not available on this system; "
-                      "opening plain chat. See `misaka setup environment`.", file=sys.stderr)
+                      f"opening plain chat. See `misaka setup environment`.\n  {reason}", file=sys.stderr)
                 interactive = False
         argv = ["panel"] if interactive else ["chat"]
     if argv[0] == "auth":

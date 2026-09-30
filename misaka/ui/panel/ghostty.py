@@ -18,6 +18,7 @@ import ctypes
 import os
 import platform
 import sys
+import sysconfig
 from ctypes import (
     CFUNCTYPE,
     POINTER,
@@ -201,14 +202,19 @@ def unavailable():
 
 def library_path():
     """Where the library is looked for: ``MISAKA_GHOSTTY_VT``, else the package's ``lib`` dir,
-    which ships one build per platform (``libghostty-vt-<os>-<arch>.<ext>``: macOS and Linux,
-    arm64 and x86_64; Windows x86_64). A build named without the platform is accepted as a fallback."""
+    which ships one build per platform (``libghostty-vt-<os>-<arch>.<ext>``: macOS, Linux and
+    Windows, arm64 and x86_64). A build named without the platform is accepted as a fallback."""
     override = os.environ.get("MISAKA_GHOSTTY_VT")
     if override:
         return override
     folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
     system, suffix = {"darwin": ("darwin", ".dylib"), "win32": ("windows", ".dll")}.get(sys.platform, ("linux", ".so"))
     machine = platform.machine().lower()
+    if sys.platform == "win32":
+        # The interpreter's architecture, not the CPU's: platform.machine() asks WMI for the CPU
+        # (3.12+), and an x64 Python emulated on ARM64 Windows (Parallels on a Mac) can load only
+        # an x64 library. win-amd64 / win-arm64.
+        machine = sysconfig.get_platform().rpartition("-")[2]
     arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(machine, machine)
     specific = os.path.join(folder, f"libghostty-vt-{system}-{arch}{suffix}")
     generic = os.path.join(folder, "libghostty-vt" + suffix)

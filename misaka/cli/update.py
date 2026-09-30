@@ -21,6 +21,7 @@ environment they manage.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -359,17 +360,74 @@ def _starts() -> str | None:
     return lines[-1] if lines else f"exit {result.returncode}"
 
 
+def _launchers() -> list[Path]:
+    """Windows: the ``misaka.exe`` launchers an upgrade rewrites and a running ``misaka`` holds
+    open -- the ones uv's receipt lists (a panel open in another window runs those too) and the
+    one this command was started through."""
+    import tomllib
+
+    import psutil
+    found: set[Path] = set()
+    try:
+        receipt = tomllib.loads((Path(sys.prefix) / "uv-receipt.toml").read_text(encoding="utf-8-sig"))
+        found.update(Path(entry["install-path"]) for entry in receipt["tool"].get("entrypoints", []))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    try:
+        found.update(Path(parent.exe()) for parent in psutil.Process().parents()
+                     if parent.name().lower() == "misaka.exe")
+    except psutil.Error:
+        pass
+    return sorted(path for path in found if path.is_file())
+
+
+def _set_aside(launchers: list[Path]) -> list[tuple[Path, Path]]:
+    """Rename each launcher out of the way, so the upgrade can write its replacement.
+
+    Windows will not overwrite a running executable, and uv then fails on the entrypoint after the
+    package itself has been replaced; it will rename one, which is how uv's own self-update gets
+    past the same lock (the self-replace crate). A launcher an earlier update set aside goes now,
+    unless something still runs it."""
+    moved = []
+    for launcher in launchers:
+        for stale in launcher.parent.glob(f"{launcher.name}.*.old"):
+            with contextlib.suppress(OSError):
+                stale.unlink()
+        aside = launcher.with_name(f"{launcher.name}.{os.getpid()}.old")
+        try:
+            launcher.rename(aside)
+        except OSError:
+            continue
+        moved.append((launcher, aside))
+    return moved
+
+
+def _put_back(moved: list[tuple[Path, Path]]) -> None:
+    """Drop each launcher the upgrade replaced, or restore the one it did not write (an upgrade
+    that failed first, or had nothing to do). One still running stays set aside until next time."""
+    for launcher, aside in moved:
+        with contextlib.suppress(OSError):
+            if launcher.exists():
+                aside.unlink()
+            else:
+                aside.rename(launcher)
+
+
 def _run_all(commands: list[list[str]], cwd: Path | None) -> str | None:
     """Run each command in turn; the first failure, or None."""
-    for command in commands:
-        ui.print_info(ui.color("  " + shlex.join(command), ui.DIM))
-        try:
-            result = subprocess.run(command, cwd=str(cwd) if cwd else None, check=False)
-        except OSError as error:
-            return f"{command[0]} could not start: {error}"
-        if result.returncode != 0:
-            return f"{command[0]} exited with {result.returncode}"
-    return None
+    moved = _set_aside(_launchers()) if os.name == "nt" else []
+    try:
+        for command in commands:
+            ui.print_info(ui.color("  " + shlex.join(command), ui.DIM))
+            try:
+                result = subprocess.run(command, cwd=str(cwd) if cwd else None, check=False)
+            except OSError as error:
+                return f"{command[0]} could not start: {error}"
+            if result.returncode != 0:
+                return f"{command[0]} exited with {result.returncode}"
+        return None
+    finally:
+        _put_back(moved)
 
 
 def _restore_command(install: Install) -> str:
@@ -394,7 +452,7 @@ def _report(install: Install, state: dict | None, behind: int | None) -> None:
     if install.path:
         ui.print_check(True, "source", ui.tilde(str(install.path)))
     if install.commit:
-        ui.print_check(True, "pinned commit", install.commit[:12])
+        ui.print_check(True, "installed commit", install.commit[:12])
     if state and state.get("head"):
         ui.print_check(True, "checkout head", state["head"][:12] + ("   (uncommitted changes)" if state.get("dirty") else ""))
     if install.kind != "checkout":
