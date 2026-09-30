@@ -280,7 +280,8 @@ When every node has closed, Last Order writes the report in four steps:
    conclusion, what each revision changed, the objections and what became of them, the
    corrections, the possibilities it raised, and what the nodes after it found;
 2. **a draft** answer to your question;
-3. **an independent review** of the draft by the red team;
+3. **an independent review** of the draft by the red team, which also checks that it stays
+   faithful to the research;
 4. **the final report**, where Last Order accepts, rejects or leaves open each objection with her
    reasons, and revises the draft where the review holds.
 
@@ -301,6 +302,15 @@ title; the apparatus carries the rest:
   downloaded;
 - **Appendix IV, the review**: which objections changed the answer, which were rejected and why,
   and which remain unsettled.
+
+The article is built from the research itself. Its theses, its arguments and the links between
+lines come from the nodes' conclusions, what each did with its objections, and the decisions,
+joins and relations that connect them, and Last Order argues every link she draws from those
+materials. Where the findings of different lines bear on one another, she weaves them into one
+argument; where their premises cannot be reconciled, the positions stay apart and the article
+says where they part. The materials may hold positions far from received opinion: the article
+keeps them as the research found them, and checks their facts against sources. Anything she
+retrieves while writing that changes a conclusion is disclosed.
 
 If a node concluded that your question itself dissolves, Last Order asks you before drafting.
 With your agreement, the report answers with the dissolution; otherwise it answers the question

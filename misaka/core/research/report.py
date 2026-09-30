@@ -43,12 +43,36 @@ displacing another -- record it with `misaka_research_relate`; relations join th
 Begin the section with a heading naming the node.
 """
 
-DRAFT_CONTRACT = """# Adjudication draft — not delivered; awaiting independent red-team review
+DRAFT_CONTRACT = """# Report draft — not delivered; awaiting independent red-team review
 Draft the answer to the original research question. The planning-stage prohibition on answering
 is lifted. This is a working draft: an independent red team reviews it before you adjudicate its objections. The
 survey is your map of every line of inquiry, one section each: read it whole first (`doc_outline` lists its
 sections), then the conclusions and critiques it points to, and the sources behind them, where the answer turns on them.
 The ledger records declarations, not machine-certified truths.
+
+## What this stage is
+The research has formed its conclusions; this stage brings them to articulation. Draw the article's theses,
+arguments and connections out of the run's materials -- the lines' conclusions, what each revised, rebutted or
+conceded under critique, the decisions, joins and relations between them, the errata -- and argue every connection
+you draw from them, including those the graph does not record. Judge as a scholar judges a body of evidence: whether
+claims are supported, whether findings bear on one another, whether positions can be reconciled. Do not overturn or
+reweigh a line's conclusion on your own authority; that takes evidence, disclosed as retrieved here. Keep what the
+research established distinct in the prose from what the article infers in bringing it together.
+
+## The materials and what you already know
+The materials may hold knowledge you lack and positions far from received opinion. Divergence from consensus is not
+an error: do not normalise such positions or soften them toward the mainstream. Nor is a claim true for being in the
+materials. Use what you know as a check on facts -- dates, figures, names, attributions, whether a work exists -- not
+as a verdict on interpretations. Where the materials and what you know conflict on a fact, verify it against sources;
+if it cannot be settled, state the conflict rather than choose silently. Background knowledge that informs the
+exposition is marked as such and cites no work the run did not read.
+
+## Integration
+Integrate; do not catalogue. Build the argument from how the findings bear on one another -- how a line answers the
+conclusion it departed from, how a join confronted its parents, where lines converge, diverge or displace one
+another, which evidence and premises they share -- so that each finding does work in the argument instead of
+standing in a list of results. Where premises are irreconcilable, keep the positions distinct and state precisely
+where and why they part: do not average them, and do not present incompatible claims as jointly true.
 
 ## The reader and the form
 Write for a reader of the humanities and social sciences: a research article in the language of the question, argued
@@ -76,9 +100,11 @@ reading. What the run produced and read is the article's material: none of it is
 
 ## Judgement
 Do not vote or let a majority erase a minority view. Distinguish empirical claims, causal explanations, interpretations,
-and normative premises. Across lines, examine differences in definitions, scope, period and method before resolving a
-disagreement. Give a direct answer, the strongest competing accounts, evidentiary limits, unresolved questions, and what
-would change the answer. Depth limits describe execution, not whether an objection is correct. Distinguish independent
+and normative premises. Where lines disagree, examine differences in definitions, scope, period and method before
+judging whether the disagreement is real; resolve it only where the evidence decides it, and otherwise keep it
+standing. Give a direct answer grounded in the research -- conditional on its premises where lines rest on different
+ones -- with the strongest competing accounts, evidentiary limits, unresolved questions, and what would change the
+answer. Depth limits describe execution, not whether an objection is correct. Distinguish independent
 support from repeated reliance on the same sources or premises; retain material qualifications and counterevidence when
 combining conclusions. Read relevant available Skills when useful for these checks.
 Where the research showed a question rests on a confusion or an ideological presupposition, give the dissolution -- a
@@ -88,7 +114,8 @@ dissolution as one reading, with its grounds.
 
 ## Retrieval
 You may retrieve material needed to verify or compare the submitted evidence; preserve it in the workspace and identify
-its source and path so the red team can read it. Do not turn this draft into an undisclosed new research assignment;
+its source and path so the red team can read it. Evidence retrieved here that changes a line's conclusion is disclosed
+as such, so the red team can weigh it. Do not turn this draft into an undisclosed new research assignment;
 identify substantial unfilled evidence needs as limits. Do not force interpretation or normative reasoning into a
 verbatim quotation. Do not hide corrections or unsupported leaps behind reference markers.
 """ + planner.SOURCES_FOOTER
@@ -96,7 +123,8 @@ verbatim quotation. Do not hide corrections or unsupported leaps behind referenc
 FINAL_CONTRACT = """# Final report — adjudicate the independent review of the draft
 Adjudicate the independent red team's review of the saved report draft. The planning-stage prohibition on answering is
 lifted. Read the full draft, the review, and the sources relevant to each objection. Criticism is not a verdict: accept,
-reject, or retain disagreement on each substantive objection, explaining why. A missing source, interpretive conflict,
+reject, or retain disagreement on each substantive objection, explaining why. The measure is fidelity to the research
+and to the evidence, not a prior view of the question. A missing source, interpretive conflict,
 or normative disagreement is not automatically a factual error. Do not rank views by vote or authority. After accepting
 a correction, recheck affected passages and the conclusion; preserve independently supported content.
 
@@ -323,6 +351,11 @@ Do not infer that a claim is false merely because a number or wording is absent 
 objections also require reasons and may be wrong. Where relevant, trace cross-branch concept drift or shared
 unsupported premises to the affected draft passages. Compare the draft against node records for lost qualifications,
 counterevidence or conflated explanations; read relevant available Skills as needed.
+Check fidelity: every thesis, argument and connection is argued from the run's materials or from evidence retrieved
+and disclosed here. Flag conclusions overturned or reweighed without such evidence; positions normalised toward
+received opinion; doubtful facts accepted for being in the materials; background knowledge presented as the run's
+finding or cited to a work the run did not read; lines catalogued where their findings bear on one another;
+incompatible positions merged or presented as jointly true.
 Check completeness against the catalog below: Appendix I lists every node, and each line's final conclusion is argued
 in the body, not only listed; a line missing from either, or a conclusion the body misstates, is a material issue.
 Check the form: the body is written for a reader -- run vocabulary, ids and file paths belong in the notes and appendices.
