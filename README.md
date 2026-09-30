@@ -62,28 +62,9 @@ question.
 A run is a graph of possibilities. Your question is its first node, and the possibilities a
 conclusion passed over become the nodes below it, one level at a time.
 
-```mermaid
-flowchart TD
-    Q(["Your question"]) --> R
-    subgraph L0["level 0"]
-        R["the question as asked"]
-    end
-    subgraph L1["level 1: what its conclusion passed over"]
-        A["another hypothesis"]
-        B["another method"]
-        C["a critique of the question"]
-    end
-    subgraph L2["level 2"]
-        A1["a path A passed over"]
-        M["a question A and B both raise,<br/>researched once"]
-        J["B and C, joined where<br/>they reach the same place"]
-    end
-    R --> A & B & C
-    A --> A1
-    A & B --> M
-    B & C -.-> J
-    L2 --> F(["Report: a research article<br/>that surveys every node"])
-```
+<p align="center">
+  <img src="assets/research-graph.svg" alt="A research run as a graph: your question; at level 1, another hypothesis, another method and a critique of the question; at level 2, a path one of them passed over, a question two lines raised and researched once, and two lines joined where they meet; then the report" width="820">
+</p>
 
 1. **Every node is a piece of research.** Last Order plans it with you and starts when you agree.
    The Sisters work their cards in parallel and record each finding with its source, and Last

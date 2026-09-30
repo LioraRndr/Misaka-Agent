@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 290" width="820" height="290" role="img" aria-label="A research run as a graph of possibilities">
+<title>A research run as a graph of possibilities</title>
+<style>
+.e{fill:none;stroke:#afb8c1;stroke-width:1.5;stroke-linecap:round}
+.j{stroke-dasharray:3 5}
+.n{fill:#8c959f}.k{fill:#cb3862}
+.t{font:13px -apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;Helvetica Neue&quot;,Arial,&quot;PingFang SC&quot;,&quot;Hiragino Sans&quot;,&quot;Noto Sans CJK SC&quot;,&quot;Microsoft YaHei&quot;,sans-serif;fill:#59636e;text-anchor:middle}
+.c{font:600 10.5px -apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,&quot;Helvetica Neue&quot;,Arial,&quot;PingFang SC&quot;,&quot;Hiragino Sans&quot;,&quot;Noto Sans CJK SC&quot;,&quot;Microsoft YaHei&quot;,sans-serif;letter-spacing:.12em;fill:#9aa3ad;text-anchor:middle}
+.h{fill:none;stroke:#cb3862;stroke-width:1.5;opacity:.35}
+@media (prefers-color-scheme:dark){.e{stroke:#3d444d}.n{fill:#656c76}.t{fill:#9198a1}.c{fill:#656c76}}
+</style>
+<text class="c" x="70" y="14">LEVEL 0</text>
+<text class="c" x="300" y="14">LEVEL 1</text>
+<text class="c" x="530" y="14">LEVEL 2</text>
+<path class="e" d="M70,150 C185.0,150 185.0,62 300,62"/>
+<path class="e" d="M70,150 C185.0,150 185.0,150 300,150"/>
+<path class="e" d="M70,150 C185.0,150 185.0,238 300,238"/>
+<path class="e" d="M300,62 C415.0,62 415.0,44 530,44"/>
+<path class="e" d="M300,62 C415.0,62 415.0,132 530,132"/>
+<path class="e" d="M300,150 C415.0,150 415.0,132 530,132"/>
+<path class="e j" d="M300,150 C415.0,150 415.0,222 530,222"/>
+<path class="e j" d="M300,238 C415.0,238 415.0,222 530,222"/>
+<path class="e" d="M530,44 C640.0,44 640.0,150 750,150"/>
+<path class="e" d="M530,132 C640.0,132 640.0,150 750,150"/>
+<path class="e" d="M530,222 C640.0,222 640.0,150 750,150"/>
+<circle class="h" cx="70" cy="150" r="11"/>
+<circle class="k" cx="70" cy="150" r="6"/>
+<text class="t" x="70" y="177">your question</text>
+<circle class="n" cx="300" cy="62" r="4.5"/>
+<text class="t" x="300" y="89">another hypothesis</text>
+<circle class="n" cx="300" cy="150" r="4.5"/>
+<text class="t" x="300" y="177">another method</text>
+<circle class="n" cx="300" cy="238" r="4.5"/>
+<text class="t" x="300" y="265">a critique of the question</text>
+<circle class="n" cx="530" cy="44" r="4.5"/>
+<text class="t" x="530" y="71">a path it passed over</text>
+<circle class="n" cx="530" cy="132" r="4.5"/>
+<text class="t" x="530" y="159">raised twice, researched once</text>
+<circle class="n" cx="530" cy="222" r="4.5"/>
+<text class="t" x="530" y="249">two lines joined where they meet</text>
+<circle class="h" cx="750" cy="150" r="11"/>
+<circle class="k" cx="750" cy="150" r="6"/>
+<text class="t" x="750" y="177">the report</text>
+</svg>
