@@ -78,8 +78,12 @@ def _spawn_and_wait(timeout):
             [sys.executable, "-u", "-m", "misaka.ui.panel.daemon"],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             start_new_session=True,
-            # Windows: no console to share with the panel's terminal (herdr detach_server_daemon_command).
-            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+            # Windows: not the panel's terminal. herdr detaches its one native binary
+            # (detach_server_daemon_command); this interpreter starts through the venv's launcher,
+            # and the python it spawns would get a console window of its own, left open on the
+            # desktop. A console with no window (herdr's CREATE_NO_WINDOW for background commands)
+            # is shared down that chain instead, and by everything the daemon runs.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         # Reap our child without tying its lifetime to this client or holding up a reply.
         threading.Thread(target=process.wait, daemon=True).start()

@@ -1,6 +1,7 @@
 """受控下载工具:字节上限、类型校验、文件名消毒、私网拒绝。全程不联网。"""
 from __future__ import annotations
 
+import errno
 import functools
 import hashlib
 import os
@@ -210,6 +211,23 @@ async def test_second_download_of_the_same_name_does_not_overwrite(serve, worksp
     assert (workspace / "downloads" / "paper.pdf").read_bytes() == PDF
     assert (workspace / "downloads" / "paper-1.pdf").read_bytes() == other
     assert result.details["sha256"] == hashlib.sha256(other).hexdigest()
+
+
+async def test_a_folder_without_hard_links_still_gets_the_download_and_keeps_the_first(serve, workspace, monkeypatch):
+    """exFAT or a network share refuses the link; the file still lands, never over an existing one."""
+    def refused(_source, _target):
+        raise OSError(errno.EOPNOTSUPP, "hard links are not supported here")
+
+    monkeypatch.setattr(download_file.os, "link", refused)
+    serve(_static(PDF))
+    await _run(workspace)
+    other = b"%PDF-1.7\n" + b"z" * 40
+    serve(_static(other))
+    await _run(workspace)
+
+    assert _downloads(workspace) == ["paper-1.pdf", "paper.pdf"]
+    assert (workspace / "downloads" / "paper.pdf").read_bytes() == PDF
+    assert (workspace / "downloads" / "paper-1.pdf").read_bytes() == other
 
 
 async def test_abort_mid_stream_deletes_the_partial_file(serve, workspace):

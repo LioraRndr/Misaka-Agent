@@ -37,6 +37,10 @@ def write_bytes(path, data, *, mode=None):
             if resolved_mode is not None:
                 os.chmod(tmp, resolved_mode)
             os.fsync(f.fileno())
+        if os.name == "nt" and os.path.isfile(path) and not os.path.islink(path):
+            # Windows will not replace a read-only file, which POSIX does whenever the directory
+            # lets it (a sealed skill manifest is 0o444): clear the flag; the new file keeps its own.
+            os.chmod(path, stat.S_IMODE(os.stat(path).st_mode) | stat.S_IWRITE)
         os.replace(tmp, path)
         try:
             directory_fd = os.open(parent or ".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))

@@ -79,7 +79,10 @@ def place(src, dst):
         os.link(src, dst)
         return False
     except OSError as error:
-        if error.errno not in {errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP}:
+        # Windows says the same (exFAT, some network shares) as ERROR_INVALID_FUNCTION or
+        # ERROR_NOT_SUPPORTED, which both read as EINVAL.
+        if (error.errno not in {errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP}
+                and getattr(error, "winerror", None) not in (1, 50)):
             raise
     # Never open an existing destination for writing: it may link to another original.
     out = open(dst, "xb")  # noqa: SIM115 - an existing target must stay outside failure cleanup

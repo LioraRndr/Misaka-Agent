@@ -21,6 +21,7 @@ OCR'd -- the refusal is reported and the file stays.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import mimetypes
 import os
@@ -253,6 +254,19 @@ def _publish(part: str, directory: str, name: str) -> str:
             os.link(part, path)
         except FileExistsError:
             continue
+        except OSError as error:
+            # A filesystem without hard links (exFAT, a network share; on Windows
+            # ERROR_INVALID_FUNCTION or ERROR_NOT_SUPPORTED): claim the name exclusively, then
+            # move the finished file onto that claim -- still never over an existing download.
+            if (error.errno not in {errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP}
+                    and getattr(error, "winerror", None) not in (1, 50)):
+                raise
+            try:
+                os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
+            except FileExistsError:
+                continue
+            os.replace(part, path)
+            return path
         _discard(part)
         return path
     raise _Refused(f"Could not find a free filename for {name} after {_MAX_COLLISIONS} tries.")

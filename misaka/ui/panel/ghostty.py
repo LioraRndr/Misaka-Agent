@@ -157,7 +157,9 @@ CURSOR_STYLE_BAR, CURSOR_STYLE_BLOCK, CURSOR_STYLE_UNDERLINE, CURSOR_STYLE_BLOCK
 RS_OPTION_DIRTY, ROW_OPTION_DIRTY = 0, 0
 ROW_DIRTY, ROW_CELLS = 1, 3
 CELLS_RAW, CELLS_STYLE, CELLS_HAS_STYLING, CELLS_UTF8 = 1, 2, 8, 9
-CELL_WIDE = 3
+CELL_CONTENT_TAG, CELL_WIDE, CELL_COLOR_PALETTE, CELL_COLOR_RGB = 2, 3, 10, 11
+# screen.h GhosttyCellContentTag: a cell with no text can still carry a background colour
+CONTENT_BG_COLOR_PALETTE, CONTENT_BG_COLOR_RGB = 2, 3
 WIDE_NARROW, WIDE_WIDE, WIDE_SPACER_TAIL, WIDE_SPACER_HEAD = 0, 1, 2, 3
 SCROLL_TOP, SCROLL_BOTTOM, SCROLL_DELTA, SCROLL_ROW = 0, 1, 2, 3
 POINT_SCREEN = 2
@@ -293,6 +295,24 @@ def _colour(style_colour):
 
 
 PLAIN = (None, None, False, False, False, False, False, False, False)
+
+
+def _content_bg(lib, raw):
+    """herdr ``RowCellIter::content_bg_color``: the background a cell holds without any style.
+
+    An erase under a background colour (``CSI K``/``CSI J`` with one set, which ConPTY emits in
+    place of a line's trailing blanks) leaves its cells that way; read through the style alone,
+    they drew with no background at all."""
+    tag = c_int()
+    if lib.ghostty_cell_get(raw, CELL_CONTENT_TAG, byref(tag)) != 0:
+        return None
+    if tag.value == CONTENT_BG_COLOR_PALETTE:
+        index = c_uint8()
+        return index.value if lib.ghostty_cell_get(raw, CELL_COLOR_PALETTE, byref(index)) == 0 else None
+    if tag.value == CONTENT_BG_COLOR_RGB:
+        rgb = Rgb()
+        return (rgb.r, rgb.g, rgb.b) if lib.ghostty_cell_get(raw, CELL_COLOR_RGB, byref(rgb)) == 0 else None
+    return None
 
 
 def _style_tuple(style):
@@ -637,6 +657,10 @@ class RenderState:
                         cell_style = _style_tuple(style)
                     else:
                         cell_style = PLAIN
+                    # herdr ghostty_cell_style: the cell's own background first, then the style's.
+                    # Only a cell without text can hold one, so a text cell skips the lookup.
+                    if not utf8.len and (background := _content_bg(lib, raw.value)) is not None:
+                        cell_style = (cell_style[0], background, *cell_style[2:])
                     out.append((text, 2 if wide.value == WIDE_WIDE else 1, cell_style))
                 if dirty.value:
                     lib.ghostty_render_state_row_set(rows, ROW_OPTION_DIRTY, byref(clean))
