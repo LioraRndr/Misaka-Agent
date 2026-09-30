@@ -1,7 +1,6 @@
 """Skill commands use the real prompt/queue/transcript path; only the model is offline."""
 import asyncio
 import os
-import socket
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -18,6 +17,7 @@ from misaka.core.settings_manager import SettingsManager
 from misaka.core.skills.wiring.skills import SkillsPart
 from misaka.ui.tui.interactive.interactive_mode import InteractiveMode
 from misaka.utils.values import read_field
+from tests.offline import refuse_network
 
 
 def text_of(message):
@@ -40,20 +40,17 @@ async def host(tmp_path, monkeypatch):
     monkeypatch.setitem(CFG, 'roles_root', str(tmp_path / 'profiles'))
     monkeypatch.setitem(CFG, 'profiles_root', str(tmp_path / 'profiles' / 'sisters'))
 
-    def no_network(*_args, **_kwargs):
-        raise AssertionError('Offline skill test attempted a network connection')
-    monkeypatch.setattr(socket.socket, 'connect', no_network)
-    monkeypatch.setattr(socket, 'create_connection', no_network)
+    refuse_network(monkeypatch, 'Offline skill test attempted a network connection')
     profile = tmp_path / 'profile'
     root = profile / 'skills'
     for name in ('agent-reach', 'second'):
         folder = root / name
         folder.mkdir(parents=True)
         (folder / 'SKILL.md').write_text(
-            f'---\nname: {name}\ndescription: Fixture skill.\n---\nFixture body for {name}.\n')
+            f'---\nname: {name}\ndescription: Fixture skill.\n---\nFixture body for {name}.\n', encoding='utf-8')
     bundles = profile / 'skill-bundles'
     bundles.mkdir()
-    (bundles / 'combo.yaml').write_text('name: combo\ndescription: Fixture bundle.\nskills:\n  - agent-reach\n  - second\n')
+    (bundles / 'combo.yaml').write_text('name: combo\ndescription: Fixture bundle.\nskills:\n  - agent-reach\n  - second\n', encoding='utf-8')
     part = SkillsPart([('role', str(root))], str(profile), str(tmp_path), kind='bare')
     loader = DefaultResourceLoader({'cwd': str(tmp_path), 'agentDir': str(tmp_path / 'agent'),
         'noExtensions': True, 'noPromptTemplates': True, 'noThemes': True})

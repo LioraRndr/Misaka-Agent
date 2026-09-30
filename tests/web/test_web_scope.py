@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -177,7 +178,7 @@ async def test_profile_policy_and_private_url_flag_reach_direct_and_vendor_tools
     left, right = part(tmp_path / "left"), part(tmp_path / "right")
     write(tmp_path / "left" / "web.json", allow_private_urls=True,
           website_blocklist={"enabled": True, "shared_files": ["blocked.txt"]})
-    (tmp_path / "left" / "blocked.txt").write_text("blocked.example\n")
+    (tmp_path / "left" / "blocked.txt").write_text("blocked.example\n", encoding="utf-8")
 
     async def inspect(expected):
         assert allow_private_urls() is expected
@@ -268,13 +269,14 @@ def test_config_transaction_preserves_concurrent_writes_and_invalid_documents(tm
     with ThreadPoolExecutor(max_workers=6) as workers:
         list(workers.map(lambda index: config.set_config(f"env.VENDOR_{index}_API_KEY", str(index)), range(18)))
     assert len(config.web_config()["env"]) == 18
-    assert stat.S_IMODE(home.path("env").stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(home.path("env").stat().st_mode) == 0o600
     # A malformed file refuses the writes that target it and is left as it is.
     for path, key in ((home.path("env"), "env.VENDOR_1_API_KEY"), (home.path("settings"), "backend")):
-        path.write_text("{malformed original")
+        path.write_text("{malformed original", encoding="utf-8")
         with pytest.raises(ValueError):
             config.set_config(key, "exa")
-        assert path.read_text() == "{malformed original"
+        assert path.read_text(encoding="utf-8") == "{malformed original"
         path.unlink()
 
 
@@ -461,7 +463,7 @@ def plugin_file(path, marker):
         "def default(api):\n"
         f"    marker = Path({str(marker)!r})\n"
         "    marker.write_text(str(int(marker.read_text()) + 1) if marker.exists() else '1')\n"
-        "    api.registerWebSearchProvider(Custom())\n"
+        "    api.registerWebSearchProvider(Custom())\n", encoding="utf-8"
     )
 
 
@@ -470,7 +472,7 @@ def test_cli_discovers_explicit_plugin_once_and_does_not_leak_it(tmp_path, capsy
     plugin_file(path, marker)
     app.main(["web", "providers", "--extension", str(path)])
     assert "external: search" in capsys.readouterr().out
-    assert marker.read_text() == "1"  # Trust bootstrap and final load share one factory.
+    assert marker.read_text(encoding="utf-8") == "1"  # Trust bootstrap and final load share one factory.
     assert registry.get_provider("external") is None
     app.main(["web", "setup", "external", "--extension", str(path), "--yes"])
     assert config.config_name("search_backend") == "external"
@@ -491,7 +493,7 @@ def test_cli_project_extension_requires_explicit_selection_even_when_trusted(tmp
     assert not marker.exists()  # MISAKA deliberately does not auto-execute project Python.
     assert "external: search" not in capsys.readouterr().out
     app.main(["web", "providers", "--extension", str(path)])
-    assert marker.read_text() == "1"
+    assert marker.read_text(encoding="utf-8") == "1"
     assert "external: search" in capsys.readouterr().out
 
 

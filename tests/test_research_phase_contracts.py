@@ -293,7 +293,7 @@ async def test_only_a_divergence_card_records_alternatives_and_it_must(tmp_path,
         tid, out, note = _running_card(tmp_path, con, monkeypatch, "divergence")
         with pytest.raises(ValueError, match="red-team card"):
             await note.execute("c", {"text": "x", "issues": []}, None, None, None)
-        Path(out, "review.md").write_text("# Alternatives\n")
+        Path(out, "review.md").write_text("# Alternatives\n", encoding="utf-8")
         with pytest.raises(worker.IncompleteSubmission, match="alternatives"):
             worker.build_submission(con, tasks.get(con, tid), "done")
         await note.execute("c", {"text": "proposals", "alternatives": [ALTERNATIVE]}, None, None, None)
@@ -314,7 +314,7 @@ async def test_review_records_survive_acceptance_and_reach_their_node(tmp_path, 
         with closing(tasks.connect(str(tmp_path / f"{kind}.db"))) as con:
             tid, out, note = _running_card(tmp_path / kind, con, monkeypatch, kind)
             await note.execute("c", {"text": "recorded", **record}, None, None, None)
-            Path(out, "review.md").write_text("# Review\n")
+            Path(out, "review.md").write_text("# Review\n", encoding="utf-8")
             row = tasks.get(con, tid)
             prepared = dispatch.prepare_submission(row, worker.build_submission(con, row, "done"))
             assert dispatch.accept_state(con, row, prepared, generation=1, claim_lock="lock1")
@@ -352,7 +352,7 @@ async def test_a_finding_sent_in_the_wrong_shape_is_refused_not_dropped(tmp_path
             == "Logged on the card; nothing declared."
         with pytest.raises(pydantic.ValidationError, match="page_number"):
             await note.execute("c", {"text": "x", "findings": [{"text": "y", "page_number": 3}]}, None, None, None)
-        Path(out, "review.md").write_text("# Fleet\n")
+        Path(out, "review.md").write_text("# Fleet\n", encoding="utf-8")
         submission = worker.build_submission(con, tasks.get(con, tid), "done")
         assert submission["findings"][0]["quote"] == "23 ships" and submission["uncertain"] == ["tonnage unknown"]
 

@@ -24,12 +24,34 @@ def _query_terminal_background(in_fd=0, out_fd=1, timeout=0.25):
     needs the answer before it starts, synchronously. Must only run while the tty is in
     normal mode -- once the panel is in raw mode the reply would race the input loop."""
     import re as _re
+    if not (os.isatty(in_fd) and os.isatty(out_fd)):
+        return None
+    if os.name == "nt":
+        from misaka.utils import win_console
+        buf = win_console.query(in_fd, out_fd, b"\x1b]11;?\x07",
+                                lambda got: b"\x07" in got or b"\x1b\\" in got, timeout)
+    else:
+        buf = _query_tty(in_fd, out_fd, b"\x1b]11;?\x07", timeout)
+    if buf is None:
+        return None
+    match = _re.search(rb"\x1b\]11;[^\x07\x1b]*(?:\x07|\x1b\\)", buf)
+    if not match:
+        return None
+    from misaka.ui.tui.terminal_colors import (
+        parse_osc11_background_color,
+        theme_for_rgb_color,
+    )
+    rgb = parse_osc11_background_color(match.group(0).decode("ascii", "replace"))
+    return theme_for_rgb_color(rgb) if rgb else None
+
+
+def _query_tty(in_fd, out_fd, request, timeout):
+    """Write ``request`` and read the terminal's reply in cbreak mode; None when the tty
+    cannot be switched."""
     import select
     import termios
     import time
     import tty
-    if not (os.isatty(in_fd) and os.isatty(out_fd)):
-        return None
     try:
         old = termios.tcgetattr(in_fd)
     except termios.error:
@@ -37,7 +59,7 @@ def _query_terminal_background(in_fd=0, out_fd=1, timeout=0.25):
     buf = b""
     try:
         tty.setcbreak(in_fd)              # no echo, no line buffering for the reply
-        os.write(out_fd, b"\x1b]11;?\x07")
+        os.write(out_fd, request)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             readable, _, _ = select.select([in_fd], [], [], deadline - time.monotonic())
@@ -50,15 +72,7 @@ def _query_terminal_background(in_fd=0, out_fd=1, timeout=0.25):
         return None
     finally:
         termios.tcsetattr(in_fd, termios.TCSADRAIN, old)
-    match = _re.search(rb"\x1b\]11;[^\x07\x1b]*(?:\x07|\x1b\\)", buf)
-    if not match:
-        return None
-    from misaka.ui.tui.terminal_colors import (
-        parse_osc11_background_color,
-        theme_for_rgb_color,
-    )
-    rgb = parse_osc11_background_color(match.group(0).decode("ascii", "replace"))
-    return theme_for_rgb_color(rgb) if rgb else None
+    return buf
 
 
 _VARIANT = None

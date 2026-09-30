@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import posix
+
 
 def test_office_cache_does_not_bypass_private_material_guard(tmp_path):
     import asyncio
@@ -22,10 +24,10 @@ def test_office_cache_does_not_bypass_private_material_guard(tmp_path):
     project = tmp_path / 'project'
     project.mkdir()
     source = project / 'table.csv'
-    source.write_text('name,value\nfixture,1\n')
+    source.write_text('name,value\nfixture,1\n', encoding='utf-8')
     private = tmp_path / 'private' / 'web-evidence' / 'originals' / 'page.md'
     private.parent.mkdir(parents=True)
-    private.write_text('PRIVATE_FIXTURE_MARKER\n')
+    private.write_text('PRIVATE_FIXTURE_MARKER\n', encoding='utf-8')
     with pytest.raises(ValueError, match='Private Web material'):
         check_material_read(str(private))
     entry = cache._directory(str(project)) / (cache._key(str(source)) + '.md')
@@ -35,6 +37,7 @@ def test_office_cache_does_not_bypass_private_material_guard(tmp_path):
     assert 'PRIVATE_FIXTURE_MARKER' not in content, content
 
 
+@posix.modes
 def test_fork_preserves_private_session_permissions(tmp_path):
     from misaka.core.session_manager import SessionManager
 
@@ -57,14 +60,14 @@ def test_role_config_survives_failed_model_write(tmp_path, monkeypatch):
     profile.mkdir()
     config = profile / 'settings.json'
     original = json.dumps({'defaultProvider': 'old', 'defaultModel': 'model', 'custom_option': 'keep this'})
-    config.write_text(original)
+    config.write_text(original, encoding='utf-8')
 
     def disk_full(*args, **kwargs):
         raise OSError(errno.ENOSPC, 'fixture disk full')
 
     monkeypatch.setattr(profiles.atomic.os, 'replace', disk_full)
     assert profiles.persist_role_default_model(str(profile), 'new/model') is False
-    assert config.read_text() == original
+    assert config.read_text(encoding='utf-8') == original
 
 
 def test_uninstall_project_inspection_closes_database(tmp_path):
@@ -120,7 +123,7 @@ async def test_streaming_mail_is_not_acknowledged_before_persistence(tmp_path):
             session._append_custom_message(message)
         await asyncio.wait_for(delivery, 5)
         assert con.execute('SELECT delivered_at FROM messages WHERE id=?', (mid,)).fetchone()[0] is not None
-        assert 'DURABLE_FIXTURE_MESSAGE' in Path(session.sessionManager.sessionFile).read_text()
+        assert 'DURABLE_FIXTURE_MESSAGE' in Path(session.sessionManager.sessionFile).read_text(encoding='utf-8')
     finally:
         if delivery is not None:
             delivery.cancel()
@@ -216,19 +219,20 @@ async def test_extension_exec_timeout_reaps_owned_descendants(tmp_path):
     try:
         result = await exec_command(sys.executable, ['-c', program], str(tmp_path), {'timeout': 500})
         assert result.killed and pidfile.exists()
-        pid = int(pidfile.read_text())
+        pid = int(pidfile.read_text(encoding='utf-8'))
         alive = psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
         assert not alive, f'owned child {pid} survived timeout of its parent'
     finally:
         if pidfile.exists():
             # Only the test-created child, never a user process or shared process group.
             with contextlib.suppress(psutil.NoSuchProcess):
-                child = psutil.Process(int(pidfile.read_text()))
+                child = psutil.Process(int(pidfile.read_text(encoding='utf-8')))
                 child.kill()
                 child.wait(timeout=5)
 
 
 @pytest.mark.asyncio
+@posix.modes
 async def test_interactive_bash_spill_is_private(tmp_path, monkeypatch):
     from misaka.core import bash_executor
 
@@ -459,13 +463,13 @@ def test_profile_success_preserves_fields_and_invalid_config_is_not_overwritten(
     from misaka.config import profiles
 
     config = tmp_path / 'settings.json'
-    config.write_text('{"custom": 0, "defaultProvider": "old", "defaultModel": "m"}')
+    config.write_text('{"custom": 0, "defaultProvider": "old", "defaultModel": "m"}', encoding='utf-8')
     assert profiles.persist_role_default_model(str(tmp_path), 'new/m')
-    assert json.loads(config.read_text()) == {'custom': 0, 'defaultProvider': 'new', 'defaultModel': 'm'}
+    assert json.loads(config.read_text(encoding='utf-8')) == {'custom': 0, 'defaultProvider': 'new', 'defaultModel': 'm'}
     assert not profiles.persist_role_default_model(str(tmp_path), 'new/m')
-    config.write_text('{broken')
+    config.write_text('{broken', encoding='utf-8')
     assert not profiles.persist_role_default_model(str(tmp_path), 'another/m')
-    assert config.read_text() == '{broken'
+    assert config.read_text(encoding='utf-8') == '{broken'
 
 
 def test_budget_tracks_other_connections_updates_and_deletes(tmp_path):
@@ -490,9 +494,9 @@ def test_office_cache_rejects_non_regular_or_linked_entries(tmp_path, kind):
     from misaka.core.documents.office import cache
 
     source = tmp_path / 'source.csv'
-    source.write_text('a,b\n1,2')
+    source.write_text('a,b\n1,2', encoding='utf-8')
     secret = tmp_path / 'private.txt'
-    secret.write_text('PRIVATE_FIXTURE_MARKER')
+    secret.write_text('PRIVATE_FIXTURE_MARKER', encoding='utf-8')
     entry = cache._directory(tmp_path) / (cache._key(source) + '.md')
     if kind == 'hardlink':
         os.link(secret, entry)
@@ -501,7 +505,7 @@ def test_office_cache_rejects_non_regular_or_linked_entries(tmp_path, kind):
             pytest.skip('POSIX FIFO test')
         os.mkfifo(entry)
     assert cache.render_cached(source, lambda: 'rendered', workspace=tmp_path) == 'rendered'
-    assert secret.read_text() == 'PRIVATE_FIXTURE_MARKER'
+    assert secret.read_text(encoding='utf-8') == 'PRIVATE_FIXTURE_MARKER'
 
 
 @pytest.mark.asyncio
@@ -540,14 +544,14 @@ async def test_extension_exec_cleans_detached_sigterm_resistant_child(tmp_path, 
                 await asyncio.wait_for(job, 8)
         else:
             assert (await asyncio.wait_for(job, 8)).killed
-        pid = int(pidfile.read_text())
+        pid = int(pidfile.read_text(encoding='utf-8'))
         assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
     finally:
         job.cancel()
         await asyncio.gather(job, return_exceptions=True)
         if pidfile.exists():
             with contextlib.suppress(psutil.NoSuchProcess):
-                child = psutil.Process(int(pidfile.read_text()))
+                child = psutil.Process(int(pidfile.read_text(encoding='utf-8')))
                 child.kill()
                 child.wait(timeout=5)
 
@@ -559,7 +563,9 @@ async def test_extension_exec_keeps_output_and_normal_exit_status(tmp_path):
     from misaka.core.exec import exec_command
 
     result = await exec_command(sys.executable, ['-c', 'import sys;print("out");print("err",file=sys.stderr);sys.exit(7)'], str(tmp_path))
-    assert (result.stdout, result.stderr, result.code, result.killed) == ('out\n', 'err\n', 7, False)
+    # A Windows child writes its text-mode newlines as CRLF, and the output is kept as written.
+    stdout, stderr = (text.replace('\r\n', '\n') for text in (result.stdout, result.stderr))
+    assert (stdout, stderr, result.code, result.killed) == ('out\n', 'err\n', 7, False)
 
 
 @pytest.mark.parametrize('active_subscriber', [False, True])
@@ -584,6 +590,7 @@ def test_notification_retention_respects_active_unacknowledged_cursor(tmp_path, 
         con.close()
 
 
+@posix.modes
 def test_atomic_private_write_is_private_before_first_byte(tmp_path, monkeypatch):
     import builtins
 
@@ -605,7 +612,9 @@ def test_atomic_private_write_is_private_before_first_byte(tmp_path, monkeypatch
         os.umask(mask)
 
 
-@pytest.mark.parametrize('dirname,authority', [('checkout with spaces', ''), ('日本語#?%', ''), ('local checkout', 'localhost')])
+# '?' cannot be in a Windows file name; the rest of the URI-special name still round-trips there.
+@pytest.mark.parametrize('dirname,authority', [('checkout with spaces', ''), ('日本語#%' if os.name == 'nt' else '日本語#?%', ''),
+                                               ('local checkout', 'localhost')])
 def test_update_uri_roundtrip(tmp_path, monkeypatch, dirname, authority):
     import importlib.metadata
     from types import SimpleNamespace
@@ -628,15 +637,16 @@ def test_atomic_write_does_not_remove_an_unowned_temp_path(tmp_path, monkeypatch
     from misaka.utils import atomic
 
     target = tmp_path / 'state'
-    target.write_text('old')
+    target.write_text('old', encoding='utf-8')
     monkeypatch.setattr(atomic.secrets, 'token_hex', lambda _: 'fixture')
     collision = Path(f'{target}.{os.getpid()}.fixture.tmp')
-    collision.write_text('unrelated')
+    collision.write_text('unrelated', encoding='utf-8')
     with pytest.raises(FileExistsError):
         atomic.write_text(target, 'new', mode=0o600)
-    assert target.read_text() == 'old' and collision.read_text() == 'unrelated'
+    assert target.read_text(encoding='utf-8') == 'old' and collision.read_text(encoding='utf-8') == 'unrelated'
 
 
+@posix.modes
 def test_atomic_write_preserves_public_default_and_existing_mode(tmp_path):
     from misaka.utils import atomic
 

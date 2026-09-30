@@ -112,7 +112,7 @@ def test_custom_models_load_pi_thinking_metadata(tmp_path, monkeypatch):
     path = tmp_path / "models.json"
     path.write_text(json.dumps({"providers": {"fixture": {
         "api": "anthropic-messages", "apiKey": "TEST_ONLY", "baseUrl": "http://localhost:1", "models": models,
-    }}}))
+    }}}), encoding="utf-8")
     registry = ModelRegistry(AuthStorage.inMemory(), str(path), InMemoryModelsStore())
     monkeypatch.setattr(
         anthropic, "stream_anthropic", lambda m, c, o: anthropic.build_params(m, c, False, o)

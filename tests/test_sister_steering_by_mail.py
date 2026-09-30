@@ -77,7 +77,7 @@ async def test_the_note_is_bound_to_the_attempt_that_is_running(world):
 
 
 async def test_an_ally_is_steered_through_the_same_inbox_between_its_turns(world):
-    Path(os.environ["MISAKA_HOME"], "settings.json").write_text(json.dumps({"allies": {"codex": {}}}))
+    Path(os.environ["MISAKA_HOME"], "settings.json").write_text(json.dumps({"allies": {"codex": {}}}), encoding="utf-8")
     task_id = _running(world, assignee="codex")
     out = await world.message(task_id, "try the other branch")
     assert "between turns" in out["content"][0]["text"]

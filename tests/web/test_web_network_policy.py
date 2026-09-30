@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -152,7 +153,8 @@ def test_new_network_route_does_not_inherit_another_routes_ban():
     ({'HTTP_PROXY': 'http://wrong.invalid', 'http_proxy': 'http://proxy.invalid:3128'}, 'http://page.invalid/', True),
     ({'HTTP_PROXY': 'http://proxy.invalid:3128', 'http_proxy': ''}, 'http://page.invalid/', False),
     ({'HTTP_PROXY': 'http://proxy.invalid:3128', 'REQUEST_METHOD': 'GET'}, 'http://page.invalid/', False),
-    ({'http_proxy': 'http://proxy.invalid:3128', 'REQUEST_METHOD': 'GET'}, 'http://page.invalid/', True),
+    # Windows names are case-insensitive: a CGI Proxy header is http_proxy there too, and urllib drops it.
+    ({'http_proxy': 'http://proxy.invalid:3128', 'REQUEST_METHOD': 'GET'}, 'http://page.invalid/', os.name != 'nt'),
 ])
 def test_proxy_selection_matches_httpx_not_any_proxy_variable(env, url, selected, monkeypatch):
     from httpx._utils import URLPattern, get_environment_proxies
@@ -338,7 +340,7 @@ async def test_actual_proxy_tools_join_one_debug_trace_and_one_ledger_attempt(to
                 result = await tool.execute('proxy-call', {'url': 'http://page.invalid/report.zip'}, None, None, None)
     finally:
         await part.session_shutdown({}, None)
-    row, = [json.loads(p.read_text()) for p in (profile / 'logs/web').glob('web-debug-*.json')]
+    row, = [json.loads(p.read_text(encoding='utf-8')) for p in (profile / 'logs/web').glob('web-debug-*.json')]
     con = tasks.connect(str(tmp_path / 'ledger.db'))
     try:
         ledger = [json.loads(r[0]) for r in con.execute("SELECT payload FROM events WHERE kind='external_call'")]
@@ -598,7 +600,7 @@ async def test_proxy_stream_cleanup_is_owned_through_timeout_and_repeated_cancel
     finally:
         await part.session_shutdown({}, None)
     assert not list(tmp_path.rglob('*.part'))
-    row, = [json.loads(p.read_text()) for p in (profile / 'logs/web').glob('web-debug-*.json')]
+    row, = [json.loads(p.read_text(encoding='utf-8')) for p in (profile / 'logs/web').glob('web-debug-*.json')]
     assert row['attempt_count'] == 1 and row['execution_outcome'] == ('timeout' if mode == 'timeout' else 'cancelled')
 
 

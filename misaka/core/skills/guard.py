@@ -603,7 +603,7 @@ def scan_file(file_path: Path, rel_path: str = "") -> list[Finding]:
         return []                                  # the structural check flags it; it is not text to read
 
     try:
-        content = file_path.read_text(encoding='utf-8')
+        content = file_path.read_text(encoding='utf-8-sig')
     except (UnicodeDecodeError, OSError) as error:
         return [Finding(              # fail closed: an unscannable text file is a finding, not a pass
             pattern_id="unreadable_file", severity="high", category="structure", file=rel_path, line=0,
@@ -1108,7 +1108,7 @@ def _load_skill_ignore(skill_dir: Path):
         ig = skill_dir / name
         try:
             if ig.is_file():
-                for raw in ig.read_text(encoding="utf-8").splitlines():
+                for raw in ig.read_text(encoding="utf-8-sig").splitlines():
                     line = raw.strip()
                     if not line or line.startswith("#"):
                         continue

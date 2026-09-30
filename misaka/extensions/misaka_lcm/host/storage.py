@@ -85,7 +85,7 @@ def _marked(root):
     written yet), False for anything else."""
     contents = list(root.iterdir())
     marker = root / _MARKER
-    content = marker.read_text() if marker.is_file() and not marker.is_symlink() else None
+    content = marker.read_text(encoding="utf-8-sig") if marker.is_file() and not marker.is_symlink() else None
     if content == "misaka-lcm\n":
         return True
     if not contents or (content == "" and contents == [marker]):
@@ -125,7 +125,7 @@ def _prepare(root):
         _set_aside(root)
     if state is not True:
         root.mkdir(mode=0o700, exist_ok=True)
-        (root / _MARKER).write_text("misaka-lcm\n")
+        (root / _MARKER).write_text("misaka-lcm\n", encoding="utf-8")
 
 
 def _identity(root, lock_path):

@@ -22,7 +22,7 @@ def part(tmp_path, monkeypatch):
     profile = tmp_path / 'profile'
     profile.mkdir(exist_ok=True)
     (profile / 'web.json').write_text(json.dumps({'vault': {
-        'onepassword': {'enabled': False}, 'bitwarden': {'enabled': False}}}))
+        'onepassword': {'enabled': False}, 'bitwarden': {'enabled': False}}}), encoding='utf-8')
     monkeypatch.setattr(settings, 'available_tools', lambda **kw: set(settings.VAULT_TOOLS) | set(settings.CDP_TOOLS))
     return WebPart(SimpleNamespace(profile_dir=str(profile), workspace=str(tmp_path)))
 
@@ -225,10 +225,10 @@ def test_private_material_read_and_index_guards(tmp_path):
     from misaka.core.tools.path_utils import resolve_read_path
     original = tmp_path / 'web-evidence/originals/original.md'
     original.parent.mkdir(parents=True)
-    original.write_text('fixture-private')
+    original.write_text('fixture-private', encoding='utf-8')
     key = tmp_path / 'vault/vault.key'
     key.parent.mkdir()
-    key.write_text('fixture-key')
+    key.write_text('fixture-key', encoding='utf-8')
     link = tmp_path / 'alias.md'
     link.symlink_to(original)
     for path in (original, key, link):
@@ -238,7 +238,7 @@ def test_private_material_read_and_index_guards(tmp_path):
             ingest(str(path), workspace=str(tmp_path))
     public = tmp_path / 'vaults-notes/note.md'
     public.parent.mkdir()
-    public.write_text('ordinary material')
+    public.write_text('ordinary material', encoding='utf-8')
     assert resolve_read_path(str(public), str(tmp_path)) == str(public)
 
 
@@ -247,7 +247,7 @@ def test_private_material_guard_checks_resolved_fallback_alias(tmp_path):
 
     private = tmp_path / 'vault/vault.key'
     private.parent.mkdir()
-    private.write_text('fixture-key')
+    private.write_text('fixture-key', encoding='utf-8')
     (tmp_path / 'alias\u2019.md').symlink_to(private)
     with pytest.raises(ValueError, match='Private Web material'):
         resolve_read_path("alias'.md", str(tmp_path))
@@ -262,12 +262,18 @@ def test_vault_mutation_is_classified_and_denied_in_plan(name, tmp_path):
 
 async def test_external_manager_unlock_uses_native_owned_process(part, tmp_path, monkeypatch):
     from misaka.core.web.browser.vault.backends.bitwarden import BitwardenLoginBackend
-    cli = tmp_path / 'bw'
-    cli.write_text('#!' + sys.executable + '\nimport os,sys\n'
+    body = ('import os,sys\n'
         'assert "fixture-master" not in repr(sys.argv)\n'
         'assert os.environ[sys.argv[sys.argv.index("--passwordenv")+1]] == "fixture-master"\n'
         'print("fixture-bw-session")\n')
-    cli.chmod(0o700)
+    if os.name == 'nt':                 # no shebangs: a .cmd shim, the shape npm installs bw in
+        (tmp_path / 'bw.py').write_text(body, encoding='utf-8')
+        cli = tmp_path / 'bw.cmd'
+        cli.write_text(f'@"{sys.executable}" "{tmp_path / "bw.py"}" %*\n', encoding='utf-8')
+    else:
+        cli = tmp_path / 'bw'
+        cli.write_text('#!' + sys.executable + '\n' + body, encoding='utf-8')
+        cli.chmod(0o700)
     backend = BitwardenLoginBackend({'binary_path': str(cli)})
     def handler(args, **kw):
         backend.unlock('fixture-master')

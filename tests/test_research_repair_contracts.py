@@ -335,7 +335,7 @@ def test_explicit_url_alias_collision_is_unresolved(state):
                     "final_url": "https://fixture.invalid/shared",
                 }
             )
-            + name
+            + name, encoding="utf-8"
         )
     collector = bundle._Collector(con, run, bundle._Index(run["workspace"]))
     assert collector._resolve(
@@ -459,7 +459,7 @@ async def test_a_level_starts_its_nodes_one_at_a_time(state, tmp_path):
     for index in range(3):
         node = runs.create_node(con, run["id"], question=f"Q{index}", parents=[root["id"]])
         conversation = tmp_path / f"node-{index}.jsonl"
-        conversation.write_text(_reply("stop"))          # inherited from the parent: not this node's reply
+        conversation.write_text(_reply("stop"), encoding="utf-8")          # inherited from the parent: not this node's reply
         runs.set_node(con, node["id"], session_file=str(conversation))
         nodes.append(runs.node(con, node["id"]))
     handles, started = {}, []
@@ -470,7 +470,7 @@ async def test_a_level_starts_its_nodes_one_at_a_time(state, tmp_path):
         return runs.prepare_runner(con, "research_branches", node["id"])
 
     def answer(node, stop_reason):
-        with open(runs.node(con, node["id"])["session_file"], "a") as handle:
+        with open(runs.node(con, node["id"])["session_file"], "a", encoding="utf-8") as handle:
             handle.write(_reply(stop_reason))
 
     async def eventually(check):
@@ -513,7 +513,7 @@ async def test_a_node_that_has_planned_does_not_hold_the_next_start(state, tmp_p
     for index in range(4):
         node = runs.create_node(con, run["id"], question=f"Q{index}", parents=[root["id"]])
         conversation = tmp_path / f"node-{index}.jsonl"
-        conversation.write_text(_reply("stop"))
+        conversation.write_text(_reply("stop"), encoding="utf-8")
         runs.set_node(con, node["id"], session_file=str(conversation))
         nodes.append(runs.node(con, node["id"]))
     for node in nodes[:2]:
@@ -1045,7 +1045,7 @@ async def test_a_retried_node_re_enters_its_level_without_a_resume(state, tmp_pa
     for index in range(2):
         node = runs.create_node(con, run["id"], question=f"Q{index}", parents=[root["id"]])
         conversation = tmp_path / f"node-{index}.jsonl"
-        conversation.write_text(_reply("stop"))
+        conversation.write_text(_reply("stop"), encoding="utf-8")
         runs.set_node(con, node["id"], session_file=str(conversation))
         nodes.append(runs.node(con, node["id"]))
     a, b = nodes
@@ -1057,7 +1057,7 @@ async def test_a_retried_node_re_enters_its_level_without_a_resume(state, tmp_pa
         return runs.prepare_runner(con, "research_branches", node["id"])
 
     def answer(node):
-        with open(runs.node(con, node["id"])["session_file"], "a") as handle:
+        with open(runs.node(con, node["id"])["session_file"], "a", encoding="utf-8") as handle:
             handle.write(_reply("stop"))
 
     async def eventually(check):

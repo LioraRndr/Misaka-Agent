@@ -6,6 +6,8 @@ now compared within a tolerance; a reused PID starts hours later, so it is still
 import os
 from contextlib import closing
 
+import pytest
+
 from misaka.core.platform import processes, tasks
 from misaka.core.research import runs
 
@@ -55,6 +57,11 @@ def test_a_node_claims_its_row_although_the_parent_recorded_a_drifted_identity(t
         assert "identity mismatch" in runs.note_claim_failure(con, "research_branches", node["id"], key)
 
 
+# Only a POSIX worker publishes a process-group identity (dispatch._worker_identity), so only
+# there does the reconciler fence a group.
+posix_groups = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+
+
 def _group_leader():
     """A child leading its own process group, reaped in the background so a killed leader
     does not linger as a zombie that still answers ``killpg(pgid, 0)``."""
@@ -66,6 +73,7 @@ def _group_leader():
     return proc
 
 
+@posix_groups
 def test_a_drifted_leader_identity_still_gets_its_group_stopped():
     proc = _group_leader()
     try:
@@ -76,6 +84,7 @@ def test_a_drifted_leader_identity_still_gets_its_group_stopped():
         proc.kill()
 
 
+@posix_groups
 def test_a_reused_pid_is_never_signalled():
     proc = _group_leader()
     try:

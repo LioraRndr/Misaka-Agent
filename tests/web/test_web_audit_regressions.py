@@ -100,9 +100,9 @@ async def test_cache_preserves_final_url_and_vendor(monkeypatch, tmp_path):
             "metadata": {"sourceURL": "https://example.org/final", "served_by": "parallel"}}
     calls = extractor(monkeypatch, page)
     first = json.loads(await extract.web_extract_tool([URL], cwd=str(tmp_path)))
-    first_body = (tmp_path / first["results"][0]["saved_path"]).read_text()
+    first_body = (tmp_path / first["results"][0]["saved_path"]).read_text(encoding="utf-8")
     second = json.loads(await extract.web_extract_tool([URL], cwd=str(tmp_path)))
-    second_body = (tmp_path / second["results"][0]["saved_path"]).read_text()
+    second_body = (tmp_path / second["results"][0]["saved_path"]).read_text(encoding="utf-8")
     assert len(calls) == 1
     assert "https://example.org/final" in first_body and "parallel" in first_body
     assert second_body == first_body
@@ -460,7 +460,7 @@ async def test_repeated_parent_cancellation_drains_owned_write(tmp_path):
     def write():
         entered.set()
         assert release.wait(3)
-        path.write_text("complete")
+        path.write_text("complete", encoding="utf-8")
     parent = asyncio.create_task(run_with_abort(run_in_thread(write), Signal()))
     assert await asyncio.to_thread(entered.wait, 1)
     try:
@@ -473,10 +473,10 @@ async def test_repeated_parent_cancellation_drains_owned_write(tmp_path):
         release.set()
     with pytest.raises(asyncio.CancelledError):
         await parent
-    assert path.read_text() == "complete"
+    assert path.read_text(encoding="utf-8") == "complete"
 
 
-@pytest.mark.parametrize("error", [None, "\x01" * 150000])
+@pytest.mark.parametrize("error", [None, "\x01" * 150000], ids=["no-error", "escaped-error"])
 async def test_all_extract_fields_fit_even_with_json_escape_expansion(error):
     rows = [{"url": "\x01" * 150000, "title": "\x01" * 150000,
              "content": "\x01" * 150000, "error": error,

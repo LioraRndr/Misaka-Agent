@@ -12,11 +12,12 @@ import json
 import os
 
 from misaka.core.research import graph, ledger, runs
+from misaka.utils.paths import posix_relpath
 
 
 def _parent(con, run, node, parent):
     workspace = run["workspace"]
-    rel = lambda path: os.path.relpath(path, workspace)
+    rel = lambda path: posix_relpath(path, workspace)
     files = {}
     for row in runs.artifacts(con, run["id"], branch_id=parent["id"]):
         if row["task_id"] is None or row["kind"] in ("critique", "divergence"):

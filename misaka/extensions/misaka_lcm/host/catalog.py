@@ -57,7 +57,7 @@ def cache_path(name):
 
 def _read_json_cache(path, **_):
     try:
-        value = json.loads(Path(path).read_text())
+        value = json.loads(Path(path).read_text(encoding='utf-8-sig'))
         return value if isinstance(value, dict) else None
     except (OSError, ValueError):
         return None

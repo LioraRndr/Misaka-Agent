@@ -156,7 +156,7 @@ def _run(operation, name, **kw):
     if operation == 'hub-snapshot-import':
         snapshot = kw.get('snapshot')
         if snapshot is None:
-            snapshot = json.loads(Path(name).read_text())
+            snapshot = json.loads(Path(name).read_text(encoding='utf-8-sig'))
         if not isinstance(snapshot, dict) or not isinstance(snapshot.get('skills', []), list) or not isinstance(snapshot.get('taps', []), list):
             raise ValueError('Invalid Hub snapshot.')
         for tap in snapshot.get('taps', []):
@@ -285,7 +285,7 @@ def _validate_metadata(root):
         path = root / relative
         if path.exists():
             write._safe_parents(path.parent)
-            if path.is_symlink() or not isinstance(json.loads(path.read_text()), dict):
+            if path.is_symlink() or not isinstance(json.loads(path.read_text(encoding='utf-8-sig')), dict):
                 raise ValueError('Invalid Skill state; bytes preserved: ' + relative)
 
 

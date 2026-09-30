@@ -21,6 +21,7 @@ from webconf import write_web
 
 from misaka.config import home
 from misaka.core.web import cache
+from tests import posix
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +66,7 @@ def test_entry_file_name_carries_host_and_the_whole_key(cache_dir):
     assert re.fullmatch(r"docs\.example\.com-[0-9a-f]{16}\.cache\.json", names[0])
 
 
+@posix.modes
 def test_entry_files_are_world_readable_not_private(cache_dir):
     """Provider material and URLs can be account-private; both cache files are 0600."""
     cache.extract_cache_put("https://example.com/a", "text")

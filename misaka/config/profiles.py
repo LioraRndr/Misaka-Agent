@@ -17,7 +17,8 @@ def role_of(profile_dir):
     """Return the role name (path relative to profiles/), or the basename when not under profiles/."""
     p = os.path.abspath(profile_dir or "")
     marker = os.sep + "profiles" + os.sep
-    return p.split(marker, 1)[1] if marker in p else os.path.basename(p)
+    # Role names are "/"-joined (sisters/10032) on every OS; Windows paths carry "\\".
+    return p.split(marker, 1)[1].replace(os.sep, "/") if marker in p else os.path.basename(p)
 
 
 def is_last_order(profile_dir):
@@ -36,7 +37,7 @@ def role_settings(profile_dir, *, strict=False):
     if not profile_dir:
         return {}
     try:
-        with open(settings_path(profile_dir), encoding="utf-8") as handle:
+        with open(settings_path(profile_dir), encoding="utf-8-sig") as handle:
             data = json.load(handle)
     except FileNotFoundError:
         return {}

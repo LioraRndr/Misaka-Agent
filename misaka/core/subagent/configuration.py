@@ -16,7 +16,7 @@ def project_settings(cwd: str) -> Mapping[str, Any]:
     if project_dir is None:
         return {}
     try:
-        value = json.loads((project_dir / "settings.json").read_text(encoding="utf-8"))
+        value = json.loads((project_dir / "settings.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, Mapping) else {}
@@ -149,11 +149,14 @@ def permission_decision(
         raw = tool_input.get("path") or tool_input.get("file_path")
         candidate = _resolved_path(raw, workspace) if isinstance(raw, str) and raw.strip() else None
         if candidate is not None:
-            # A configured deny/ask applies to either spelling of the same file.
-            inputs.append({**tool_input, "path": str(candidate)})
+            # A configured deny/ask applies to either spelling of the same file, and on Windows
+            # to either separator: rules are written with "/", resolved paths carry "\".
+            spellings = [candidate]
             root = Path(workspace).resolve()
             if candidate.is_relative_to(root):
-                inputs.append({**tool_input, "path": str(candidate.relative_to(root))})
+                spellings.append(candidate.relative_to(root))
+            for spelling in spellings:
+                inputs += [{**tool_input, "path": path} for path in dict.fromkeys((str(spelling), spelling.as_posix()))]
 
     for behavior in ('deny', 'ask', 'allow'):
         for layer in permissions:

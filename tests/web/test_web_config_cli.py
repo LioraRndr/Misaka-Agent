@@ -14,6 +14,7 @@ from webconf import read_web
 
 from misaka.config import home
 from misaka.core.web import config
+from tests import posix
 
 
 class _Layer:
@@ -104,6 +105,7 @@ def test_a_credential_lands_in_the_env_section(web_home):
     assert json.loads(web_home.read_text())["env"]["TAVILY_API_KEY"] == "tvly-abc"
 
 
+@posix.modes
 def test_the_file_holding_credentials_is_not_world_readable(web_home):
     config.set_config("env.TAVILY_API_KEY", "tvly-abc")
     assert stat.S_IMODE(web_home.stat().st_mode) == 0o600

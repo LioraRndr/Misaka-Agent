@@ -209,7 +209,7 @@ def test_bundle_url_resolution_keeps_document_identity(state, monkeypatch, docum
     source = pages / "saved.md"
     source.write_text(
         _frontmatter({"source_url": "https://fixture.invalid/document?id=A"})
-        + "Document A\n"
+        + "Document A\n", encoding="utf-8"
     )
     monkeypatch.setattr(bundle.corpus, "docs", lambda **k: [])
     index = bundle._Index(run["workspace"])
@@ -235,7 +235,7 @@ def test_bundle_manifest_digest_matches_packaged_bytes(
     con, run, _root = state
     source = Path(run["workspace"]) / "downloads/source.md"
     source.parent.mkdir()
-    source.write_text("version one\n")
+    source.write_text("version one\n", encoding="utf-8")
     old_sha = hashlib.sha256(source.read_bytes()).hexdigest()
     runs.register_file(con, run["id"], "source", "Source", str(source), sha256=old_sha)
     runs.write_text(
@@ -247,13 +247,13 @@ def test_bundle_manifest_digest_matches_packaged_bytes(
         "# Final\n## Sources\n- downloads/source.md\n",
     )
     if mutate_source:
-        source.write_text("version TWO\n")
+        source.write_text("version TWO\n", encoding="utf-8")
     monkeypatch.setattr(bundle.corpus, "docs", lambda **k: [])
     manifest = Path(bundle.final_bundle(con, run))
     placed = Path(run["workspace"]) / "final" / f"{run['id']}-sources/source.md"
     if mutate_source:
         assert not placed.exists()
-        assert "source changed since its registered sha256" in manifest.read_text()
+        assert "source changed since its registered sha256" in manifest.read_text(encoding="utf-8")
         assert (
             next(r for r in runs.artifacts(con, run["id"]) if r["kind"] == "source")[
                 "sha256"
@@ -262,7 +262,7 @@ def test_bundle_manifest_digest_matches_packaged_bytes(
         )
     else:
         actual_sha = hashlib.sha256(placed.read_bytes()).hexdigest()
-        assert f"sha256 {actual_sha}" in manifest.read_text()
+        assert f"sha256 {actual_sha}" in manifest.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("other_tokens", [0, 700])

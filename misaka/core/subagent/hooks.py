@@ -219,7 +219,7 @@ async def _kill_hook_process(process: asyncio.subprocess.Process) -> None:
         # The shell leader may already have exited while descendants still own
         # the process group, so POSIX cleanup must not key only on returncode.
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process.pid, signal.SIGKILL)  # windows-footgun: ok - POSIX branch
         except (OSError, ProcessLookupError):
             pass
     elif process.returncode is None:

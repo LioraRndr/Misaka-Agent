@@ -124,7 +124,7 @@ async def test_card_grant_writes_and_is_revoked_without_heartbeats(card, monkeyp
         args = {"path": path, "content": "Verified output"}
         assert await worker.before_tool({"toolName": "write", "input": args}) is None
         await create_write_tool_definition(session.cwd).execute("write", args)
-    assert (output / "nested/result.md").read_text() == "Verified output"
+    assert (output / "nested/result.md").read_text(encoding="utf-8") == "Verified output"
     assert con.total_changes == before_changes  # grant lookups never renew ownership
     # The next live refresh, including nested children, must drop a stale grant.
     con.execute("UPDATE tasks SET generation=2")
@@ -198,6 +198,12 @@ def test_malformed_inherited_write_scopes_fail_closed(monkeypatch, scope):
         configuration.inherited_permissions()
 
 
+# asyncio's waitpid child watcher and signal exit codes are POSIX; on Windows a child is a
+# handle and a terminated one exits with a plain code.
+posix_waitpid = pytest.mark.skipif(os.name == "nt", reason="asyncio's waitpid child watcher is POSIX")
+
+
+@posix_waitpid
 @pytest.mark.parametrize("ignore_term", [False, True])
 async def test_asyncio_alone_reaps_owned_child(monkeypatch, caplog, ignore_term):
     code = "import signal,time; " + ("signal.signal(signal.SIGTERM,signal.SIG_IGN); " if ignore_term else "") + "print('ready',flush=True); time.sleep(60)"
@@ -238,6 +244,7 @@ def test_tree_cleanup_still_reaps_descendants(monkeypatch, reap_root):
     assert waited == ([101, 102] if reap_root else [102])
 
 
+@posix_waitpid
 async def test_slow_asyncio_watcher_does_not_lose_child_status(monkeypatch, caplog):
     # Reproduce the race deterministically: let psutil finish first, without
     # changing either wait implementation or touching any non-fixture PID.

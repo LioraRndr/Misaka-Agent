@@ -73,7 +73,9 @@ def _documents():
 
 
 @pytest.mark.parametrize("chunk", [7, read_module._SCAN_CHUNK_CHARS])
-@pytest.mark.parametrize("name,data", list(_documents()))
+# Named by the document alone: an id spelled out of the bytes outgrows Windows' 32767-character
+# limit on the environment variable pytest keeps the current test in.
+@pytest.mark.parametrize("name,data", list(_documents()), ids=[name for name, _ in _documents()])
 async def test_paged_output_is_what_the_whole_file_algorithm_produced(tmp_path, monkeypatch, name, data, chunk):
     monkeypatch.setattr(read_module, "_SCAN_CHUNK_CHARS", chunk)     # 7: every boundary lands mid-chunk
     path = tmp_path / "doc.txt"
@@ -119,7 +121,7 @@ async def test_a_directory_is_still_reported_as_one(tmp_path):
 
 
 async def test_a_large_file_pages_without_being_held_whole(tmp_path, monkeypatch):
-    (tmp_path / "big.log").write_text("".join(f"line {n}\n" for n in range(200_000)))
+    (tmp_path / "big.log").write_text("".join(f"line {n}\n" for n in range(200_000)), newline="\n", encoding="utf-8")
     requested = []
     real = read_module._scan_text
 

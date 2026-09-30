@@ -475,7 +475,7 @@ def _package_agent_source(base: str, settings: Mapping[str, Any], diagnostics: l
         if not path.is_file():
             continue
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             if not isinstance(data, Mapping):
                 raise TypeError("Plugin manifest must be an object")
             manifest = data.get("misaka", {}) if path.name == "package.json" else data

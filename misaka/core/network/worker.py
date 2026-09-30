@@ -12,6 +12,7 @@ from misaka.core.platform import tasks as task_store
 from misaka.core.platform.session import run_coro, run_session
 from misaka.core.platform.vocabulary import MANAGEMENT_TOOLS
 from misaka.core.skills import sandbox as skill_sandbox
+from misaka.utils.paths import posix_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +410,7 @@ def materials_on_hand(workspace):
         return ""
     lines = []
     for path in files[:_MATERIALS_LIMIT]:
-        relative = os.path.relpath(path, workspace)
+        relative = posix_relpath(path, workspace)
         line = f"- `{relative}`"
         if path.endswith(".md"):
             try:
@@ -515,7 +516,7 @@ def _contract_artifact(task, root):
     except ValueError:
         return None
     path = deliverable_path(task, name) if name else None
-    return _artifact(root, os.path.relpath(path, root)) if path else None
+    return _artifact(root, posix_relpath(path, root)) if path else None
 
 
 def _artifact(root, value):
@@ -530,7 +531,7 @@ def _artifact(root, value):
         path.relative_to(root)
     except (OSError, RuntimeError, ValueError):
         return None
-    return os.path.relpath(path, root) if path.is_file() else None
+    return posix_relpath(path, root) if path.is_file() else None
 
 
 def _output_files(root, workspace):
@@ -539,7 +540,7 @@ def _output_files(root, workspace):
     out = []
     for base, dirs, files in os.walk(root):
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("cards", "research", "node_modules"))
-        out.extend(os.path.relpath(os.path.join(base, name), workspace)
+        out.extend(posix_relpath(os.path.join(base, name), workspace)
                    for name in sorted(files) if not name.startswith("."))
     return out
 
@@ -578,7 +579,7 @@ def _source_artifact(root, output_dir, value, artifacts):
             return None
         candidate = Path(output_dir) / candidate
     try:
-        relative = str(candidate.resolve(strict=True).relative_to(root))
+        relative = candidate.resolve(strict=True).relative_to(root).as_posix()
     except (OSError, RuntimeError, ValueError):
         return None
     return relative if relative in artifacts else None

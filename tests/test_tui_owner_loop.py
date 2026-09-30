@@ -32,7 +32,7 @@ class Terminal(ProcessTerminal):
         self.loop = asyncio.get_running_loop()
         self.inputHandler = onInput
         self.resizeHandler = onResize
-        self._previousSigwinchHandler = signal.getsignal(signal.SIGWINCH)
+        self._previousSigwinchHandler = signal.getsignal(signal.SIGWINCH) if hasattr(signal, "SIGWINCH") else None
 
     def stop(self):
         self.stop_threads.append(threading.get_ident())

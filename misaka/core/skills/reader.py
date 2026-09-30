@@ -40,9 +40,9 @@ def collect_linked_files(skill_dir):
         if not sub.is_dir() or sub.is_symlink():
             continue
         files = [
-            str(f.relative_to(root))
+            f.relative_to(root).as_posix()
             for f in sorted(sub.rglob("*"))
-            if support_target(root, str(f.relative_to(root)))[1] is None
+            if support_target(root, f.relative_to(root).as_posix())[1] is None
         ]
         if files:
             out[category] = files

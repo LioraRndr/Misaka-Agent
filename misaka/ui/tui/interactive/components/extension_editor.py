@@ -42,7 +42,7 @@ async def edit_text_external(tui, text: str) -> str | None:
         process = await asyncio.create_subprocess_exec(*args, str(temp_file))
         if await process.wait() != 0:
             return None
-        return temp_file.read_text(encoding="utf-8").removesuffix("\n")
+        return temp_file.read_text(encoding="utf-8-sig").removesuffix("\n")
     except OSError:
         return None
     finally:

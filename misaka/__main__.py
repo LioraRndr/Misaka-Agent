@@ -2,6 +2,7 @@
 import os
 import sys
 
+import misaka.windows_bootstrap  # noqa: F401 - first, as in Hermes's entry points: UTF-8 stdio on Windows
 from misaka.cli.app import main as _run
 
 

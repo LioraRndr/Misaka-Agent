@@ -17,6 +17,11 @@ import pytest
 _SESSION_HOME = tempfile.mkdtemp(prefix="mh-", dir="/tmp" if os.path.isdir("/tmp") else None)
 os.environ["MISAKA_HOME"] = _SESSION_HOME
 os.environ["MISAKA_OFFLINE"] = "1"
+# Every Python process `misaka` starts on Windows runs in UTF-8 mode (misaka/windows_bootstrap.py
+# sets it for them); the children a test starts get the same, not the ANSI code page of this one.
+if os.name == "nt":
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 
 @pytest.fixture(autouse=True)
@@ -40,3 +45,16 @@ def misaka_home(monkeypatch):
 
 def pytest_sessionfinish(session, exitstatus):
     shutil.rmtree(_SESSION_HOME, ignore_errors=True)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """A test that needs a symlink this Windows account may not create (no Developer Mode, not
+    elevated: ERROR_PRIVILEGE_NOT_HELD) is skipped rather than failed, as herdr's suite does."""
+    report = yield
+    error = call.excinfo.value if call.excinfo is not None else None
+    if isinstance(error, OSError) and getattr(error, "winerror", None) == 1314:
+        report.outcome = "skipped"
+        report.longrepr = (str(item.path), item.location[1] or 0,
+                           "Skipped: creating a symlink needs Developer Mode on Windows")
+    return report

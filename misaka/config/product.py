@@ -68,7 +68,7 @@ _warned: set[tuple[str, str, str]] = set()
 
 def _json(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             value = json.load(f)
             return value if isinstance(value, dict) else {}
     except (OSError, ValueError):

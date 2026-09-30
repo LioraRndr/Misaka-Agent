@@ -30,9 +30,9 @@ def test_contract_names_only_the_file(tmp_path, declaration, name):
             "output_dir": str(tmp_path)}
     assert worker.contract_deliverable(task) == name
     assert worker.missing_deliverable(task) == name
-    (tmp_path / name).write_text("")
+    (tmp_path / name).write_text("", encoding="utf-8")
     assert worker.missing_deliverable(task) == name
-    (tmp_path / name).write_text("Fixture evidence.")
+    (tmp_path / name).write_text("Fixture evidence.", encoding="utf-8")
     assert worker.missing_deliverable(task) is None
 
 
@@ -57,14 +57,14 @@ def test_missing_output_and_symlink_escape_fail_closed(tmp_path):
     assert worker.missing_deliverable(task) == "report.md"
     task["output_dir"] = str(out)
     outside = tmp_path / "outside.md"
-    outside.write_text("Not this card's deliverable")
+    outside.write_text("Not this card's deliverable", encoding="utf-8")
     (out / "report.md").symlink_to(outside)
     assert worker.missing_deliverable(task) == "report.md"
     (out / "report.md").unlink()
     (out / "report.md").mkdir()
     assert worker.missing_deliverable(task) == "report.md"
     (out / "report.md").rmdir()
-    (out / "report.md").write_text("Fixture evidence")
+    (out / "report.md").write_text("Fixture evidence", encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "out").symlink_to(out, target_is_directory=True)
@@ -123,16 +123,16 @@ def card_flags(root, monkeypatch, model=None):
 async def test_card_start_uses_defaults_and_native_resume(local_models, monkeypatch, preference):
     root, requests = local_models
     models_path = home.path("models")
-    models = json.loads(models_path.read_text())
+    models = json.loads(models_path.read_text(encoding="utf-8"))
     models["providers"]["fixture-a"]["models"][0].update(
         reasoning=True, compat={"forceAdaptiveThinking": True})
-    models_path.write_text(json.dumps(models))
+    models_path.write_text(json.dumps(models), encoding="utf-8")
     settings_path = home.path("settings")
-    settings = json.loads(settings_path.read_text())
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     settings["defaultThinkingLevel"] = "high"
     if preference:
         settings["modelThinkingLevels"] = {"fixture-a/shared": preference}
-    settings_path.write_text(json.dumps(settings))
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
     flags = card_flags(root, monkeypatch)
     assert "--thinking" not in flags
     async with opened(root, "sisters/10032", "card", flags) as (_, session):
@@ -168,14 +168,14 @@ async def test_only_board_sister_drops_generic_child_thinking_override(tmp_path,
 async def test_managed_sister_native_registration_defaults_and_resume(local_models, monkeypatch, override):
     root, requests = local_models
     models_path = home.path("models")
-    models = json.loads(models_path.read_text())
+    models = json.loads(models_path.read_text(encoding="utf-8"))
     models["providers"]["fixture-a"]["models"][0].update(
         reasoning=True, compat={"forceAdaptiveThinking": True})
-    models_path.write_text(json.dumps(models))
+    models_path.write_text(json.dumps(models), encoding="utf-8")
     settings_path = home.path("settings")
-    settings = json.loads(settings_path.read_text())
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     settings["defaultThinkingLevel"] = "high"
-    settings_path.write_text(json.dumps(settings))
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
     card_flags(root, monkeypatch)  # isolate state/skill/identity paths, not session registration
     row = {"id": "fixture", "model": override, "assignee": "10032", "generation": 1,
            "claim_lock": "fixture", "output_dir": str(root / "workspace")}
@@ -189,7 +189,7 @@ async def test_managed_sister_native_registration_defaults_and_resume(local_mode
             prompt="Fixture", model=None, background=False, name=None, isolation=None,
             cwd=None, tool_call_id="", context=parent)
         try:
-            seed = [json.loads(line) for line in task.transcript.read_text().splitlines()]
+            seed = [json.loads(line) for line in task.transcript.read_text(encoding="utf-8").splitlines()]
             assert [entry["type"] for entry in seed] == ["session"]
             flags = await manager._child_flags(task)
             async with opened(root, "sisters/10032", "card", flags) as (_, child):

@@ -192,7 +192,7 @@ def test_one_red_team_card_keeps_each_round_s_issues_and_files_apart(lab):
     out = Path(card["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
     for name in ("critique.md", "critique-2.md"):
-        (out / name).write_text(f"# {name}\n")
+        (out / name).write_text(f"# {name}\n", encoding="utf-8")
         runs.write_text(con, run["id"], "critique", name, os.path.relpath(out / name, run["workspace"]),
                         f"# {name}\n", branch_id=root["id"], task_id=tid)
     assert [Path(p).name for p in workflow._critique_paths(con, run, root, [2])] == ["critique-2.md"]
@@ -239,8 +239,8 @@ def test_a_card_goes_on_in_its_newest_own_conversation(tmp_path):
     folder.mkdir(parents=True)
     assert worker.continue_flags(None, str(folder)) is None
     older, newer = folder / "a.jsonl", folder / "b.jsonl"
-    older.write_text("{}\n")
-    newer.write_text("{}\n")
+    older.write_text("{}\n", encoding="utf-8")
+    newer.write_text("{}\n", encoding="utf-8")
     os.utime(older, (1, 1))
     assert worker.continue_flags(str(older), str(folder)) == ["--session", str(newer)]
 
@@ -282,7 +282,7 @@ def test_the_final_report_is_written_from_indexed_documents_one_command_per_part
     assert len(tool_calls) == 4 and len(seen) == 5
     assert "ended without calling `misaka_research_report`" in seen[1]
     survey = report._checkpoint(con, run, "survey")
-    assert Path(survey["path"]).read_text().count("## Part") == 3 and Path(draft["path"]).read_text().startswith("## Part 5")
+    assert Path(survey["path"]).read_text(encoding="utf-8").count("## Part") == 3 and Path(draft["path"]).read_text(encoding="utf-8").startswith("## Part 5")
     assert f"document `{report.doc_id(run, survey['path'])}`" in seen[-1]  # the draft reads the survey by its id
     keys = {row[0] for row in con.execute("SELECT action_key FROM research_actions WHERE run_id=?", (run["id"],))}
     assert {f"survey:{n['id']}" for n in (root, a, b)} <= keys and "draft" in keys

@@ -47,8 +47,8 @@ class CardRestorePromptContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, closing(sqlite3.connect(":memory:")) as con:
             root = Path(directory)
             (root / "downloads").mkdir()
-            (root / "downloads" / "notes.txt").write_text("Existing source material")
-            (root / "downloads" / "plain.md").write_text("Markdown without provenance")
+            (root / "downloads" / "notes.txt").write_text("Existing source material", encoding="utf-8")
+            (root / "downloads" / "plain.md").write_text("Markdown without provenance", encoding="utf-8")
             (root / "downloads" / "broken.md").write_bytes(b"\xff")
             runtime = SimpleNamespace(con=con, cfg={"token_cap": 100})
             row = {"id": "card-1", "workspace": directory, "generation": 1,
@@ -70,7 +70,7 @@ class CardRestorePromptContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "downloads" / "removed.md"
             path.parent.mkdir()
-            path.write_text("---\nsource_url: \"https://example.invalid/source\"\n---\n")
+            path.write_text("---\nsource_url: \"https://example.invalid/source\"\n---\n", encoding="utf-8")
             read_provenance = evidence.read_provenance
 
             def remove_before_read(filename):

@@ -1,10 +1,11 @@
 """Real SDK + core/extension prompt folding, without a model turn or live state."""
 import os
-import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+
+from tests.offline import refuse_network
 
 
 @pytest.fixture
@@ -40,13 +41,7 @@ def prompt_home(tmp_path, monkeypatch):
                                                 encoding="utf-8")
 
     network_attempts = []
-
-    def no_network(*args, **_kwargs):
-        network_attempts.append(args)
-        raise AssertionError("Prompt integration attempted a network connection")
-
-    monkeypatch.setattr(socket.socket, "connect", no_network)
-    monkeypatch.setattr(socket, "create_connection", no_network)
+    refuse_network(monkeypatch, "Prompt integration attempted a network connection", network_attempts)
     yield tmp_path
     for module in (network, research):
         connection = module._CON
@@ -234,7 +229,7 @@ async def test_role_entry_keeps_shared_base_and_explicit_tool_ceiling(prompt_hom
         assert text.count("## Sister capability profiles") == 1
         assert "## Sub-agents" not in text and "## Allies" not in text
         assert await final_prompt(session) == text
-    assert shared.read_text() == content
+    assert shared.read_text(encoding="utf-8") == content
 
 
 async def test_durable_sister_real_child_flags_retain_persona_and_current_tool_guidance(prompt_home):
@@ -265,7 +260,8 @@ async def test_durable_sister_real_child_flags_retain_persona_and_current_tool_g
     assert parsed.systemPrompt is None and parsed.tools is None
     saved = Path(parsed.appendSystemPrompt[0])
     assert saved.read_text(encoding="utf-8") == persona == definition.prompt
-    assert saved.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert saved.stat().st_mode & 0o777 == 0o600
     async with assembled(prompt_home, role, "card", research=True, prompt_flags=flags) as session:
         text = await final_prompt(session)
         assert persona in text

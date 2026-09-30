@@ -159,7 +159,7 @@ def _iter_blocklist_file_rules(path: Path) -> list[str]:
     in a config must not be able to take every web tool offline.
     """
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         logger.warning("Shared blocklist file not found (skipping): %s", path)
         return []
@@ -189,7 +189,7 @@ def _load_policy_config(config_path: Path | None) -> dict[str, Any]:
         return dict(_DEFAULT_WEBSITE_BLOCKLIST)
 
     try:
-        config = (json.loads(config_path.read_text(encoding="utf-8")) or {}
+        config = (json.loads(config_path.read_text(encoding="utf-8-sig")) or {}
                   if config_path is not None else web_config(strict=True))
     except json.JSONDecodeError as exc:
         raise WebsitePolicyError(f"Invalid config JSON at {config_path}: {exc}") from exc

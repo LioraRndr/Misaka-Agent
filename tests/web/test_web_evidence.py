@@ -47,7 +47,7 @@ def test_every_changed_byte_gets_a_new_immutable_name(workspace):
         assert changed != first
     assert _write(workspace, {**PROVENANCE, "provider": "parallel"}, "body")[0] != first
     assert _write(workspace, PROVENANCE, "new extraction")[0] != first
-    assert (workspace / first).read_text() == original
+    assert (workspace / first).read_text(encoding="utf-8") == original
 
 
 # --- the file ------------------------------------------------------------------------

@@ -68,7 +68,7 @@ def read_provenance(path: str) -> dict[str, Any]:
     """The provenance block a saved page opens with, as written by ``_frontmatter``: ``key: <json>``
     lines between two ``---`` delimiters. Empty for any other file or an unreadable one."""
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8-sig") as handle:
             if handle.readline().strip() != "---":
                 return {}
             out: dict[str, Any] = {}

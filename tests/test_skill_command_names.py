@@ -32,7 +32,7 @@ def _part(entries):
 def _entries(tmp_path):
     skill = tmp_path / 'skills' / 'misaka-lcm' / 'SKILL.md'
     skill.parent.mkdir(parents=True)
-    skill.write_text('---\nname: misaka-lcm\ndescription: Recover compacted conversation details.\n---\nFixture body.\n')
+    skill.write_text('---\nname: misaka-lcm\ndescription: Recover compacted conversation details.\n---\nFixture body.\n', encoding='utf-8')
     roots = list(extension_roots([{'path': str(skill.parent.parent),
                                   'metadata': {'source': 'extension:inline:misaka_lcm'}}]))
     return index._assemble(roots)["entries"]

@@ -315,7 +315,7 @@ def _path_rule_allows(
     values = [raw]
     resolved = _resolved_path(raw, workspace)
     if resolved is not None:
-        values.append(str(resolved))
+        values += dict.fromkeys((str(resolved), resolved.as_posix()))  # Windows: rules use "/" too
     # A bare ``Read`` grant is not an approval to cross the workspace
     # boundary.  Only an argument-scoped path rule can do that.
     return any(

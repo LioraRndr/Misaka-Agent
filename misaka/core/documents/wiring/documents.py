@@ -28,6 +28,7 @@ from misaka.utils.image_resize import (
     format_dimension_note,
     resize_image_bytes,
 )
+from misaka.utils.paths import posix_relpath
 from misaka.utils.values import signal_aborted
 
 
@@ -376,8 +377,8 @@ def register(harn):
             return _text(f"Not found: {params.path}")
         if signal_aborted(signal):
             return _text("Cancelled (the indexing itself completed).")
-        lines = [f"  {did}  {os.path.relpath(p, ws)}" for did, p in added]
-        lines += [f"  skipped  {os.path.relpath(p, ws)}: {why}" for p, why in skipped]
+        lines = [f"  {did}  {posix_relpath(p, ws)}" for did, p in added]
+        lines += [f"  skipped  {posix_relpath(p, ws)}: {why}" for p, why in skipped]
         # A folder walk collects less than the corpus can read: name a file to index one the
         # walk leaves alone (config.yml, results.json), rather than being told it cannot be read.
         return _text("\n".join(lines) or "Nothing to index: this folder holds no file a scan "

@@ -36,7 +36,7 @@ def package(tmp_path, body, extra=None):
 
 def test_backup_cleanup_error_does_not_claim_rollback(tmp_path, monkeypatch):
     path = tmp_path / 'original.txt'
-    path.write_text('before\n')
+    path.write_text('before\n', encoding='utf-8')
     real_unlink = os.unlink
     def deny_backup_delete(name, *args, **kwargs):
         if Path(name).name.startswith('.office-backup-'):
@@ -48,10 +48,10 @@ def test_backup_cleanup_error_does_not_claim_rollback(tmp_path, monkeypatch):
     assert receipt.startswith('✓'), receipt
     assert 'file unchanged' not in receipt
     assert 'cleanup failed' in receipt
-    assert path.read_text() == 'before\nafter\n'
+    assert path.read_text(encoding='utf-8') == 'before\nafter\n'
     backup, = tmp_path.glob('.office-backup-*')
     assert str(backup) in receipt
-    assert backup.read_text() == 'before\n'
+    assert backup.read_text(encoding='utf-8') == 'before\n'
 
 
 @pytest.mark.parametrize('kind', ['footnote', 'endnote'])
@@ -89,7 +89,7 @@ def test_simple_field_keeps_existing_display_text(tmp_path):
 @pytest.mark.parametrize('fail_operation', [False, True])
 def test_staging_cleanup_preserves_operation_outcome(tmp_path, monkeypatch, fail_operation):
     path = tmp_path / 'original.txt'
-    path.write_text('before\n')
+    path.write_text('before\n', encoding='utf-8')
 
     class UndeletableStaging:
         """A staging directory whose removal fails. Replacing shutil.rmtree does not reach every
@@ -107,7 +107,7 @@ def test_staging_cleanup_preserves_operation_outcome(tmp_path, monkeypatch, fail
         receipt = _office.run_ops(path, [op])
     assert receipt.startswith('✗' if fail_operation else '✓'), receipt
     assert 'cleanup failed' in receipt
-    assert path.read_text() == ('before\n' if fail_operation else 'before\nafter\n')
+    assert path.read_text(encoding='utf-8') == ('before\n' if fail_operation else 'before\nafter\n')
     staging, = tmp_path.glob('.office-*')
     assert str(staging) in receipt
     if fail_operation:
@@ -118,7 +118,7 @@ def test_staging_cleanup_preserves_operation_outcome(tmp_path, monkeypatch, fail
 
 def test_cleanup_does_not_mask_publish_error(tmp_path, monkeypatch):
     path = tmp_path / 'original.txt'
-    path.write_text('before\n')
+    path.write_text('before\n', encoding='utf-8')
     real_unlink = os.unlink
 
     def deny_backup_delete(name, *args, **kwargs):
@@ -137,14 +137,14 @@ def test_cleanup_does_not_mask_publish_error(tmp_path, monkeypatch):
     assert 'primary publish failure' in receipt
     assert 'secondary cleanup failure' in receipt
     assert 'file unchanged' in receipt
-    assert path.read_text() == 'before\n'
+    assert path.read_text(encoding='utf-8') == 'before\n'
 
 
 async def test_committed_cleanup_warning_is_a_successful_tool_call(tmp_path, monkeypatch):
     from misaka.core.tools.office import create_office_tool_definition
 
     path = tmp_path / 'original.txt'
-    path.write_text('before\n')
+    path.write_text('before\n', encoding='utf-8')
     real_unlink = os.unlink
 
     def deny_backup_delete(name, *args, **kwargs):
@@ -159,7 +159,7 @@ async def test_committed_cleanup_warning_is_a_successful_tool_call(tmp_path, mon
     receipt = result.content[0].text
     assert receipt.startswith('✓'), receipt
     assert 'cleanup failed' in receipt
-    assert path.read_text() == 'before\nafter\n'
+    assert path.read_text(encoding='utf-8') == 'before\nafter\n'
 
 
 def test_old_render_cache_does_not_hide_fixed_field_text(tmp_path, monkeypatch):
@@ -171,9 +171,9 @@ def test_old_render_cache_does_not_hide_fixed_field_text(tmp_path, monkeypatch):
     old_key = hashlib.sha256(material.encode('utf-8', 'surrogatepass')).hexdigest()[:32]
     directory = cache._directory(workspace=tmp_path)
     stale = directory / f'{old_key}.md'
-    stale.write_text('old rendering without the date')
+    stale.write_text('old rendering without the date', encoding='utf-8')
     actual = cache.render_cached(path, lambda: reader.render(path), workspace=tmp_path)
     assert '2026-09-15' in actual
-    assert stale.read_text() == 'old rendering without the date'
+    assert stale.read_text(encoding='utf-8') == 'old rendering without the date'
     monkeypatch.setattr(cache, 'RENDER_VERSION', cache.RENDER_VERSION + 1)
     assert cache.render_cached(path, lambda: 'next renderer', workspace=tmp_path) == 'next renderer'

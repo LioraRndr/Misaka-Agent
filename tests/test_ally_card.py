@@ -30,7 +30,7 @@ class Ally:
         self.script, self.log = tmp_path / "script.json", tmp_path / "agent.log"
         Path(os.environ["MISAKA_HOME"], "settings.json").write_text(json.dumps({"allies": {"fake": {
             "command": [sys.executable, FAKE, str(self.script), str(self.log)],
-            "description": "A scripted agent."}}}))
+            "description": "A scripted agent."}}}), encoding="utf-8")
         self.project = tmp_path / "project"
         self.project.mkdir()
         self.con = tasks.connect(CFG["db"])
@@ -47,7 +47,7 @@ class Ally:
             self.out = Path(tasks.get(self.con, self.tid)["output_dir"])
 
     def play(self, *turns, **extra):
-        self.script.write_text(json.dumps({"turns": list(turns), **extra}))
+        self.script.write_text(json.dumps({"turns": list(turns), **extra}), encoding="utf-8")
 
     def claim(self, lock="lock1", out=None):
         row = tasks.get(self.con, self.tid)
@@ -66,7 +66,7 @@ class Ally:
     def logged(self, kind):
         if not self.log.exists():
             return []
-        return [entry for entry in map(json.loads, self.log.read_text().splitlines()) if entry["kind"] == kind]
+        return [entry for entry in map(json.loads, self.log.read_text(encoding="utf-8").splitlines()) if entry["kind"] == kind]
 
     def prompts(self):
         return [entry["text"] for entry in self.logged("prompt")]
@@ -102,7 +102,7 @@ async def _until(check, timeout=60):
 
 
 def _messages(path):
-    return [json.loads(line)["message"] for line in Path(path).read_text().splitlines()
+    return [json.loads(line)["message"] for line in Path(path).read_text(encoding="utf-8").splitlines()
             if json.loads(line).get("type") == "message"]
 
 
@@ -223,7 +223,7 @@ async def test_continuing_a_card_loads_the_allys_session_and_drops_its_replay(ma
     assert ally.logged("load")[-1]["session"] == session
     assert ally.prompts()[-1] == "Add a summary."             # the session has the card: the message alone
     assert second.transcript.path == first.transcript.path   # the card's one transcript goes on
-    text = Path(second.transcript.path).read_text()
+    text = Path(second.transcript.path).read_text(encoding="utf-8")
     assert "First pass." in text and "Second pass." in text and "OLD HISTORY" not in text
     assert ally.row["status"] == "done" and ally.payload("submitted")["summary"] == "Second pass."
 

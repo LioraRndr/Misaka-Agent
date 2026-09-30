@@ -281,15 +281,28 @@ async def _watch_parent() -> None:
     if not raw.isdigit():
         return
     expected = int(raw)
+    if os.name == "nt":
+        # Windows never reparents an orphan, and a venv's python.exe is a launcher that starts
+        # the real interpreter as its own child, so this process's parent is not the supervisor
+        # at all: the supervisor is watched by its identity (PID and start time) instead.
+        from misaka.core.platform import processes
+
+        supervisor = processes.identity(expected)
+
+        def supervised():
+            return supervisor is not None and processes.identity_is_alive(expected, supervisor)
+    else:
+        def supervised():
+            return os.getppid() == expected
     while True:
         # Once a second: a supervisor that died is still noticed promptly, and a machine
         # running a dozen children no longer spends 120 syscalls a second asking.
         await asyncio.sleep(_PARENT_WATCH_SECONDS)
-        if os.getppid() == expected:
+        if supervised():
             continue
         if os.name == "posix":
             try:
-                os.killpg(os.getpgrp(), signal.SIGKILL)
+                os.killpg(os.getpgrp(), signal.SIGKILL)  # windows-footgun: ok - POSIX branch
             except OSError:
                 pass
         os._exit(70)

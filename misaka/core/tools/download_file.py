@@ -125,6 +125,11 @@ _TEXT_SUFFIXES = frozenset({
 
 _ACCEPTED_SUFFIXES = frozenset(_SIGNATURES) | _TEXT_SUFFIXES
 
+# Declared types consulted before ``mimetypes`` (Hermes's ``DEFAULT_MIME_TO_EXT`` pattern):
+# DjVu is in no table Python ships, so it resolved only where the system lists it --
+# /etc/mime.types on a full Linux, not a slim image, not the Windows registry.
+_DECLARED_SUFFIXES = {"image/vnd.djvu": ".djvu", "image/x-djvu": ".djvu"}
+
 
 class DownloadFileToolInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -203,7 +208,8 @@ def _target_name(requested: str, final_url: str, headers: httpx.Headers, content
         # /article/12345 served as application/pdf still lands as a .pdf and still
         # gets signature-checked. A wrong declaration only renames the file -- the
         # signature check below is what decides whether it is kept.
-        guessed = (mimetypes.guess_extension(content_type) or "").lower() if content_type else ""
+        guessed = (_DECLARED_SUFFIXES.get(content_type) or mimetypes.guess_extension(content_type)
+                   or "").lower() if content_type else ""
         if guessed in _ACCEPTED_SUFFIXES:
             candidate += guessed
     return _fit_name(candidate)

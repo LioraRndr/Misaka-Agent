@@ -25,7 +25,7 @@ def path() -> Path:
 
 def read() -> dict:
     try:
-        saved = json.loads(path().read_text())
+        saved = json.loads(path().read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         return {}
     if not isinstance(saved, dict):

@@ -84,7 +84,7 @@ def stale():
         if root.is_symlink() or not root.is_dir() or (hasattr(os, 'getuid') and root.stat().st_uid != os.getuid()):
             continue
         try:
-            data = json.loads((root / 'owner.json').read_text())
+            data = json.loads((root / 'owner.json').read_text(encoding='utf-8-sig'))
             if isinstance(data, dict) and not alive(data.get('parent')):
                 result.append((root, data))
         except (OSError, ValueError, psutil.Error):

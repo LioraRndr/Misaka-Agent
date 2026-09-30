@@ -1,4 +1,5 @@
 """Real settings writers and both entrypoints, with no user state/network access."""
+import os
 import stat
 from types import SimpleNamespace
 
@@ -115,7 +116,8 @@ def test_paid_exa_is_masked_scoped_atomic_and_preserves_sibling(monkeypatch, tmp
         assert doc['env'] == {'EXA_API_KEY': 'private-exa-secret'}
         assert config.config_name('extract_backend') == 'firecrawl'
         assert 'extract_backend' not in doc
-        assert stat.S_IMODE(home.path('env', profile).stat().st_mode) == 0o600
+        if os.name != 'nt':
+            assert stat.S_IMODE(home.path('env', profile).stat().st_mode) == 0o600
     output = capsys.readouterr()
     assert 'private-exa-secret' not in output.out + output.err
     assert 'shared-other-secret' not in output.out + output.err
@@ -287,10 +289,10 @@ def test_menu_error_is_recoverable_and_back_returns_to_menu(monkeypatch):
 
 def test_corrupt_config_is_preserved(tmp_path):
     path = home.path('settings')
-    path.write_text('{broken')
+    path.write_text('{broken', encoding='utf-8')
     with pytest.raises(ValueError):
         menu.save({'backend': 'exa'})
-    assert path.read_text() == '{broken'
+    assert path.read_text(encoding='utf-8') == '{broken'
 
 
 def test_extension_provider_and_credentials_are_discovered(monkeypatch):
@@ -321,8 +323,8 @@ def test_vault_fields_do_not_need_json_or_copy_shared_settings(monkeypatch, tmp_
 
 
 def test_menu_uses_no_network_during_real_entrypoint_setup(monkeypatch):
-    import socket
-    monkeypatch.setattr(socket.socket, 'connect', lambda *a: pytest.fail('unexpected network request'))
+    from tests.offline import refuse_network
+    refuse_network(monkeypatch, 'unexpected network request')
     monkeypatch.setattr('sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
     pick(monkeypatch, 'Search and extraction together', 'exa', 'Exa - Free', 'Done')

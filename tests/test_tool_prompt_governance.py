@@ -111,13 +111,13 @@ class ToolPromptGovernanceTests(unittest.TestCase):
         path = Path(self.workspace) / "report.md"
         content = "# 研究\n\n**Evidence** and <em>markup</em>\n"
         _office.run_ops(path, [{"create": {"content": content}}])
-        self.assertEqual(path.read_text(), content)
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
         _office.run_ops(path, [{"create": {"content": "replacement"}}])
-        self.assertEqual(path.read_text(), content)
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
         _office.run_ops(path, [{"append": {"content": "changed"}}, {"unknown_op": {}}])
-        self.assertEqual(path.read_text(), content)
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
         _office.run_ops(path, [{"create": {"content": "intentional rebuild"}}], overwrite=True)
-        self.assertEqual(path.read_text(), "intentional rebuild")
+        self.assertEqual(path.read_text(encoding="utf-8"), "intentional rebuild")
 
     def test_web_results_keep_untrusted_fences_and_saved_paths(self):
         saved = "downloads/pages/source.md"

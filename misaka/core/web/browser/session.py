@@ -41,7 +41,7 @@ async def check_url(url):
 def _scratch():
     from misaka.core.web.browser.ownership import prefix
     root = Path(tempfile.mkdtemp(prefix=prefix(), dir='/tmp' if os.name == 'posix' else None))
-    (root / 'config.json').write_text('{}')
+    (root / 'config.json').write_text('{}', encoding='utf-8')
     return root
 
 
@@ -215,7 +215,7 @@ class BrowserSession:
         import psutil
         path = self.root / (self.id + '.pid')
         try:
-            pid = int(path.read_text().strip())
+            pid = int(path.read_text(encoding='utf-8-sig').strip())
             process = psutil.Process(pid)
             self.daemon_identity = (pid, process.create_time())
         except (OSError, ValueError, psutil.Error):
@@ -507,7 +507,7 @@ class BrowserSession:
     def _capture_harness(self):
         import psutil
         try:
-            record = json.loads((self.root / 'bu.pid').read_text())
+            record = json.loads((self.root / 'bu.pid').read_text(encoding='utf-8-sig'))
             pid = record['pid'] if isinstance(record, dict) else record
             proc = psutil.Process(pid)
             self.harness_identity = (pid, proc.create_time())

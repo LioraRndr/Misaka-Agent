@@ -74,7 +74,7 @@ async def test_stream_updates_without_replaying_or_writing_history(tmp_path):
         assert updated['streaming']['content'][1]['text'] == 'partial 中文'
         assert updated['entries'] is None
         assert path.read_bytes() == before
-        assert 'partial' not in path.read_text()
+        assert 'partial' not in path.read_text(encoding='utf-8')
         emit('message_end', assistant('final answer'))
         session.sessionManager.appendMessage(assistant('final answer'))
         final = await snapshot(control, updated)
@@ -136,7 +136,7 @@ async def test_socket_serializes_preview_and_still_rejects_wrong_owner(tmp_path)
     session, emit, _ = fixture_session(tmp_path)
     record = {'id': session.sessionId, 'instance': 'owner'}
     path = tmp_path / 'catalog.json'
-    path.write_text(json.dumps(record))
+    path.write_text(json.dumps(record), encoding='utf-8')
     catalog = SimpleNamespace(record=str(path), instance='owner', spec=None)
     control = SessionControl(session, catalog)
     await control.start()

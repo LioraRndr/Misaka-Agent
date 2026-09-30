@@ -27,9 +27,10 @@ from pathlib import Path
 
 BINARY = "soffice"
 
-# macOS installs the app bundle without putting anything on PATH, which is the default
-# outcome of ``brew install --cask libreoffice``.
-_MACOS_PATH = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+# The installers put nothing on PATH: the macOS app bundle (the default outcome of
+# ``brew install --cask libreoffice``) and the Windows one under Program Files.
+_APP_PATH = (os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "LibreOffice", "program", "soffice.exe")
+             if os.name == "nt" else "/Applications/LibreOffice.app/Contents/MacOS/soffice")
 
 # One conversion of a large workbook, with the profile creation of a first run inside it.
 TIMEOUT = 300
@@ -53,7 +54,7 @@ def binary():
     found = shutil.which(BINARY)
     if found:
         return found
-    return _MACOS_PATH if os.path.exists(_MACOS_PATH) else None
+    return _APP_PATH if os.path.exists(_APP_PATH) else None
 
 
 def _note(meta, key, value):
@@ -71,7 +72,7 @@ def _run(arguments, *, timeout, meta, directory):
             completed = subprocess.run(
                 [executable, "--headless", "--norestore",
                  f"-env:UserInstallation={Path(profile, 'profile').as_uri()}", *arguments],
-                capture_output=True, text=True, timeout=timeout, check=False,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False,
                 # macOS headless defaults can miss system CJK fonts under svp.
                 # Its native plugin still honours --headless and private profiles.
                 env={**os.environ, "SAL_USE_VCLPLUGIN": os.environ.get("SAL_USE_VCLPLUGIN")

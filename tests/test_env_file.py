@@ -48,7 +48,7 @@ def test_load_sets_what_the_shell_did_not_and_skips_misaka_names(monkeypatch, ca
     monkeypatch.delenv("FROM_FILE", raising=False)
     monkeypatch.delenv("MISAKA_WHO", raising=False)
     home.home().mkdir(parents=True, exist_ok=True)
-    home.path("env").write_text("FROM_SHELL=file\nFROM_FILE=file\nMISAKA_WHO=10032\nMISAKA_HOME=/elsewhere\n")
+    home.path("env").write_text("FROM_SHELL=file\nFROM_FILE=file\nMISAKA_WHO=10032\nMISAKA_HOME=/elsewhere\n", encoding="utf-8")
     with caplog.at_level("WARNING"):
         assert env_file.load() == ["FROM_FILE"]
     assert os.environ["FROM_SHELL"] == "shell" and os.environ["FROM_FILE"] == "file"
@@ -62,7 +62,7 @@ def test_a_role_overlays_the_homes_file_but_never_the_shell(monkeypatch, tmp_pat
     monkeypatch.delenv("SHARED_KEY", raising=False)
     monkeypatch.delenv("ROLE_ONLY", raising=False)
     home.home().mkdir(parents=True, exist_ok=True)
-    home.path("env").write_text("SHARED_KEY=home\nFROM_SHELL=home\n")
+    home.path("env").write_text("SHARED_KEY=home\nFROM_SHELL=home\n", encoding="utf-8")
     env_file.load()
     role = tmp_path / "role"
     role.mkdir()
@@ -77,10 +77,11 @@ def test_a_role_overlays_the_homes_file_but_never_the_shell(monkeypatch, tmp_pat
 def test_write_keeps_other_lines_creates_owner_only_and_refuses_misaka_names():
     home.home().mkdir(parents=True, exist_ok=True)
     target = home.path("env")
-    target.write_text("# keys for the skills\nOLD=1\nGONE=2\n")
+    target.write_text("# keys for the skills\nOLD=1\nGONE=2\n", encoding="utf-8")
     env_file.write({"OLD": "with space", "NEW": "n"}, remove=("GONE",))
-    assert target.read_text() == '# keys for the skills\nOLD="with space"\nNEW=n\n'
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert target.read_text(encoding="utf-8") == '# keys for the skills\nOLD="with space"\nNEW=n\n'
+    if os.name != "nt":                      # POSIX modes; Windows keeps the profile private by ACL
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert env_file.read() == {"OLD": "with space", "NEW": "n"}
     with pytest.raises(ValueError):
         env_file.write({"MISAKA_MODEL": "x"})
@@ -91,22 +92,23 @@ def test_write_keeps_other_lines_creates_owner_only_and_refuses_misaka_names():
 def test_a_symlinked_or_malformed_file_is_refused_not_half_read(tmp_path):
     home.home().mkdir(parents=True, exist_ok=True)
     real = tmp_path / "elsewhere.env"
-    real.write_text("A=1\n")
+    real.write_text("A=1\n", encoding="utf-8")
     home.path("env").symlink_to(real)
     with pytest.raises(env_file.EnvFileError):
         env_file.read()
     assert env_file.load() == []                               # reported, nothing applied
     home.path("env").unlink()
-    home.path("env").write_text("A=1\nnot a line\n")
+    home.path("env").write_text("A=1\nnot a line\n", encoding="utf-8")
     assert env_file.load() == [] and "A" not in os.environ
 
 
 def test_ensure_narrows_a_readable_env_file():
     home.home().mkdir(parents=True, exist_ok=True)
-    home.path("env").write_text("A=1\n")
+    home.path("env").write_text("A=1\n", encoding="utf-8")
     home.path("env").chmod(0o644)
     home.ensure()
-    assert stat.S_IMODE(home.path("env").stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(home.path("env").stat().st_mode) == 0o600
     assert "env" not in home.strays() and ".env" not in home.strays()
 
 

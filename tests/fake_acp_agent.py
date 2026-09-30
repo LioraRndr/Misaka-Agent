@@ -146,11 +146,9 @@ class Agent:
 
 async def main():
     agent = Agent()
-    loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader(limit=2**24)
-    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
     try:
-        while line := await reader.readline():
+        # A thread reads stdin: a Windows event loop cannot watch the pipe its parent handed it.
+        while line := await asyncio.to_thread(sys.stdin.buffer.readline):
             await agent.handle(json.loads(line))
     finally:
         log("exit")

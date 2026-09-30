@@ -268,14 +268,14 @@ def test_views_are_written_from_the_records_and_never_read_back(board, tmp_path)
     _conclude(board, run, root, "The reform failed for fiscal reasons.")
     _decide(board, run, root, "Fiscal", own=True)
     graph.write_views(board, run, final=True)
-    view = (tmp_path / graph.graph_path(run)).read_text()
+    view = (tmp_path / graph.graph_path(run)).read_text(encoding="utf-8")
     assert "```mermaid" in view and root["id"] in view and "this node's own line" in view
-    node_view = (tmp_path / graph.node_view_path(root["id"])).read_text()
+    node_view = (tmp_path / graph.node_view_path(root["id"])).read_text(encoding="utf-8")
     assert "synthesis.md" in node_view and "Decisions made here" in node_view
-    snapshot = json.loads((tmp_path / runs.run_path(run, graph.GRAPH_SNAPSHOT)).read_text())
+    snapshot = json.loads((tmp_path / runs.run_path(run, graph.GRAPH_SNAPSHOT)).read_text(encoding="utf-8"))
     assert snapshot["nodes"][0]["id"] == root["id"]
     # A view is rewritten, never trusted: editing it changes nothing the run reads.
-    (tmp_path / graph.graph_path(run)).write_text("tampered")
+    (tmp_path / graph.graph_path(run)).write_text("tampered", encoding="utf-8")
     assert graph.snapshot(board, run)["nodes"][0]["question"] == root["question"]
 
 
@@ -289,7 +289,7 @@ def test_the_node_view_names_its_red_team_with_both_jobs(board, tmp_path):
     assert runs.red_team(board, run["id"], root["id"])["assignee"] == "10043"
     assert workflow._red_team_assignee(board, run, root) == "10043"
     graph.write_views(board, run)
-    node_view = (tmp_path / graph.node_view_path(root["id"])).read_text()
+    node_view = (tmp_path / graph.node_view_path(root["id"])).read_text(encoding="utf-8")
     assert "Red team and divergence review: Sister 10043 — critic and finder of the untaken frames" in node_view
 
 

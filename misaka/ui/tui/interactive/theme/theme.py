@@ -181,7 +181,7 @@ _CACHED_CLI_HIGHLIGHT_THEME: dict[str, Callable[[str], str]] | None = None
 
 
 def _load_json(path: str) -> ThemeJson:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = json.loads(Path(path).read_text(encoding="utf-8").removeprefix("\ufeff"))   # pi stripBom
     if not isinstance(payload, dict):
         raise ValueError(f"Theme file must contain a JSON object: {path}")  # noqa: TRY004 - callers treat bad input as ValueError
     return payload  # type: ignore[return-value]
@@ -444,7 +444,7 @@ def _parse_theme_json(label: str, json_data: Any) -> ThemeJson:
 
 def _parse_theme_json_content(label: str, content: str) -> ThemeJson:
     try:
-        payload = json.loads(content)
+        payload = json.loads(content.removeprefix("\ufeff"))      # pi stripBom
     except Exception as error:
         raise ValueError(f"Failed to parse theme {label}: {error}") from error
     return _parse_theme_json(label, payload)

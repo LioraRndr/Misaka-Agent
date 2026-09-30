@@ -10,7 +10,6 @@ the real process exit; the worker settles its own result.
 """
 import asyncio
 import base64
-import fcntl
 import json
 import logging
 import os
@@ -21,7 +20,7 @@ import socket
 import struct
 import subprocess
 import sys
-import termios
+import threading
 import time
 
 import psutil
@@ -32,7 +31,19 @@ from misaka.ui.panel import (
     geometry as hui,  # layout.rs port: split_at / remove_pane / pane_ids
 )
 from misaka.ui.panel import ghostty as vt
+from misaka.utils import file_lock, local_socket
 from misaka.utils.streams import STREAM_LIMIT
+
+# A pane's terminal is a pty on POSIX and a ConPTY pseudo console on Windows (herdr's
+# portable-pty backend). pane.fd is where input is written either way: the pty's master, or the
+# console's non-blocking input pipe, whose output arrives from its reader thread (pane.console).
+WINDOWS = sys.platform == "win32"
+WRITE_POLL_SECONDS = 0.01      # Windows: a pipe has no writability event, so a full one is tried again
+if WINDOWS:
+    from misaka.ui.panel import conpty
+else:
+    import fcntl
+    import termios
 
 # Wire protocol version (strict equality, as in herdr). Bump it whenever *server
 # behaviour* changes, not only method/event shapes: an unbumped behaviour change
@@ -156,7 +167,9 @@ def _screen_lines(pane):
 # Spinner frames: braille and geometric dots only. Never add ASCII such as |/-\ --
 # the / in paths and the ubiquitous - would make every screen look busy.
 _SPINNER_CHARS = set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷◐◓◑◒◴◷◶◵")
-_SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "-zsh", "-bash"}
+# herdr is_pane_shell_process_name, plus the login-shell spellings.
+_SHELLS = {"sh", "bash", "dash", "zsh", "fish", "ksh", "mksh", "csh", "tcsh", "elvish", "xonsh", "nu",
+           "pwsh", "powershell", "cmd", "-zsh", "-bash"}
 # A command typed by hand in a pane's shell counts as a transient ally only if it is one of
 # the allies this home enables (``settings.json``'s ``allies``, whose names are the commands);
 # otherwise vim/htop would show up in the roster too. Read fresh on each ask, so an edit takes
@@ -176,6 +189,51 @@ def card_program(row, say=None):
     if row["assignee"] in presets.names():
         return [*ALLY_CARD, row["id"], *(["--say", say] if say is not None else [])]
     return [*CARD_SHELL, row["id"], *(["--resume", "--say", say] if say is not None else [])]
+
+
+def _terminate(proc):
+    """SIGTERM to a pane's program and its whole session. On Windows the pseudo console is
+    closed instead, which sends every program attached to it CTRL_CLOSE_EVENT (herdr drops the
+    ConPTY master); that can block while the console flushes, so it runs on a thread."""
+    if WINDOWS:
+        threading.Thread(target=proc.console.hang_up, name="conpty-hang-up", daemon=True).start()
+    else:
+        os.killpg(proc.pid, signal.SIGTERM)  # windows-footgun: ok - POSIX branch
+
+
+def _kill(proc):
+    """SIGKILL to a pane's program and its whole session. On Windows, herdr's close: the
+    program is terminated and its console closed, which ends everything attached to it."""
+    if WINDOWS:
+        proc.kill()
+        _terminate(proc)
+    else:
+        os.killpg(proc.pid, signal.SIGKILL)  # windows-footgun: ok - POSIX branch
+
+
+def _bare(name):
+    """A process name as the shell and ally tables spell it. On Windows herdr's
+    normalized_process_name: no directory, no ``.exe``, case folded."""
+    if not WINDOWS:
+        return name
+    name = name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+    return (name[:-4] if name.lower().endswith(".exe") else name).lower()
+
+
+def _foreground_pid(pane):
+    """The pid of the pane's foreground job: the leader of its terminal's foreground process
+    group. Windows has no such group; herdr (platform/windows.rs select_pane_foreground_job)
+    takes the topmost process of the pane's tree that is a known agent, else the pane's own
+    program."""
+    if not WINDOWS:
+        return os.tcgetpgrp(pane.fd) if pane.fd is not None else -1
+    root = psutil.Process(pane.proc.pid)
+    allies = ally_commands()
+    for process in (root, *root.children(recursive=True)):
+        argv = process.cmdline()
+        if any(_bare(os.path.basename(part)) in allies for part in (process.name(), *argv[:2])):
+            return process.pid
+    return root.pid
 
 
 def _looks_like_command(name):
@@ -206,11 +264,11 @@ def _foreground(pane):
     if not pane.alive() or pane.fd is None:
         return None
     try:
-        fg = os.tcgetpgrp(pane.fd)
+        fg = _foreground_pid(pane)
         if fg <= 0:
             return None
         proc = psutil.Process(fg)
-        name = proc.name()
+        name = _bare(proc.name())
         try:
             argv = proc.cmdline()
         except psutil.Error:
@@ -220,7 +278,7 @@ def _foreground(pane):
         # The first argv element is the name a human recognises.
         shown = name
         if argv and not _looks_like_command(name):
-            shown = os.path.basename(argv[0])
+            shown = _bare(os.path.basename(argv[0]))
             if shown in ("node", "python", "python3", "bun", "deno") and len(argv) > 1:
                 shown = os.path.basename(argv[1]) or shown   # interpreter + script: use the script name
         try:
@@ -314,13 +372,13 @@ def _pane_busy(pane, ally_state=None):
         return False
     if ally_state is not None:
         return ally_state == "working"
-    own = os.path.basename(pane.argv[0]) if pane.argv else ""
+    own = _bare(os.path.basename(pane.argv[0])) if pane.argv else ""
     if own.lstrip("-") in _SHELLS:
         try:
-            fg = os.tcgetpgrp(pane.fd) if pane.fd is not None else -1
+            fg = _foreground_pid(pane)
             if fg <= 0:
                 return False
-            name = psutil.Process(fg).name()
+            name = _bare(psutil.Process(fg).name())
             return bool(name) and name.lstrip("-") not in _SHELLS
         except (OSError, psutil.Error):
             return False
@@ -345,11 +403,11 @@ def _busy_reason(pane):
     if ally:
         state, why = _ally_verdict(pane)
         return f"Ally pane ({ally}): {state}, because {why}."
-    own = os.path.basename(pane.argv[0]) if pane.argv else ""
+    own = _bare(os.path.basename(pane.argv[0])) if pane.argv else ""
     if own.lstrip("-") in _SHELLS:
         try:
-            fg = os.tcgetpgrp(pane.fd) if pane.fd is not None else -1
-            name = psutil.Process(fg).name() if fg > 0 else "?"
+            fg = _foreground_pid(pane)
+            name = _bare(psutil.Process(fg).name()) if fg > 0 else "?"
         except (OSError, psutil.Error):
             return f"Shell pane ({own}): foreground process is unavailable; classified as idle."
         if name.lstrip("-") in _SHELLS:
@@ -689,6 +747,7 @@ class Pane:
         "claim_lock",
         "clipboard_writes",
         "compression",
+        "console",
         "content_rev",
         "cwd",
         "decscusr",
@@ -728,6 +787,7 @@ class Pane:
         self.reported = None          # the session's own word: {"state", "message", "seq"} (herdr hook authority); None = guess from the screen
         self.claim_lock = self.generation = None
         self.proc = self.fd = self.exit_code = None
+        self.console = None           # Windows: the ConPTY pseudo console (conpty.PseudoConsole)
         self.buf = bytearray()
         self.writes = []              # _PendingWrite queue, drained in order as the program reads (herdr's writer channel)
         self.writer_armed = False     # loop.add_writer(fd) is registered while the queue is non-empty and the pty is full
@@ -839,12 +899,31 @@ class Daemon:
 
     # ── Panes ─────────────────────────────────────────────
 
+    def _child_env(self, pane: Pane, env):
+        child_env = _pane_env(os.environ, env)
+        child_env["MISAKA_NET_PANE"] = pane.id
+        # The space the pane is seated in: a session started here belongs to it for good.
+        seat = self._tab_holding(pane.id)
+        if seat:
+            child_env["MISAKA_NET_SPACE"] = seat[0]["id"]
+        else:
+            child_env.pop("MISAKA_NET_SPACE", None)
+        child_env.pop("MISAKA_DM_CARD_ALLOWLIST", None)  # contact-session capability
+        return child_env
+
     def _spawn(self, pane: Pane, env=None):
+        if WINDOWS:
+            rows, cols = pane.size()
+            console = conpty.PseudoConsole(pane.argv, pane.cwd, self._child_env(pane, env), rows, cols)
+            pane.proc, pane.fd, pane.console = console.proc, console.input_fd, console
+            console.attach(asyncio.get_running_loop(), lambda chunk: self._output(pane, chunk))
+            pane.compression.start()
+            return
         import pty
 
         def _become_session_leader():
             # A proper controlling terminal (as tmux/herdr do); without it ^C/^Z cannot reach the job.
-            os.setsid()
+            os.setsid()  # windows-footgun: ok - POSIX branch: Windows spawns into ConPTY
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
         master, slave = pty.openpty()
@@ -854,21 +933,12 @@ class Daemon:
         try:
             rows, cols = pane.size()      # a fresh pane is still at the default size
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-            child_env = _pane_env(os.environ, env)
-            child_env["MISAKA_NET_PANE"] = pane.id
-            # The space the pane is seated in: a session started here belongs to it for good.
-            seat = self._tab_holding(pane.id)
-            if seat:
-                child_env["MISAKA_NET_SPACE"] = seat[0]["id"]
-            else:
-                child_env.pop("MISAKA_NET_SPACE", None)
-            child_env.pop("MISAKA_DM_CARD_ALLOWLIST", None)  # contact-session capability
             pane.proc = subprocess.Popen(
                 pane.argv, cwd=pane.cwd, stdin=slave, stdout=slave, stderr=slave,
                 preexec_fn=_become_session_leader,  # noqa: PLW1509 - panes are spawned from the daemon's main thread only; setsid must run in the child
                 # The pane's terminal is our ghostty relay, which passes 24-bit SGR through
                 # untouched -- COLORTERM keeps the engine from pre-baking 24-bit colours.
-                env=child_env,
+                env=self._child_env(pane, env),
             )
         except BaseException:
             os.close(master)
@@ -883,8 +953,9 @@ class Daemon:
     @staticmethod
     def _discard_output(pane: Pane, rounds=16):
         """Read and drop what a leaving program writes. Its pane is not listening any more, and
-        a pty nobody drains fills up and holds the program open instead of letting it leave."""
-        if pane.fd is None:
+        a pty nobody drains fills up and holds the program open instead of letting it leave.
+        (A pseudo console's reader thread keeps draining on its own once detached.)"""
+        if pane.fd is None or WINDOWS:
             return
         for _ in range(rounds):
             try:
@@ -901,6 +972,9 @@ class Daemon:
             except OSError:
                 pass
             pane.fd = None
+        if pane.console is not None:
+            pane.console.close()
+            pane.console = None
 
     async def _stop_program(self, pane: Pane):
         """End the program running in a pane without taking the pane down.
@@ -918,7 +992,7 @@ class Daemon:
                 setattr(pane, timer, None)
         if pane.fd is not None:
             try:
-                loop.remove_reader(pane.fd)
+                pane.console.detach() if WINDOWS else loop.remove_reader(pane.fd)
             except (OSError, ValueError):     # never registered, or already gone
                 pass
         proc, pane.proc = pane.proc, None
@@ -926,7 +1000,7 @@ class Daemon:
             if proc is None or proc.poll() is not None:
                 return
             try:
-                os.killpg(proc.pid, signal.SIGTERM)
+                _terminate(proc)
             except OSError:                   # already gone
                 return
             for _ in range(EXIT_GRACE_TRIES):
@@ -935,7 +1009,7 @@ class Daemon:
                 self._discard_output(pane)
                 await asyncio.sleep(EXIT_POLL_SECONDS)
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                _kill(proc)
             except OSError:
                 pass
             while proc.poll() is None:
@@ -1007,8 +1081,7 @@ class Daemon:
             if item in pane.writes:
                 pane.writes.remove(item)
             if not pane.writes and pane.writer_armed and pane.fd is not None:
-                loop.remove_writer(pane.fd)
-                pane.writer_armed = False
+                self._disarm_writer(pane)
             future.cancel()
             # Say which way it failed: the bytes that entered the pane are in its input
             # queue and the program will read them; only the remainder was dropped.
@@ -1031,8 +1104,11 @@ class Daemon:
                 return
             if not written:
                 if not pane.writer_armed:
-                    loop.add_writer(pane.fd, self._drain_writes, pane)
-                    pane.writer_armed = True
+                    if WINDOWS:
+                        pane.writer_armed = loop.call_later(WRITE_POLL_SECONDS, self._poll_writes, pane)
+                    else:
+                        loop.add_writer(pane.fd, self._drain_writes, pane)
+                        pane.writer_armed = True
                 return
             item.view = item.view[written:]
             if not item.view:
@@ -1040,14 +1116,26 @@ class Daemon:
                 if not item.future.done():
                     item.future.set_result(item.total)
         if pane.writer_armed and pane.fd is not None:
-            loop.remove_writer(pane.fd)
-            pane.writer_armed = False
+            self._disarm_writer(pane)
+
+    def _poll_writes(self, pane: Pane):
+        """Windows: the retry a full input pipe armed has come round."""
+        pane.writer_armed = False
+        self._drain_writes(pane)
+
+    @staticmethod
+    def _disarm_writer(pane: Pane):
+        if WINDOWS:
+            pane.writer_armed.cancel()
+        else:
+            asyncio.get_running_loop().remove_writer(pane.fd)
+        pane.writer_armed = False
 
     def _fail_writes(self, pane: Pane, reason):
         """The pane is going away: nothing queued will ever be read."""
         if pane.writer_armed and pane.fd is not None:
             try:
-                asyncio.get_running_loop().remove_writer(pane.fd)
+                self._disarm_writer(pane)
             except RuntimeError:
                 pass
             pane.writer_armed = False
@@ -1064,14 +1152,20 @@ class Daemon:
             return
         except OSError:
             chunk = b""
+        self._output(pane, chunk)
+
+    def _output(self, pane: Pane, chunk):
+        """What the program wrote; ``b""`` when its terminal has ended."""
+        if pane.fd is None:
+            return                          # a pseudo console's last chunk, after the pane closed
         if not chunk:
-            asyncio.get_running_loop().remove_reader(pane.fd)
+            if not WINDOWS:
+                asyncio.get_running_loop().remove_reader(pane.fd)
             if pane.flush is not None:      # no more frames for a pane that has exited
                 pane.flush.cancel()
                 pane.flush = None
             self._fail_writes(pane, "the pane's program exited before reading it")
-            os.close(pane.fd)
-            pane.fd = None
+            self._release_fd(pane)
             pane.exit_code = pane.proc.poll() if pane.proc else None
             pane.reported = None      # herdr: process exit is a generation fence; a dead session has no say
             self._broadcast(pane.id, {"event": "exited", "id": pane.id,
@@ -1212,13 +1306,16 @@ class Daemon:
             return
         pane.resize_applied_at = asyncio.get_running_loop().time()
         try:
-            fcntl.ioctl(pane.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            if WINDOWS:
+                pane.console.resize(rows, cols)      # the console tells its programs itself
+            else:
+                fcntl.ioctl(pane.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         except OSError:
             pass
         pane.resize(rows, cols)
-        if pane.proc is not None:
+        if pane.proc is not None and not WINDOWS:
             try:
-                os.killpg(pane.proc.pid, signal.SIGWINCH)
+                os.killpg(pane.proc.pid, signal.SIGWINCH)  # windows-footgun: ok - POSIX branch
             except OSError:
                 pass
         # Keep the last complete frame on screen until the program repaints at the new size,
@@ -1410,7 +1507,7 @@ class Daemon:
             await asyncio.sleep(EXIT_POLL_SECONDS)
         else:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                _kill(proc)
             except OSError:
                 pass
             while proc.poll() is None:
@@ -1460,7 +1557,7 @@ class Daemon:
             # per close (cascades serially longer). SIGTERM now; a background task
             # escalates to SIGKILL and reaps, off the event loop.
             try:
-                os.killpg(pane.proc.pid, signal.SIGTERM)
+                _terminate(pane.proc)
             except OSError:
                 pass
             try:
@@ -1472,7 +1569,7 @@ class Daemon:
                     pane.proc.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     try:
-                        os.killpg(pane.proc.pid, signal.SIGKILL)
+                        _kill(pane.proc)
                     except OSError:
                         pass
                     try:
@@ -1485,18 +1582,14 @@ class Daemon:
                 reaper.add_done_callback(self._reapers.discard)
         if pane.fd is not None:
             try:
-                asyncio.get_running_loop().remove_reader(pane.fd)
+                pane.console.detach() if WINDOWS else asyncio.get_running_loop().remove_reader(pane.fd)
                 self._fail_writes(pane, "the pane was closed before it was read")
             except RuntimeError:  # event loop already closed
                 pass
             if pane.flush is not None:
                 pane.flush.cancel()
                 pane.flush = None
-            try:
-                os.close(pane.fd)
-            except OSError:
-                pass
-            pane.fd = None
+            self._release_fd(pane)
         self._unseat(pane_id)
         self._save_snapshot()
         return pane
@@ -1807,8 +1900,7 @@ class Daemon:
         while not self._stopping.is_set():
             if self._socket_identity is not None:
                 try:
-                    info = os.stat(self.sock_path, follow_symlinks=False)
-                    owned = (info.st_dev, info.st_ino) == self._socket_identity
+                    owned = local_socket.identity(self.sock_path) == self._socket_identity
                 except OSError:
                     owned = False
                 if not owned:
@@ -2331,25 +2423,23 @@ class Daemon:
         try:
             for _ in range(SINGLETON_LOCK_TRIES):
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
+                    if file_lock.lock_fd(lock_fd, blocking=False):
+                        break
                 except OSError:
-                    await asyncio.sleep(0.05)
+                    pass
+                await asyncio.sleep(0.05)
             # Waited it out: fall through and let bind decide, which is where this stood
             # before the lock existed. Better a loud "address already in use" than a hang.
             # Singleton: if the socket answers, a daemon is already running; a stale socket is removed and recreated.
             if os.path.exists(self.sock_path):
                 # herdr ipc.rs prepare_socket_path: a live listener refuses a second server;
                 # refused / missing / timed out means a stale file to reclaim.
-                probe = socket.socket(socket.AF_UNIX)
-                probe.settimeout(1.0)
                 try:
-                    probe.connect(self.sock_path)
-                    raise SystemExit("The daemon is already running (its socket answered).")
-                except (ConnectionRefusedError, FileNotFoundError, TimeoutError, OSError):
+                    local_socket.connect(self.sock_path, 1.0).close()
+                except OSError:
                     pass
-                finally:
-                    probe.close()
+                else:
+                    raise SystemExit("The daemon is already running (its socket answered).")
                 try:
                     os.unlink(self.sock_path)
                 except FileNotFoundError:
@@ -2358,15 +2448,14 @@ class Daemon:
             # `layout.set` a whole space tree -- so asyncio's 64 KiB default is far too small.
             old_umask = os.umask(0o177)
             try:
-                server = await asyncio.start_unix_server(self._serve_client, self.sock_path,
+                server = await local_socket.start_server(self._serve_client, self.sock_path,
                                                          limit=self._read_limit)
             finally:
                 os.umask(old_umask)
             os.chmod(self.sock_path, 0o600)
-            info = os.stat(self.sock_path, follow_symlinks=False)
-            self._socket_identity = (info.st_dev, info.st_ino)
+            self._socket_identity = local_socket.identity(self.sock_path)
         finally:
-            os.close(lock_fd)   # releases the flock
+            os.close(lock_fd)   # releases the lock
         self._load_spaces()
         skipped = self.restore_snapshot()
         if skipped:

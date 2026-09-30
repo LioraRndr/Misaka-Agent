@@ -181,6 +181,8 @@ class ProcessTerminal:
         self._progressActive = False
         self._previousSigwinchHandler: Any | None = None
         self._previousTermiosSettings: list[Any] | None = None
+        self._previousConsoleModes: Any | None = None
+        self._consoleInput: Any | None = None
         self._lastStdinActivityMs = self._now_ms()
         self._readerInstalled = False
 
@@ -551,14 +553,37 @@ class ProcessTerminal:
         fd = self._stdin_fileno()
         if fd is None:
             return
+        if sys.platform == "win32":
+            self._install_console_reader(fd)
+            return
         loop = self._event_loop()
         add_reader = getattr(loop, "add_reader", None)
         if callable(add_reader):
             add_reader(fd, self._handle_stdin_ready)
             self._readerInstalled = True
 
+    def _install_console_reader(self, fd: int) -> None:
+        # MISAKA: Windows. A console handle cannot be selected on, so libuv reads its input
+        # records on a thread and emits 'data' and the stdout 'resize' from them; the
+        # console reader does the same and routes both back to the event loop.
+        from misaka.utils import win_console
+
+        def on_text(text: str) -> None:
+            self._on_loop(lambda: self._handle_input_data(text))
+
+        def on_resize() -> None:
+            self._on_loop(lambda: self.resizeHandler() if self.resizeHandler else None)
+
+        self._consoleInput = win_console.ConsoleInput(fd, on_text, on_resize).start()
+        self._readerInstalled = True
+
     def _remove_reader(self) -> None:
         if not self._readerInstalled:
+            return
+        if self._consoleInput is not None:
+            self._consoleInput.stop()
+            self._consoleInput = None
+            self._readerInstalled = False
             return
         fd = self._stdin_fileno()
         if fd is None:
@@ -589,6 +614,9 @@ class ProcessTerminal:
             if not data:
                 self._remove_reader()
                 return
+        self._handle_input_data(data)
+
+    def _handle_input_data(self, data: str | bytes) -> None:
         self._lastStdinActivityMs = self._now_ms()
         if self.stdinDataHandler is not None:
             self.stdinDataHandler(data)
@@ -600,7 +628,15 @@ class ProcessTerminal:
             return None
 
     def _enter_raw_mode(self) -> None:
-        if sys.platform == "win32" or termios is None:
+        if sys.platform == "win32":
+            # MISAKA: libuv's UV_TTY_MODE_RAW on a Windows console is a console mode, not termios.
+            fd = self._stdin_fileno()
+            if fd is not None:
+                from misaka.utils import win_console
+
+                self._previousConsoleModes = win_console.enter_raw_mode(fd)
+            return
+        if termios is None:
             return
         fd = self._stdin_fileno()
         is_tty = getattr(self.stdin, "isatty", None)
@@ -620,6 +656,12 @@ class ProcessTerminal:
         termios.tcsetattr(fd, termios.TCSADRAIN, mode)
 
     def _restore_raw_mode(self) -> None:
+        if self._previousConsoleModes is not None:
+            from misaka.utils import win_console
+
+            win_console.restore(self._previousConsoleModes)
+            self._previousConsoleModes = None
+            return
         if termios is None or self._previousTermiosSettings is None:
             return
         fd = self._stdin_fileno()

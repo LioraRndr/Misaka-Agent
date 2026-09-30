@@ -78,13 +78,13 @@ def test_the_macos_app_bundle_is_found_when_nothing_is_on_the_path(monkeypatch):
     """``brew install --cask libreoffice`` puts nothing on PATH, which is how most macOS
     users end up with it installed and undetectable."""
     monkeypatch.setattr(soffice.shutil, "which", lambda name: None)
-    monkeypatch.setattr(soffice, "_MACOS_PATH", str(__file__))     # a path that exists
+    monkeypatch.setattr(soffice, "_APP_PATH", str(__file__))     # a path that exists
     assert soffice.binary() == str(__file__)
 
 
 def test_no_libreoffice_anywhere_is_none_not_an_exception(monkeypatch):
     monkeypatch.setattr(soffice.shutil, "which", lambda name: None)
-    monkeypatch.setattr(soffice, "_MACOS_PATH", "/nonexistent/soffice")
+    monkeypatch.setattr(soffice, "_APP_PATH", "/nonexistent/soffice")
     assert soffice.binary() is None
 
 
@@ -93,7 +93,7 @@ def test_the_probe_is_not_cached(monkeypatch):
     capability, and the probe is one PATH lookup."""
     answers = iter([None, "/usr/bin/soffice"])
     monkeypatch.setattr(soffice.shutil, "which", lambda name: next(answers))
-    monkeypatch.setattr(soffice, "_MACOS_PATH", "/nonexistent/soffice")
+    monkeypatch.setattr(soffice, "_APP_PATH", "/nonexistent/soffice")
     assert soffice.binary() is None
     assert soffice.binary() == "/usr/bin/soffice"
 

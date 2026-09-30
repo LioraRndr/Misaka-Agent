@@ -38,7 +38,18 @@ def get_file_revision(path: str) -> tuple[int, int, int, int, int] | None:
         stats = os.stat(path)
     except OSError:
         return None
-    return stats.st_dev, stats.st_ino, stats.st_size, stats.st_mtime_ns, stats.st_ctime_ns
+    return file_revision_from_stat(stats)
+
+
+def file_revision_from_stat(stats: os.stat_result) -> tuple[int, int, int, int, int]:
+    """The revision ``get_file_revision`` reads, from a ``stat`` or an ``fstat`` alike.
+
+    On Windows CPython (3.12+) fills ``st_ctime`` with the creation time from ``os.stat`` but
+    with the last metadata change from ``os.fstat``, so once a file has been renamed into place
+    the two never agree; the creation time both report stands in there.
+    """
+    changed = stats.st_birthtime_ns if os.name == "nt" else stats.st_ctime_ns
+    return stats.st_dev, stats.st_ino, stats.st_size, stats.st_mtime_ns, changed
 
 
 def is_local_path(value: str) -> bool:
@@ -140,6 +151,13 @@ def sys_platform() -> str:
     return os.uname().sysname.lower()
 
 
+def posix_relpath(path: str | os.PathLike[str], start: str | os.PathLike[str]) -> str:
+    """``os.path.relpath`` with ``/`` between the parts on every platform: the form a relative
+    path takes in a board row, a project file or a prompt, so what Windows writes reads the
+    same everywhere (the grep and find tools already report paths this way)."""
+    return os.path.relpath(path, start).replace(os.sep, "/")
+
+
 canonicalizePath = canonicalize_path
 isLocalPath = is_local_path
 normalizePath = normalize_path
@@ -150,11 +168,13 @@ markPathIgnoredByCloudSync = mark_path_ignored_by_cloud_sync
 
 __all__ = [
     "canonicalizePath",
+    "file_revision_from_stat",
     "formatPathRelativeToCwdOrAbsolute",
     "getCwdRelativePath",
     "get_file_revision",
     "isLocalPath",
     "markPathIgnoredByCloudSync",
     "normalizePath",
+    "posix_relpath",
     "resolvePath",
 ]

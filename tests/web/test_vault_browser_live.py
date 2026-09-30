@@ -48,7 +48,7 @@ async def test_real_vault_form_dialog_focus_and_cleanup(tmp_path):
         'env': {'HTTP_PROXY': '', 'HTTPS_PROXY': '', 'ALL_PROXY': '', 'NO_PROXY': '*'},
         'browser': {'command': os.environ['MISAKA_TEST_BROWSER_COMMAND'], 'backend': 'agent-browser',
                     'executable_path': os.environ['MISAKA_TEST_CHROME']},
-        'vault': {'onepassword': {'enabled': False}, 'bitwarden': {'enabled': False}}}))
+        'vault': {'onepassword': {'enabled': False}, 'bitwarden': {'enabled': False}}}), encoding='utf-8')
     owner = WebPart(SimpleNamespace(profile_dir=str(profile), workspace=str(tmp_path)))
     definitions = {tool.name: tool for tool in owner.tools}
     secret = 'fixture-browser-password-59172'

@@ -98,7 +98,7 @@ def read(role_dir: str | os.PathLike[str] | None = None) -> dict[str, str]:
     if target.is_symlink():
         raise EnvFileError(f"{home.display(target)} must be a plain file, not a symlink")
     try:
-        text = target.read_text(encoding="utf-8")
+        text = target.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return {}
     return parse(text, source=home.display(target))
@@ -182,7 +182,7 @@ def write(changes: dict[str, str], role_dir: str | os.PathLike[str] | None = Non
         if target.is_symlink():
             raise EnvFileError(f"{home.display(target)} must be a plain file, not a symlink")
         try:
-            lines = target.read_text(encoding="utf-8").splitlines()
+            lines = target.read_text(encoding="utf-8-sig").splitlines()
         except FileNotFoundError:
             lines = []
         parse("\n".join(lines), source=home.display(target))      # never edit a file we cannot read back

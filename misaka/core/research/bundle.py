@@ -32,6 +32,7 @@ from misaka.core.documents import index as corpus
 from misaka.core.research import ledger, runs
 from misaka.core.tools.path_utils import DOWNLOAD_DIR_NAME
 from misaka.core.web.evidence import check_material_read, read_provenance
+from misaka.utils.paths import posix_relpath
 
 MANIFEST = "SOURCES.md"
 SOURCES_DIR = "sources"
@@ -46,6 +47,11 @@ _LOCATOR = re.compile(
     rf"|https?://{_STOP}+"
     rf"|(?<![\w/.\-])(?:{DOWNLOAD_DIR_NAME}|nodes|final|cards)/{_STOP}+"
     rf"|(?<![\w:.])/(?:{_SEG}+/)+{_SEG}+"
+    # Windows paths are also written with "\" and from a drive (C:\project\downloads\a.md); on
+    # POSIX a "\" is an ordinary filename character, so these forms are Windows-only.
+    + (rf"|(?<![\w/\\.\-])(?:{DOWNLOAD_DIR_NAME}|nodes|final|cards)\\{_STOP}+"
+       r'''|(?<![\w:.\\/])[A-Za-z]:[\\/](?:[^\s`'"<>\[\]()/\\]+[\\/])+[^\s`'"<>\[\]()/\\]+'''
+       if os.name == "nt" else "")
 )
 _NOTE = ("Written by misaka when the products here were settled and rebuilt from scratch each time, so edit "
          "nothing in this file or under the sources folder. Each file there is a hard link to where it already "
@@ -210,7 +216,7 @@ class _Collector:
             return
         source = self.sources.get(real)
         if source is None:
-            source = self.sources[real] = Source(real, os.path.relpath(real, self.index.workspace))
+            source = self.sources[real] = Source(real, posix_relpath(real, self.index.workspace))
         line = (f"as `{locator}` " if locator.startswith(("doc:", "http://", "https://")) else "") + by
         if line not in source.cited:
             source.cited.append(line)
@@ -256,7 +262,7 @@ class _Collector:
             with open(real, encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
         except (OSError, ValueError) as error:
-            self.unresolved.append((os.path.relpath(real, self.index.workspace), str(error), by))
+            self.unresolved.append((posix_relpath(real, self.index.workspace), str(error), by))
             return
         for locator in locators_in(text):
             self.cite(locator, by, [*bases, os.path.dirname(real)], origin=real)
@@ -273,7 +279,7 @@ class _Collector:
                     quote = f' — "{_clip(claim["quote"], 100)}"' if claim["quote"] else ""
                     self.cite(claim["source_file"], by + quote, bases)
         for row in runs.artifacts(self.con, self.run["id"], task_id=task["id"]):
-            self.scan(row["path"], f"in `{os.path.relpath(row['path'], self.index.workspace)}`", bases)
+            self.scan(row["path"], f"in `{posix_relpath(row['path'], self.index.workspace)}`", bases)
         self.consulted |= self.consulted_by(task)
 
     def consulted_by(self, task):
@@ -308,7 +314,7 @@ class _Collector:
         self.seen.add(("node", node["id"]))
         for row in _node_products(self.con, self.run, node, self.index):
             if row["kind"] in _NODE_SEEDS:
-                self.scan(row["path"], f"in `{os.path.relpath(row['path'], self.index.workspace)}`",
+                self.scan(row["path"], f"in `{posix_relpath(row['path'], self.index.workspace)}`",
                           [self.index.workspace])
         for task in runs.tasks(self.con, self.run["id"], node_id=node["id"]):
             self.card(task)
@@ -434,25 +440,25 @@ def _build(collector, *, folder, manifest, sources_dir, title, products, cards=(
             if corpus.sha256_file(dest) != source.digest:
                 os.unlink(dest)
                 raise ValueError("source changed during placement; original evidence is unresolved")
-            source.placed = os.path.relpath(dest, folder)
+            source.placed = posix_relpath(dest, folder)
         except (OSError, ValueError) as error:
             collector.unresolved.append((source.relative, f"could not be placed: {error}", ""))
 
     def rel(path):
-        return os.path.relpath(path, index.workspace)
+        return posix_relpath(path, index.workspace)
 
     def provenance(real):
         title_, url = index.titles.get(real, ("", ""))
         return " — ".join(part for part in (f'"{_clip(title_, 120)}"' if title_ else "", url) if part)
 
     lines = [f"# Sources — {title}", "", _NOTE, "", "## Products", ""]
-    lines += [f"- `{os.path.relpath(row['path'], folder)}` — {row['title']} ({row['kind']})" for row in products] \
+    lines += [f"- `{posix_relpath(row['path'], folder)}` — {row['title']} ({row['kind']})" for row in products] \
         or ["- (none registered)"]
     if cards:
         lines += ["", "## Cards", ""]
-        lines += [f"- `{os.path.relpath(t['output_dir'], folder) if t['output_dir'] else '-'}` — "
+        lines += [f"- `{posix_relpath(t['output_dir'], folder) if t['output_dir'] else '-'}` — "
                   f"[{t['id']}] {t['title']} ({t['research_kind']}, {t['status']})" for t in cards]
-    lines += ["", f"## Cited sources (under `{os.path.relpath(sources_dir, folder)}/`)", ""]
+    lines += ["", f"## Cited sources (under `{posix_relpath(sources_dir, folder)}/`)", ""]
     for source in to_place:
         if source.placed is None:
             continue
@@ -467,7 +473,7 @@ def _build(collector, *, folder, manifest, sources_dir, title, products, cards=(
     if in_folder:
         lines += ["", "## Cited, already in this folder", ""]
         for source in in_folder:
-            lines.append(f"- `{os.path.relpath(source.real, folder)}`")
+            lines.append(f"- `{posix_relpath(source.real, folder)}`")
             lines += [f"  - cited {how}" for how in source.cited]
     # Material means downloads/: a card's own outputs and the node's files are products, not sources.
     consulted = sorted(r for real in collector.consulted - set(collector.sources)
@@ -503,7 +509,7 @@ def card_bundle(con, run, task):
     collector.card(task)
     return _build(collector, folder=folder, manifest=os.path.join(folder, MANIFEST),
                   sources_dir=os.path.join(folder, SOURCES_DIR),
-                  title=f"{os.path.relpath(folder, index.workspace)} — [{task['id']}] {task['title']}",
+                  title=f"{posix_relpath(folder, index.workspace)} — [{task['id']}] {task['title']}",
                   products=runs.artifacts(con, run["id"], task_id=task["id"]))
 
 
@@ -517,7 +523,7 @@ def node_bundle(con, run, node):
     collector.node(node)
     return _build(collector, folder=folder, manifest=os.path.join(folder, MANIFEST),
                   sources_dir=os.path.join(folder, SOURCES_DIR),
-                  title=f"{os.path.relpath(folder, index.workspace)} — {_clip(node['question'], 100)}",
+                  title=f"{posix_relpath(folder, index.workspace)} — {_clip(node['question'], 100)}",
                   products=_node_products(con, run, node, index),
                   cards=runs.tasks(con, run["id"], node_id=node["id"]))
 
@@ -537,7 +543,7 @@ def final_bundle(con, run):
     for kind in _RUN_SEEDS:
         seeds = [row for row in products if row["kind"] == kind]
         if seeds:
-            collector.scan(seeds[-1]["path"], f"in `{os.path.relpath(seeds[-1]['path'], index.workspace)}`",
+            collector.scan(seeds[-1]["path"], f"in `{posix_relpath(seeds[-1]['path'], index.workspace)}`",
                            [index.workspace])
             break
     for task in runs.tasks(con, run["id"]):

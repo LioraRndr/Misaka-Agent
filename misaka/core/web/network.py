@@ -37,8 +37,10 @@ def proxy_environment() -> dict[str, str]:
         for source in (environment, stored):
             key = next((key for key in (name.lower(), name) if key in source), None)
             if key is not None:
-                # Like urllib/HTTPX, do not interpret a CGI Proxy header as HTTP_PROXY.
-                value = '' if source is environment and key == 'HTTP_PROXY' and 'REQUEST_METHOD' in source else source[key]
+                # Like urllib/HTTPX, do not interpret a CGI Proxy header as HTTP_PROXY. Windows names
+                # are case-insensitive, so there the header is http_proxy too and urllib drops both.
+                header = key == 'HTTP_PROXY' or (os.name == 'nt' and key == 'http_proxy')
+                value = '' if source is environment and header and 'REQUEST_METHOD' in source else source[key]
                 break
         if not isinstance(value, str):
             raise ValueError(f'{name} must be a proxy setting string')  # noqa: TRY004 - config document

@@ -153,7 +153,8 @@ def readonly_copies(skill_dirs, dest_root, *, bundle_records=None, category_desc
         manifest = {"version": 1, "state": "prepared", "entries": manifest_entries,
                     "bundles": list(bundle_records or ()), "categories": dict(category_descriptions or {})}
         manifest["digest"] = _manifest_digest(manifest)
-        (Path(stage) / ".misaka-skill-snapshot.json").write_text(json.dumps(manifest, ensure_ascii=False))
+        (Path(stage) / ".misaka-skill-snapshot.json").write_text(json.dumps(manifest, ensure_ascii=False),
+                                                                 encoding="utf-8-sig")
         _strip_write(stage)
 
         # Move the old root aside as one directory; never walk stale names through dest_root.
@@ -211,7 +212,7 @@ def read_manifest(root, *, verify_files=False):
     path = Path(root) / ".misaka-skill-snapshot.json"
     if not path.exists():
         return None
-    raw = json.loads(path.read_text())
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
     if (not isinstance(raw, dict) or raw.get("state") not in ("prepared", "sealed")
             or not isinstance(raw.get("entries"), list)
             or raw.get("version") != 1 or raw.get("digest") != _manifest_digest(raw)):
@@ -241,7 +242,7 @@ def _file_digests(root):
             raise ValueError(f"Skill snapshot contains a symlink: {path}")
         if path.is_file() and path != root / ".misaka-skill-snapshot.json":
             with path.open("rb") as stream:
-                out[str(path.relative_to(root))] = hashlib.file_digest(stream, "sha256").hexdigest()
+                out[path.relative_to(root).as_posix()] = hashlib.file_digest(stream, "sha256").hexdigest()
     return out
 
 

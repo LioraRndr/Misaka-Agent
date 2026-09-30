@@ -35,7 +35,7 @@ def _accept(con, run, root, local_id, files):
     for name, text in files.items():
         path = Path(run["workspace"], name) if name.startswith("nodes/") else Path(task["output_dir"], name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         rels.append(str(path.relative_to(run["workspace"])))
     con.execute("UPDATE tasks SET status='running',claim_lock='fixture',claim_expires=? WHERE id=?", (10**12, tid))
     assert dispatch.accept_state(con, tasks.get(con, tid), {"summary": "fixture", "artifacts": rels},
@@ -48,7 +48,7 @@ def test_a_changed_deliverable_sends_the_card_back_while_the_others_settle(state
     intact, _ = _accept(con, run, root, "intact", {"a.md": "kept\n"})
     drifted, paths = _accept(con, run, root, "drifted", {"b.md": "first\n", "c.md": "same\n"})
     next(p for p in paths if p.endswith("b.md"))
-    Path(run["workspace"], next(p for p in paths if p.endswith("b.md"))).write_text("revised after completion\n")
+    Path(run["workspace"], next(p for p in paths if p.endswith("b.md"))).write_text("revised after completion\n", encoding="utf-8")
 
     workflow.settle_done_tasks(con, run_id=run["id"])
 
@@ -70,7 +70,7 @@ def test_derived_bundle_and_shared_node_files_are_never_drift(state):
         f"nodes/{run['id']}/coordination_ledger.md": "ledger v1\n"})
     for rel, path in paths.items():
         if rel.endswith(("SOURCES.md", "x.md", "coordination_ledger.md")):
-            path.write_text("rewritten by settle, a link, or another card\n")
+            path.write_text("rewritten by settle, a link, or another card\n", encoding="utf-8")
 
     workflow.settle_done_tasks(con, run_id=run["id"])
 
@@ -84,7 +84,7 @@ def test_derived_bundle_and_shared_node_files_are_never_drift(state):
 def test_a_halt_records_the_drift_and_resume_reopens_the_card(state):
     con, run, root = state
     tid, paths = _accept(con, run, root, "halted", {"d.md": "first\n"})
-    next(iter(paths.values())).write_text("changed\n")
+    next(iter(paths.values())).write_text("changed\n", encoding="utf-8")
 
     workflow.settle_done_tasks(con, run_id=run["id"], reopen_drift=False)
     assert tasks.get(con, tid)["status"] == "done"
@@ -103,7 +103,7 @@ def test_a_newer_declaration_is_settled_again_and_not_treated_as_drift(state):
     first = runs.artifacts(con, run["id"], task_id=tid)[0]["sha256"]
 
     path = next(iter(paths.values()))
-    path.write_text("revised, then declared again by the Sister's own session\n")
+    path.write_text("revised, then declared again by the Sister's own session\n", encoding="utf-8")
     rel = str(path.relative_to(run["workspace"]))
     prepared = dispatch.prepare_submission(tasks.get(con, tid), {"summary": "fixture", "artifacts": [rel]})
     tasks.add_event(con, tid, "submitted", prepared.payload, generation=1)
@@ -120,7 +120,7 @@ def test_resume_ignores_a_drift_older_than_the_latest_declaration(state):
     con, run, root = state
     tid, paths = _accept(con, run, root, "stale-drift", {"g.md": "first\n"})
     path = next(iter(paths.values()))
-    path.write_text("changed\n")
+    path.write_text("changed\n", encoding="utf-8")
     workflow.settle_done_tasks(con, run_id=run["id"], reopen_drift=False)
     assert tasks.latest_payload(con, tid, "research_artifact_drift", generation=1)
     rel = str(path.relative_to(run["workspace"]))

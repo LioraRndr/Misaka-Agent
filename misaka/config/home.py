@@ -15,6 +15,7 @@ import hashlib
 import os
 import stat
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,8 +24,10 @@ ENV_HOME = "MISAKA_HOME"
 DIR_NAME = ".misaka"
 # Sub-agent type definitions, under this one name at every level: the home, a role, a project.
 SUBAGENTS_DIR = "subagents"
-# sockaddr_un.sun_path: 104 bytes on the BSDs and macOS, 108 on Linux, terminator included.
-_SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 107
+# sockaddr_un.sun_path: 104 bytes on the BSDs and macOS, 108 on Linux, terminator included. On
+# Windows the socket is a named pipe named after the path (utils/local_socket), and a pipe name
+# is at most 256 characters, the pipe namespace prefix included.
+_SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 247 if sys.platform == "win32" else 107
 
 
 KINDS = {
@@ -139,7 +142,9 @@ def path(name: str, role_dir: str | os.PathLike[str] | None = None) -> Path:
     target = home() / LAYOUT[name].rel
     if target.suffix == ".sock" and len(os.fsencode(target)) > _SOCKET_PATH_MAX:
         tag = hashlib.sha256(os.fsencode(home())).hexdigest()[:8]
-        return Path("/tmp") / f"misaka-{os.geteuid()}-{tag}" / target.name
+        if sys.platform == "win32":        # the temp directory is already this user's alone
+            return Path(tempfile.gettempdir()) / f"misaka-{tag}" / target.name
+        return Path("/tmp") / f"misaka-{os.geteuid()}-{tag}" / target.name  # windows-footgun: ok - POSIX branch
     return target
 
 
@@ -165,7 +170,14 @@ def private_dir(directory: str | os.PathLike[str]) -> None:
     """
     os.makedirs(directory, mode=0o700, exist_ok=True)
     info = os.lstat(directory)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+    if sys.platform == "win32":
+        # Windows has no owner or mode bits to check here: the directory sits in the user's
+        # profile, and the pipe behind the socket path carries an owner-only DACL of its own
+        # (herdr ipc.rs: restrict_socket_permissions is a no-op there).
+        if not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"{directory} is not a directory; refusing to use it.")
+        return
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():  # windows-footgun: ok - POSIX branch
         raise RuntimeError(f"{directory} is not a directory owned by this user; refusing to use it.")
     if info.st_mode & 0o077:
         os.chmod(directory, 0o700)

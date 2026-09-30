@@ -214,7 +214,7 @@ def test_pptx_slide_zero_does_not_edit_every_slide(tmp_path):
 def test_csv_preserves_extra_columns_and_literal_quoting(tmp_path):
     path = tmp_path / 'ragged.csv'
     content = 'name\n"first","extra"\n"multi\nline","tail"\n'
-    path.write_text(content)
+    path.write_text(content, encoding='utf-8', newline='\n')
     rendered = reader.render_csv(path)
     assert content.rstrip('\n') in rendered
     body = rendered.split('```\n', 1)[1]
@@ -248,14 +248,14 @@ async def test_permission_checks_and_execution_share_ops_file_snapshot(tmp_path,
     monkeypatch.setattr(policy, 'refresh_inherited_permissions', refresh)
     monkeypatch.setattr(configuration, 'permission_settings', lambda *args, **kwargs: [])
     source = tmp_path / 'ops.json'
-    source.write_text(json.dumps([{'create': {'content': 'approved content'}}]))
+    source.write_text(json.dumps([{'create': {'content': 'approved content'}}]), encoding='utf-8')
     original = {'path': 'report.txt', 'ops': '@ops.json'}
     decision = await guard.before_tool({'toolName': 'office', 'input': original, 'toolCallId': 'audit'})
     assert decision and 'updatedInput' in decision, decision
     assert isinstance(decision['updatedInput']['ops'], list)
-    source.write_text(json.dumps([{'create': {'content': 'changed after permission check'}}]))
+    source.write_text(json.dumps([{'create': {'content': 'changed after permission check'}}]), encoding='utf-8')
     await create_office_tool_definition(str(tmp_path)).execute('audit', decision['updatedInput'])
-    assert (tmp_path / 'report.txt').read_text() == 'approved content'
+    assert (tmp_path / 'report.txt').read_text(encoding='utf-8') == 'approved content'
 
 
 def test_cache_detects_same_size_edits_with_restored_mtime(tmp_path):
@@ -263,10 +263,10 @@ def test_cache_detects_same_size_edits_with_restored_mtime(tmp_path):
 
     from misaka.core.documents.office import cache
     path = tmp_path / 'document.docx'
-    path.write_text('old')
+    path.write_text('old', encoding='utf-8')
     first = path.stat()
     assert cache.render_cached(path, path.read_text, workspace=tmp_path) == 'old'
-    path.write_text('new')
+    path.write_text('new', encoding='utf-8')
     os.utime(path, ns=(first.st_atime_ns, first.st_mtime_ns))
     assert cache.render_cached(path, path.read_text, workspace=tmp_path) == 'new'
 
@@ -420,7 +420,7 @@ async def test_permission_request_hook_rewrite_snapshots_ops(tmp_path, monkeypat
     monkeypatch.setattr(policy, 'refresh_inherited_permissions', refresh)
     monkeypatch.setattr(configuration, 'permission_settings', lambda *args, **kwargs: [])
     source = tmp_path / 'ops.json'
-    source.write_text(json.dumps([{'create': {'content': 'hook approved'}}]))
+    source.write_text(json.dumps([{'create': {'content': 'hook approved'}}]), encoding='utf-8')
     async def hooks(event_name, *args):
         if event_name == 'PermissionRequest':
             return [{'updated_input': {'path': 'report.txt', 'ops': '@ops.json'}, 'decision': 'allow'}]
@@ -428,5 +428,5 @@ async def test_permission_request_hook_rewrite_snapshots_ops(tmp_path, monkeypat
     monkeypatch.setattr(guard, '_execute_hooks', hooks)
     decision = await guard.before_tool({'toolName': 'office', 'input': {'path': 'report.txt', 'content': 'initial'}})
     assert decision == {'updatedInput': {'path': 'report.txt', 'ops': [{'create': {'content': 'hook approved'}}]}}
-    source.write_text('[]')
+    source.write_text('[]', encoding='utf-8')
     assert decision['updatedInput']['ops'][0]['create']['content'] == 'hook approved'

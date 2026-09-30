@@ -34,6 +34,7 @@ from misaka.core.research import bundle, commands, graph, ledger, planner, repor
 from misaka.core.research import context as context_packet
 from misaka.utils.async_lifecycle import settle, settle_thread_call
 from misaka.utils.markdown import atx_headings
+from misaka.utils.paths import posix_relpath
 
 POLL_SECONDS = 2.0
 WARMUP_CAP_SECONDS = 300
@@ -1940,7 +1941,7 @@ def _reconcile_material(con, run):
     every node that finished its own work, and the limits."""
     chosen = runs.limits(run)
     workspace = run["workspace"]
-    rel = lambda path: os.path.relpath(path, workspace) if path else None
+    rel = lambda path: posix_relpath(path, workspace) if path else None
     covered = set()
     for item in runs.reconcile_rounds(con, run["id"]):
         if item["applied_at"] is not None:

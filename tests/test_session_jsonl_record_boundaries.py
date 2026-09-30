@@ -101,7 +101,7 @@ def test_nonstrict_skips_only_bad_physical_records():
 @pytest.mark.parametrize("content", ["", " \n", "{}\n", "[]\n"])
 def test_empty_or_missing_session_header_stays_invalid(tmp_path, content):
     path = tmp_path / "invalid.jsonl"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     with pytest.raises(InvalidSessionFileError):
         SessionManager.open(str(path))
     assert read_session_header(str(path)) == {}
@@ -129,10 +129,10 @@ def test_sister_resume_remains_strict(tmp_path, broken):
     from misaka.core.subagent.runtime import read_resume_transcript
 
     path = tmp_path / "invalid.jsonl"
-    path.write_text(broken)
+    path.write_text(broken, encoding="utf-8")
     with pytest.raises(ValueError):
         read_resume_transcript(path)
-    assert path.read_text() == broken
+    assert path.read_text(encoding="utf-8") == broken
 
 
 def test_sister_resume_reports_empty_transcript(tmp_path):
@@ -148,7 +148,7 @@ def test_research_sources_keep_unicode_tool_records(tmp_path):
     from misaka.core.research.bundle import _Index, consulted_in_session
 
     source = tmp_path / "source.md"
-    source.write_text("# Fixture source\n")
+    source.write_text("# Fixture source\n", encoding="utf-8")
     entries = [
         {"message": {"role": "assistant", "content": [
             {"type": "text", "text": TEXT},
@@ -160,5 +160,5 @@ def test_research_sources_keep_unicode_tool_records(tmp_path):
     path = tmp_path / "sources.jsonl"
     index = _Index(str(tmp_path))
     for entry in entries:
-        path.write_text(_dump_jsonl([entry]))
+        path.write_text(_dump_jsonl([entry]), encoding="utf-8")
         assert consulted_in_session(str(path), index) == {str(source.resolve())}

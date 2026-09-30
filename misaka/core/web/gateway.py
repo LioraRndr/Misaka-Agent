@@ -54,7 +54,7 @@ def peek_token():
     if explicit := config.provider_env('TOOL_GATEWAY_USER_TOKEN'):
         return explicit
     try:
-        with open(_auth_path(), encoding='utf-8') as handle:
+        with open(_auth_path(), encoding='utf-8-sig') as handle:
             stored = json.load(handle)
         data = stored.get('nous', {}) if isinstance(stored, dict) else {}
         return data.get('access', '') if isinstance(data, dict) and data.get('type') == 'oauth' else ''

@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def package(path):
     if path.suffix == ".txt":
-        return {"text": path.read_text()}
+        return {"text": path.read_text(encoding="utf-8")}
     result = {}
     with zipfile.ZipFile(path) as archive:
         for name in archive.namelist():
@@ -42,10 +42,10 @@ def package(path):
 
 def main():
     upstream, out = map(Path, sys.argv[1:])
-    actual = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
+    actual = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True, encoding="utf-8").strip()
     if actual != PIN:
         raise ValueError(f"Expected upstream {PIN}, got {actual}")
-    manifest = json.loads((ROOT / "misaka/core/tools/_office/PROVENANCE.json").read_text())
+    manifest = json.loads((ROOT / "misaka/core/tools/_office/PROVENANCE.json").read_text(encoding="utf-8"))
     for name, expected in manifest["upstream_files"].items():
         if hashlib.sha256((upstream / "plugins/tools" / name).read_bytes()).hexdigest() != expected:
             raise ValueError(f"Upstream source differs from pin: {name}")
@@ -58,7 +58,7 @@ def main():
         if source.stem.startswith(("_writer", "_reader", "_doc_reader")):
             report["sources"][source.name] = {
                 "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                "functions": [node.name for node in ast.parse(source.read_text()).body
+                "functions": [node.name for node in ast.parse(source.read_text(encoding="utf-8")).body
                               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]}
     for suffix, writer in [("docx", docx), ("xlsx", xlsx), ("pptx", pptx), ("txt", text)]:
         fmt = "text" if suffix == "txt" else suffix
@@ -67,7 +67,7 @@ def main():
         # main(), which invokes sandbox-specific paths or recalculation macros.
         for name in ("_writer_core", f"_writer_{fmt}"):
             source = upstream / "plugins/tools" / f"{name}.py"
-            exec(compile(source.read_text(), str(source), "exec"), context)  # noqa: S102 - explicit pinned audit fixture
+            exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), context)  # noqa: S102 - explicit pinned audit fixture
         context["_ensure"] = lambda module, _package: __import__(module)
         original = context[f"_{fmt}_write"]
         ours, theirs = out / f"misaka.{suffix}", out / f"frontier.{suffix}"
@@ -102,7 +102,7 @@ def main():
         context = {"__name__": "office_reader_audit"}
         for name in ("_reader_core", f"_reader_{fmt}"):
             source = upstream / "plugins/tools" / f"{name}.py"
-            exec(compile(source.read_text(), str(source), "exec"), context)  # noqa: S102 - pinned fixture
+            exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), context)  # noqa: S102 - pinned fixture
         readers[fmt] = context
     book = load_workbook(out / "misaka.xlsx")
     sheet = book.active
@@ -145,7 +145,7 @@ def main():
                                           ("_shape_bits", "_bits"), ("_bbox", "_bbox"),
                                           ("_is_line", "_is_line"), ("_is_box", "_is_box")]:
             compare("pptx", upstream_name, local_name, shape)
-    (out / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")
+    (out / "comparison.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"operations": len(report["operations"]), "package_equal": sum(
         not item["different_package_parts"] for item in report["operations"]),
         "reader_checks": len(report["reader_checks"]),

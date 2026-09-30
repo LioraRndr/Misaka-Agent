@@ -41,7 +41,7 @@ def fake_http(monkeypatch, handler):
 @pytest.mark.parametrize("corrupt", ["{", "[" * 60_000 + "]" * 60_000], ids=["syntax", "deep-nesting"])
 def test_corrupt_cache_page_is_a_miss(corrupt):
     cache.extract_cache_put(URL, "previous paragraph", provider="firecrawl")
-    cache._entry_file_path(URL, None, "firecrawl").write_text(corrupt)
+    cache._entry_file_path(URL, None, "firecrawl").write_text(corrupt, encoding="utf-8")
     assert cache.extract_cache_get(URL, provider="firecrawl") is None
 
 
@@ -49,7 +49,7 @@ def test_corrupt_cache_page_is_a_miss(corrupt):
 async def test_corrupt_cached_page_does_not_lose_the_extract_batch(monkeypatch, tmp_path, corrupt):
     configure(backend="firecrawl", env={"FIRECRAWL_API_KEY": "fixture-key"})
     cache.extract_cache_put(URL, "old paragraph", provider="firecrawl")
-    cache._entry_file_path(URL, None, "firecrawl").write_text(corrupt)
+    cache._entry_file_path(URL, None, "firecrawl").write_text(corrupt, encoding="utf-8")
     calls = []
 
     def handle(request):

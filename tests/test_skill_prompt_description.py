@@ -40,7 +40,7 @@ class SkillPromptDescriptionTests(unittest.TestCase):
             root = Path(directory) / "skills"
             skill = root / "sample" / "SKILL.md"
             skill.parent.mkdir(parents=True)
-            skill.write_text(skill_text("x" * 250))
+            skill.write_text(skill_text("x" * 250), encoding="utf-8")
             cache = Path(directory) / "cache"
             cache.mkdir()
             with patch.object(index, "_snapshot_dir", return_value=str(cache)):
@@ -49,7 +49,7 @@ class SkillPromptDescriptionTests(unittest.TestCase):
                 scanned["skills"][0]["description"] = "x" * 57 + "..."
                 Path(index._snapshot_path(root)).write_text(json.dumps({
                     "version": 6, "manifest": manifest, "real_root": str(root.resolve()), **scanned,
-                }))
+                }), encoding='utf-8')
                 self.assertIsNone(index._load_snapshot(root, manifest))
                 current = index._layer("role", root)
                 self.assertEqual(current["skills"][0]["description"], "x" * 197 + "...")
@@ -58,7 +58,7 @@ class SkillPromptDescriptionTests(unittest.TestCase):
     def test_sealed_snapshot_description_is_rederived_without_writing(self):
         with tempfile.TemporaryDirectory() as directory:
             skill = Path(directory) / "SKILL.md"
-            skill.write_text(skill_text("研" * 150))
+            skill.write_text(skill_text("研" * 150), encoding="utf-8")
             original = skill.read_bytes()
             saved = {"entries": [{"path": str(skill), "description": "研" * 57 + "..."}]}
             with patch("misaka.core.skills.sandbox.read_manifest", return_value=saved):

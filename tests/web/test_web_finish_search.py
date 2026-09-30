@@ -48,7 +48,7 @@ def oauth(home, **accounts):
         'type': 'oauth', 'access': value, 'refresh': 'refresh-' + key,
         'expires': int((time.time() + 3600) * 1000),
     } for key, value in accounts.items()}
-    (home / 'auth.json').write_text(json.dumps(data))
+    (home / 'auth.json').write_text(json.dumps(data), encoding='utf-8')
 
 
 async def test_perplexity_endpoints_order_duplicates_snippet_kind(monkeypatch):
@@ -156,7 +156,7 @@ async def test_logout_wins_before_rejected_refresh(monkeypatch, isolated):
     token, account = await xai._resolve_credentials()
     AuthStorage.create(str(isolated / 'auth.json')).remove('xai:A')
     assert await xai._force_refresh_oauth_token(account, token) == ''
-    assert json.loads((isolated / 'auth.json').read_text()) == {}
+    assert json.loads((isolated / 'auth.json').read_text(encoding='utf-8')) == {}
 
 
 async def test_profile_proxy_rotation_uses_snapshot_and_retires_pool(monkeypatch, isolated):

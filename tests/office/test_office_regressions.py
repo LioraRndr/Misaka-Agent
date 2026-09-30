@@ -61,11 +61,11 @@ def test_intent_sequence_survives_four_digits(tmp_path):
     target = tmp_path / "x.txt"
     bucket = Path(_intent._bucket(target, workspace=tmp_path))
     bucket.mkdir(parents=True)
-    (bucket / "999_create.json").write_text("{}")
-    (bucket / "1000_append.json").write_text("{}")
+    (bucket / "999_create.json").write_text("{}", encoding="utf-8")
+    (bucket / "1000_append.json").write_text("{}", encoding="utf-8")
     saved = _intent.archive(target, [{"append": {"content": "new"}}], workspace=tmp_path)
-    assert json.loads(Path(saved).read_text())["seq"] == 1001
-    assert (bucket / "1000_append.json").read_text() == "{}"
+    assert json.loads(Path(saved).read_text(encoding="utf-8"))["seq"] == 1001
+    assert (bucket / "1000_append.json").read_text(encoding="utf-8") == "{}"
 
 
 def test_recalc_zero_exit_without_new_output_is_not_success(tmp_path, monkeypatch):
@@ -97,7 +97,7 @@ def test_secondary_export_obeys_subagent_workspace_guard(tmp_path):
     assert "outside" in _permission_restriction([], "office", args, str(tmp_path))
     args["ops"][0]["export_pdf"]["out"] = str(tmp_path / "report.pdf")
     assert _permission_restriction([], "office", args, str(tmp_path)) is None
-    (tmp_path / "batch.json").write_text(json.dumps([{"export_pdf": {"out": str(tmp_path.parent / "other.pdf")}}]))
+    (tmp_path / "batch.json").write_text(json.dumps([{"export_pdf": {"out": str(tmp_path.parent / "other.pdf")}}]), encoding="utf-8")
     args["ops"] = "@batch.json"
     assert "outside" in _permission_restriction([], "office", args, str(tmp_path))
 
@@ -209,7 +209,7 @@ async def test_cancelled_save_retains_mutation_lock_until_thread_finishes(tmp_pa
         with pytest.raises(asyncio.CancelledError):
             await call
         await other
-        assert path.read_text() == "saved"
+        assert path.read_text(encoding="utf-8") == "saved"
     finally:
         release.set()
         await asyncio.gather(call, *([other] if other else []), return_exceptions=True)

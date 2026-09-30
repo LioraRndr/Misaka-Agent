@@ -96,7 +96,7 @@ async def test_same_root_handles_expansion_draft_review_and_final(root_run, fore
     owner.close.assert_awaited_once()
     assert runs.get(con, run["id"])["driver_lock"] is None
     assert runs.node(con, root["id"])["runner_pid"] is None
-    assert Path(result["final"]["path"]).read_text() == "Fixture result"
+    assert Path(result["final"]["path"]).read_text(encoding="utf-8") == "Fixture result"
 
 
 @pytest.mark.parametrize("outcome", ["error", "cancel", "waiting_input"])

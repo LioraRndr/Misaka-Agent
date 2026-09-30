@@ -32,7 +32,7 @@ def test_reopening_a_session_does_not_refill_a_persisted_history(tmp_path, monke
         editor.addToHistory(text)
     for _ in range(3):                       # three opens / resumes / reloads of the same session
         _load_session(_editor(monkeypatch, path), ["开始", "继续", "<<<UNTRUSTED-DATA replay>>>"])
-    assert json.loads(path.read_text()) == ["继续", "开始"]
+    assert json.loads(path.read_text(encoding="utf-8")) == ["继续", "开始"]
 
 
 def test_without_a_history_file_the_session_still_fills_the_in_memory_history(monkeypatch):
@@ -49,7 +49,7 @@ def test_windows_sharing_a_history_file_keep_each_others_entries(tmp_path, monke
     root.addToHistory("from the root window")
     node.addToHistory("from a fork node window")
     root.addToHistory("the root again")
-    assert json.loads(path.read_text()) == ["the root again", "from a fork node window", "from the root window"]
+    assert json.loads(path.read_text(encoding="utf-8")) == ["the root again", "from a fork node window", "from the root window"]
 
 
 def test_up_walks_the_history_once_and_stops_at_the_oldest(tmp_path, monkeypatch):

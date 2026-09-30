@@ -68,16 +68,16 @@ def test_failed_readiness_and_bad_json_do_not_overwrite_settings(monkeypatch):
     with pytest.raises(RuntimeError, match='missing model'):
         settings.configure(True)
     assert not settings.path().exists()
-    settings.path().write_text('{broken')
+    settings.path().write_text('{broken', encoding='utf-8')
     with pytest.raises(json.JSONDecodeError):
         settings.configure(False)
-    assert settings.path().read_text() == '{broken'
+    assert settings.path().read_text(encoding='utf-8') == '{broken'
 
 
 @pytest.mark.parametrize('saved', [[], {'proactive_recall_enabled': 'false'}, {'database_path': 'outside'}])
 def test_strict_plugin_settings_schema(saved):
     settings.path().parent.mkdir(parents=True)
-    settings.path().write_text(json.dumps(saved))
+    settings.path().write_text(json.dumps(saved), encoding='utf-8')
     with pytest.raises((ValueError, TypeError)):
         config_bridge.load_config()
 

@@ -8,6 +8,7 @@ after them -- but only records whose pid is *gone*, never one whose identity mer
 disagrees, because that verdict has been wrong before (B20)."""
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,7 +61,7 @@ def test_a_record_whose_transcript_exists_is_marked_saved(catalog, tmp_path, mon
     file = _record(catalog, "a", path=str(transcript), paused=True,
                    control=str(tmp_path / "controls" / "misaka-session-x" / "control.sock"))
     assert session_catalog.sweep_dead() == 1
-    value = json.loads(file.read_text())
+    value = json.loads(file.read_text(encoding="utf-8"))
     assert value["state"] == "saved"
     assert "control" not in value and "paused" not in value
 
@@ -85,7 +86,7 @@ def test_a_live_session_is_left_alone(catalog, tmp_path, monkeypatch):
     transcript.write_text("{}\n", encoding="utf-8")
     file = _record(catalog, "d", path=str(transcript))
     assert session_catalog.sweep_dead() == 0
-    assert json.loads(file.read_text())["state"] == "working"
+    assert json.loads(file.read_text(encoding="utf-8"))["state"] == "working"
 
 
 def test_an_identity_that_only_disagrees_is_left_alone(catalog, tmp_path, monkeypatch):
@@ -96,7 +97,7 @@ def test_an_identity_that_only_disagrees_is_left_alone(catalog, tmp_path, monkey
     file = _record(catalog, "e", path=str(tmp_path / "missing.jsonl"))
     assert session_catalog.sweep_dead() == 0
     assert file.exists()
-    assert json.loads(file.read_text())["state"] == "working"
+    assert json.loads(file.read_text(encoding="utf-8"))["state"] == "working"
 
 
 def test_an_already_retired_record_is_not_rewritten(catalog, tmp_path, monkeypatch):
@@ -161,15 +162,18 @@ async def test_the_daemon_sweeps_after_it_reaps_a_process(monkeypatch):
 
 
 def test_control_parents_cover_the_directory_session_control_uses(monkeypatch):
-    """SessionControl hardcodes /tmp for the socket's short path; the sweep must look there."""
+    """SessionControl puts the socket's short path under /tmp (the temp directory on Windows);
+    the sweep must look there."""
     import inspect
+    import tempfile
 
     from misaka.core import session_control
 
     monkeypatch.undo()          # read the real value, not this file's isolated one
-    assert 'dir="/tmp"' in inspect.getsource(session_control.SessionControl.start)
-    assert Path("/tmp").resolve().as_posix() in {Path(p).as_posix()
-                                                 for p in session_catalog._CONTROL_PARENTS}
+    assert "dir=_CONTROL_PARENT" in inspect.getsource(session_control.SessionControl.start)
+    parent = tempfile.gettempdir() if sys.platform == "win32" else "/tmp"
+    assert session_catalog._CONTROL_PARENT == parent
+    assert Path(parent).resolve().as_posix() in {Path(p).as_posix() for p in session_catalog._CONTROL_PARENTS}
 
 
 # ── control directories nothing is listening in ────────────────────────────────────────
@@ -181,12 +185,15 @@ def control_parent(monkeypatch):
     directory. Only this directory is ever swept, never /tmp itself."""
     import shutil
     import tempfile
-    parent = tempfile.mkdtemp(prefix="misaka-sweep-", dir="/tmp")
+    parent = tempfile.mkdtemp(prefix="misaka-sweep-", dir=None if sys.platform == "win32" else "/tmp")
     monkeypatch.setattr(session_catalog, "_CONTROL_PARENTS", {parent})
     try:
         yield Path(parent)
     finally:
         shutil.rmtree(parent, ignore_errors=True)
+
+
+PIPE_PREFIX = "\\\\.\\pipe\\"
 
 
 def _socket_dir(parent, name, *, listening):
@@ -195,7 +202,15 @@ def _socket_dir(parent, name, *, listening):
     directory.mkdir()
     path = str(directory / "control.sock")
     server = None
-    if listening:
+    if listening and sys.platform == "win32":
+        # What utils/local_socket leaves at the path of a listening server: a marker, and a pipe.
+        import _winapi
+        from types import SimpleNamespace
+        Path(path).write_text("marker", encoding="utf-8")
+        pipe = _winapi.CreateNamedPipe(PIPE_PREFIX + path, _winapi.PIPE_ACCESS_DUPLEX, 0, 1, 512, 512, 0,
+                                       _winapi.NULL)
+        server = SimpleNamespace(close=lambda: _winapi.CloseHandle(pipe))
+    elif listening:
         server = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
         server.bind(path)
         server.listen(1)
@@ -264,7 +279,7 @@ def test_a_record_republished_while_we_looked_is_left_to_its_new_owner(catalog, 
 
     monkeypatch.setattr(processes, "explain_liveness", republish)
     assert session_catalog.sweep_dead() == 0
-    assert file.exists() and json.loads(file.read_text())["pid"] == 999
+    assert file.exists() and json.loads(file.read_text(encoding="utf-8"))["pid"] == 999
 
 
 def test_a_retired_record_costs_no_liveness_probe(catalog, tmp_path, monkeypatch):

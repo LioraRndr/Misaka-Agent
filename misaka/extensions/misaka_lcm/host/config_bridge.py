@@ -27,7 +27,7 @@ def load_auxiliary_config() -> dict:
     if config is not None:
         return config
     try:
-        settings = json.loads(home.path("settings").read_text(encoding="utf-8"))
+        settings = json.loads(home.path("settings").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         settings = {}
     if not isinstance(settings, dict):

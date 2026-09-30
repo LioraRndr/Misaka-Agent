@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from misaka.config import CFG, current_config, home
+from tests import posix
 
 PACKAGE = Path(__file__).resolve().parents[1] / "misaka"
 # Shipped skill assets and vendored upstream code are not MISAKA's own source.
@@ -136,7 +137,7 @@ def test_project_scope_is_absent_when_the_working_directory_is_the_users_home(tm
     real = user / home.DIR_NAME
     (real / home.SUBAGENTS_DIR).mkdir(parents=True)
     (real / "prompts").mkdir()
-    (real / "settings.json").write_text('{"theme": "from-the-home"}')
+    (real / "settings.json").write_text('{"theme": "from-the-home"}', encoding="utf-8")
     monkeypatch.setenv(home.ENV_HOME, str(real))
     monkeypatch.setenv("HOME", str(user))
 
@@ -170,11 +171,12 @@ def test_a_pointer_into_the_home_is_stored_relative_and_comes_back(tmp_path, mon
 
 def test_display_is_what_a_user_would_type(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))       # what Path.home() reads on Windows
     monkeypatch.delenv(home.ENV_HOME, raising=False)
     assert home.display() == f"~/{home.DIR_NAME}"
     assert home.display(home.path("auth")) == f"~/{home.DIR_NAME}/{home.LAYOUT['auth'].rel}"
     monkeypatch.setenv(home.ENV_HOME, "/srv/misaka")
-    assert home.display(home.path("db")).startswith("/")
+    assert os.path.isabs(home.display(home.path("db")))
 
 
 def test_a_socket_too_deep_for_the_kernel_moves_to_a_short_private_directory(tmp_path, monkeypatch):
@@ -184,6 +186,8 @@ def test_a_socket_too_deep_for_the_kernel_moves_to_a_short_private_directory(tmp
         assert home.path("net_sock").is_relative_to(home.home())
 
     deep = tmp_path / ("d" * 60) / ("e" * 60)
+    if os.name == "nt":                     # a pipe name holds 256 characters, not a sockaddr's 104
+        deep = deep / ("f" * 60) / ("g" * 60)
     monkeypatch.setenv(home.ENV_HOME, str(deep))
     moved = home.path("net_sock")
     assert not moved.is_relative_to(home.home()) and len(os.fsencode(moved)) < 100
@@ -197,8 +201,9 @@ def test_a_socket_directory_that_is_not_ours_alone_is_refused_or_closed(tmp_path
     ours = tmp_path / "run"
     ours.mkdir(mode=0o755)
     home.private_dir(ours)
-    assert ours.stat().st_mode & 0o077 == 0
-    (tmp_path / "file").write_text("not a directory")
+    if os.name != "nt":                     # POSIX modes; Windows keeps the profile private by ACL
+        assert ours.stat().st_mode & 0o077 == 0
+    (tmp_path / "file").write_text("not a directory", encoding="utf-8")
     with pytest.raises((RuntimeError, OSError)):
         home.private_dir(tmp_path / "file")
 
@@ -245,6 +250,7 @@ def test_the_board_stores_session_pointers_relative_and_reads_them_back_as_paths
         con.close()
 
 
+@posix.modes
 def test_ensure_makes_the_home_and_its_credentials_owner_only(tmp_path, monkeypatch):
     monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
     home.ensure()
@@ -266,11 +272,12 @@ def test_the_home_root_holds_only_what_a_user_edits_and_one_directory_per_kind()
         "credentials", "state", "shared", "cache", "logs", "run"}
 
 
+@posix.modes
 def test_ensure_narrows_a_credential_file_that_was_left_readable(tmp_path, monkeypatch):
     monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
     home.ensure()
     assert not home.path("auth").exists()                                    # never created here
-    home.path("auth").write_text("{}")
+    home.path("auth").write_text("{}", encoding="utf-8")
     home.path("auth").chmod(0o644)
     home.ensure()
     assert home.path("auth").stat().st_mode & 0o777 == 0o600
@@ -322,16 +329,16 @@ def test_a_role_session_writes_its_own_keys_to_its_file_and_everything_else_glob
 
     monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
     home.path("settings").parent.mkdir(parents=True)
-    home.path("settings").write_text(json.dumps({"theme": "dark", "web": {"search_backend": "exa", "cache_ttl_minutes": 5}}))
+    home.path("settings").write_text(json.dumps({"theme": "dark", "web": {"search_backend": "exa", "cache_ttl_minutes": 5}}), encoding="utf-8")
     role = home.path("profiles_root") / "10032"
     role.mkdir(parents=True)
     manager = SettingsManager.forRole(str(role))
 
     manager.updateSection("web", lambda section: section.update({"search_backend": "tavily"}))   # a role key
     manager.setValue("theme", "light")                                                         # not one
-    assert json.loads((role / "settings.json").read_text()) == {"web": {"search_backend": "tavily"}}
-    assert json.loads(home.path("settings").read_text())["theme"] == "light"
-    assert json.loads(home.path("settings").read_text())["web"] == {"search_backend": "exa", "cache_ttl_minutes": 5}
+    assert json.loads((role / "settings.json").read_text(encoding="utf-8")) == {"web": {"search_backend": "tavily"}}
+    assert json.loads(home.path("settings").read_text(encoding="utf-8"))["theme"] == "light"
+    assert json.loads(home.path("settings").read_text(encoding="utf-8"))["web"] == {"search_backend": "exa", "cache_ttl_minutes": 5}
 
     # Reads: the role's value over the home's, the home's where the role says nothing.
     assert manager.getSection("web") == {"search_backend": "tavily", "cache_ttl_minutes": 5}
@@ -357,7 +364,7 @@ def test_the_role_scope_survives_the_manager_and_the_home_alike(tmp_path, monkey
     manager = SettingsManager.forRole(str(role))
     assert manager.getDefaultModelPair() == ("anthropic", "claude-sonnet-5")
     manager.updateSection("mcpServers", lambda s: s.update({"camofox": {"command": "npx"}}))
-    assert json.loads((role / "settings.json").read_text()) == {
+    assert json.loads((role / "settings.json").read_text(encoding="utf-8")) == {
         "defaultProvider": "anthropic", "defaultModel": "claude-sonnet-5", "mcpServers": {"camofox": {"command": "npx"}}}
 
 

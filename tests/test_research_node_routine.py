@@ -73,7 +73,7 @@ def _script(lab, *, reviews, alternatives, dispositions, decide, cards_failed=No
                 payload["issues"] = reviews[row["generation"]]      # one card: each review is an attempt
                 critique = Path(row["output_dir"], runs.versioned("critique.md", row["generation"]))
                 critique.parent.mkdir(parents=True, exist_ok=True)
-                critique.write_text(f"Critique of version {row['generation']}\n")
+                critique.write_text(f"Critique of version {row['generation']}\n", encoding="utf-8")
                 rel = str(critique.relative_to(row["workspace"]))
                 payload["artifacts"] = [rel]
                 payload["artifact_digests"] = {rel: hashlib.sha256(critique.read_bytes()).hexdigest()}
@@ -119,7 +119,7 @@ class _Runner:
         row = tasks.get(self.con, task_id)
         name = next(line.split("`")[1] for line in say.splitlines() if line.startswith("polish prose. Deliver"))
         Path(row["output_dir"]).mkdir(parents=True, exist_ok=True)
-        Path(row["output_dir"], name).write_text(f"Critique of version {row['generation']}\n")
+        Path(row["output_dir"], name).write_text(f"Critique of version {row['generation']}\n", encoding="utf-8")
 
 
 async def _expand(lab, runner=None):
@@ -183,9 +183,9 @@ async def test_a_revision_is_reviewed_again_then_alternatives_become_a_decision(
                 if entry.get("type") == "custom_message" and entry.get("customType") == "research-review"]
     assert len(returned) == 1 and "Critique of version 2" in returned[0]["content"]
     # The views followed the node through its phases.
-    node_view = (lab.tmp / graph.node_view_path(root["id"])).read_text()
+    node_view = (lab.tmp / graph.node_view_path(root["id"])).read_text(encoding="utf-8")
     assert "attempt 2" in node_view and "Divergence review" in node_view and "synthesis-2.md" in node_view
-    assert "Which cause leads?" in (lab.tmp / graph.graph_path(run)).read_text()
+    assert "Which cause leads?" in (lab.tmp / graph.graph_path(run)).read_text(encoding="utf-8")
 
 
 def _fail_once(lab, local_id):
@@ -494,7 +494,7 @@ async def test_a_clean_review_is_returned_with_its_own_round_s_critique(lab):
     folder.mkdir(parents=True)
     for version in (2, 3):
         critique = folder / runs.versioned("critique.md", version)
-        critique.write_text(f"Critique of version {version}\n")
+        critique.write_text(f"Critique of version {version}\n", encoding="utf-8")
         runs.register_file(con, run["id"], "critique", critique.name, str(critique),
                            sha256=hashlib.sha256(critique.read_bytes()).hexdigest(),
                            branch_id=root["id"], task_id="t_red")
@@ -526,7 +526,7 @@ def test_a_correction_is_appended_to_the_conclusion_as_it_stands(lab):
     con, run, root = lab.con, lab.run, lab.root
     workflow._write(con, run, root, "synthesis", "Conclusion", "synthesis.md", "The treaty was signed in 1701.\n", version=1)
     row = workflow._synthesis(con, run, root, 1)
-    Path(row["path"]).write_text("The treaty was signed in 1707.\n")     # her own edit, after registration
+    Path(row["path"]).write_text("The treaty was signed in 1707.\n", encoding="utf-8")     # her own edit, after registration
     with pytest.raises(ValueError, match="changed since it was registered"):
         runs.artifact_text(row)
     workflow._append_corrections(con, run, root, 1, [{"disposition": "correct", "reason": "1707, not 1701"},

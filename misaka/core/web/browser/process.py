@@ -12,13 +12,13 @@ async def terminate(proc):
     if proc.returncode is None:
         try:
             if os.name == 'posix':
-                os.killpg(proc.pid, signal.SIGTERM)
+                os.killpg(proc.pid, signal.SIGTERM)  # windows-footgun: ok - POSIX branch
             else:
                 proc.terminate()
             await asyncio.wait_for(proc.wait(), 2)
         except TimeoutError:
             if os.name == 'posix':
-                os.killpg(proc.pid, signal.SIGKILL)
+                os.killpg(proc.pid, signal.SIGKILL)  # windows-footgun: ok - POSIX branch
             else:
                 proc.kill()
         except ProcessLookupError:

@@ -9,7 +9,6 @@ woken by the first one waited for that run to end as well.
 Only the model is scripted: the session, its inbox pump, the mailbox and the tool loop are real.
 """
 import asyncio
-import socket
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +23,7 @@ from misaka.core.resource_loader import DefaultResourceLoader
 from misaka.core.sdk import create_agent_session
 from misaka.core.session_manager import SessionManager
 from misaka.core.settings_manager import SettingsManager
+from tests.offline import refuse_network
 
 
 def _reply(model, content, stop):
@@ -48,10 +48,7 @@ async def world(tmp_path, monkeypatch):
     for key in ("MISAKA_NET_SPACE", "MISAKA_USAGE_GENERATION", "MISAKA_SISTER_OWNER_GENERATION"):
         monkeypatch.delenv(key, raising=False)
 
-    def no_network(*_args, **_kwargs):
-        raise AssertionError("the offline mail test attempted a network connection")
-    monkeypatch.setattr(socket.socket, "connect", no_network)
-    monkeypatch.setattr(socket, "create_connection", no_network)
+    refuse_network(monkeypatch, "the offline mail test attempted a network connection")
     monkeypatch.setattr(messages, "POLL_SECONDS", 0.02)
 
     tool_bodies = {}

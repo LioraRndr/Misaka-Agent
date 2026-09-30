@@ -32,6 +32,7 @@ def _doc(tmp_path, name="book.xlsx", body="sheet one"):
     return str(path)
 
 
+@pytest.mark.skipif(os.open not in os.supports_dir_fd, reason="no guarded dir_fd reads here: the cache always misses")
 def test_the_second_read_of_an_unchanged_file_does_not_render_it_again(tmp_path):
     path = _doc(tmp_path)
     calls = []

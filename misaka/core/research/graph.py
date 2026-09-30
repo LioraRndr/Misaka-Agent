@@ -9,7 +9,6 @@ same question: that is Last Order's call.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -19,7 +18,8 @@ from itertools import pairwise
 
 from misaka.config import home
 from misaka.core.research import runs
-from misaka.utils import atomic
+from misaka.utils import atomic, file_lock
+from misaka.utils.paths import posix_relpath
 
 _LOG = logging.getLogger(__name__)
 
@@ -241,7 +241,7 @@ def _dispositions(con, run, node):
 def snapshot(con, run):
     """The whole graph as plain data, read in one pass: the source of every view."""
     workspace = run["workspace"]
-    rel = lambda path: os.path.relpath(path, workspace) if path else None
+    rel = lambda path: posix_relpath(path, workspace) if path else None
     out = {"run": run["id"], "question": run["question"], "status": run["status"], "phase": run["phase"],
            "limits": runs.limits(run), "nodes": [], "decisions": [], "relations": runs.relations(con, run["id"]),
            "reconciles": []}
@@ -397,14 +397,14 @@ def render_node(data, node_id):
     """``nodes/<node>/NODE.md``: what this folder is, in the graph's words."""
     node = next(n for n in data["nodes"] if n["id"] == node_id)
     here = runs.node_dir(node_id)
-    link = lambda path: f"`{os.path.relpath(path, here)}`"
+    link = lambda path: f"`{posix_relpath(path, here)}`"
     lines = [f"# Node {node_id} — {_clip(node['question'], 120)}", "",
              "Written by misaka from the run's records; edit nothing here, it is rewritten.", "",
              f"- Run: `{data['run']}` · kind: {node['kind']} · depth {node['depth']} · status {node['status']}",
              f"- Question: {node['question']}",
              "- Parents: " + (", ".join(f"[`{p}`](../{p}/{NODE_VIEW})" for p in node["parents"]) or "none (the root)"),
              "- Children: " + (", ".join(f"[`{c}`](../{c}/{NODE_VIEW})" for c in node["children"]) or "none yet"),
-             f"- Graph: `{os.path.relpath(runs.run_path({'id': data['run']}, GRAPH_VIEW), here)}`"]
+             f"- Graph: `{posix_relpath(runs.run_path({'id': data['run']}, GRAPH_VIEW), here)}`"]
     if node["red_team"]:
         lines.append(f"- Red team and divergence review: Sister {node['red_team']['assignee']}"
                      + (f" — {node['red_team']['reason']}" if node["red_team"].get("reason") else ""))
@@ -447,7 +447,7 @@ def _writer(run_id):
     os.makedirs(path.parent, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        file_lock.lock_fd(fd)
         yield
     finally:
         os.close(fd)

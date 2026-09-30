@@ -5,6 +5,7 @@ src/input/parse.rs, src/input/encode.rs, src/pane.rs at herdr c33fd40e).
 """
 import asyncio
 import re
+import sys
 
 import pytest
 import regex
@@ -382,6 +383,7 @@ def test_pane_env_explicit_launch_env_can_opt_back_in():
 # ── R10: terminal geometry (platform terminal_grid_size) ────────────────────────────
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the tty ioctl; Windows asks the console")
 def test_terminal_size_is_unavailable_on_error_or_zero(monkeypatch):
     from misaka.ui.panel import panel
 
@@ -979,21 +981,19 @@ def test_modal_paste_shortcut_and_clipboard_commands():
     assert panel_mod._clipboard_read_commands({}, "linux") == []
 
 
-def test_clipboard_read_limits(monkeypatch, tmp_path):
-    script = tmp_path / "clip"
-
+def test_clipboard_read_limits(monkeypatch):
     def run(body):
-        script.write_text("#!/bin/sh\n" + body)
-        script.chmod(0o755)
-        monkeypatch.setattr(panel_mod, "_clipboard_read_commands", lambda: [[str(script)]])
+        # The clipboard command is a Python child, so the limits are checked on every platform.
+        command = [sys.executable, "-c", "import sys\nout = sys.stdout.buffer.write\n" + body]
+        monkeypatch.setattr(panel_mod, "_clipboard_read_commands", lambda: [command])
         return panel_mod._read_clipboard_text()
 
-    assert run("printf 'héllo'") == "héllo"
-    assert run("exit 0") is None
-    assert run("printf x; exit 1") is None
-    assert run("printf '\\377'") is None
-    assert run("head -c 1048577 /dev/zero") is None
-    assert run("head -c 1048576 /dev/zero | tr '\\0' a") == "a" * 1048576
+    assert run("out('héllo'.encode())") == "héllo"
+    assert run("sys.exit(0)") is None
+    assert run("out(b'x'); sys.exit(1)") is None
+    assert run("out(bytes([255]))") is None
+    assert run("out(bytes(1048577))") is None
+    assert run("out(b'a' * 1048576)") == "a" * 1048576
 
 
 # ── S1, M2, K11, D1: sidebar reveal, menu placement, paragraph motion, OSC 52 ──────

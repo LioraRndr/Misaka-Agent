@@ -29,4 +29,4 @@ def test_the_key_never_lands_in_settings_json(monkeypatch):
     _answer(monkeypatch, "ok-456")
     setup.Wizard()._openalex_key()
     settings = home.path("settings")
-    assert not settings.exists() or "ok-456" not in settings.read_text()
+    assert not settings.exists() or "ok-456" not in settings.read_text(encoding="utf-8")

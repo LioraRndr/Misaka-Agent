@@ -11,6 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from misaka.utils import local_socket
 from misaka.utils.values import read_field
 
 
@@ -28,7 +29,7 @@ async def wait_for_session(session):
 async def request(record, operation, **arguments):
     """One command/ack, without retries: an uncertain write must not be sent twice."""
     async with asyncio.timeout(10):
-        reader, writer = await asyncio.open_unix_connection(record["control"], limit=1024 * 1024)
+        reader, writer = await local_socket.open_connection(record["control"], limit=1024 * 1024)
         try:
             writer.write((json.dumps({"session": record["id"], "instance": record["instance"],
                                       "operation": operation, **arguments}) + "\n").encode())
@@ -72,9 +73,11 @@ class SessionControl:
         self.accepting, self.paused = True, False
         # macOS sockaddr_un is only 104 bytes; its default temp directory can
         # consume most of that. A private, short directory also protects the socket.
-        self.directory = tempfile.TemporaryDirectory(prefix="misaka-session-", dir="/tmp")
+        from misaka.core.session_catalog import _CONTROL_PARENT
+
+        self.directory = tempfile.TemporaryDirectory(prefix="misaka-session-", dir=_CONTROL_PARENT)
         self.path = str(Path(self.directory.name) / "control.sock")
-        self.server = await asyncio.start_unix_server(self._serve, self.path, limit=1024 * 1024)
+        self.server = await local_socket.start_server(self._serve, self.path, limit=1024 * 1024)
         os.chmod(self.path, 0o600)
         self._unsubscribe_stream = self.session.subscribe(self._stream_event)
 

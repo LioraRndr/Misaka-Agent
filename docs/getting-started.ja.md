@@ -4,23 +4,23 @@
 
 このページでは、何もインストールしていない状態から、最初の研究報告を受け取るまでを案内します。所要時間は十分ほどで、その大半はセットアップウィザードです。
 
-**必要なもの**は、Mac か Linux のマシン、ターミナル、そして少なくとも一つのモデルプロバイダを使える状態です。API キーか、ChatGPT や GitHub Copilot のようにサインインして使うサブスクリプションがあれば始められます。Claude のアカウントでもサインインできますが、その利用は Anthropic によってトークン単位の追加利用として課金され、プランの利用枠には含まれません。
+**必要なもの**は、Mac、Linux、または Windows 10/11 のマシン、ターミナル（Windows では Windows Terminal）、そして少なくとも一つのモデルプロバイダを使える状態です。API キーか、ChatGPT や GitHub Copilot のようにサインインして使うサブスクリプションがあれば始められます。Claude のアカウントでもサインインできますが、その利用は Anthropic によってトークン単位の追加利用として課金され、プランの利用枠には含まれません。
 
 このページ以外のドキュメントは、今のところ英語版のみです。
 
 ## 1. MISAKA に必要なツールを入れる
 
-| ツール | 用途 | macOS | Debian / Ubuntu |
-|---|---|---|---|
-| [uv](https://docs.astral.sh/uv/) | MISAKA のインストール。Python が 3.12 より古ければ別に用意します | `brew install uv` | uv のサイトを参照 |
-| git | プロジェクトとその履歴 | `xcode-select --install` | `sudo apt install git` |
-| ripgrep、fd | ファイル検索 | `brew install ripgrep fd` | `sudo apt install ripgrep fd-find` |
-| poppler | PDF の読み取り | `brew install poppler` | `sudo apt install poppler-utils` |
-| ocrmypdf（任意） | スキャンした PDF | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` |
-| DjVuLibre（任意） | DjVu ファイル | `brew install djvulibre` | `sudo apt install djvulibre-bin` |
-| LibreOffice（任意） | 古い `.doc`、`.xls`、`.ppt` ファイル | `brew install --cask libreoffice` | `sudo apt install libreoffice` |
+| ツール | 用途 | macOS | Debian / Ubuntu | Windows |
+|---|---|---|---|---|
+| [uv](https://docs.astral.sh/uv/) | MISAKA のインストール。Python が 3.12 より古ければ別に用意します | `brew install uv` | uv のサイトを参照 | `winget install astral-sh.uv` |
+| git | プロジェクトとその履歴 | `xcode-select --install` | `sudo apt install git` | `winget install Git.Git` |
+| ripgrep、fd | ファイル検索 | `brew install ripgrep fd` | `sudo apt install ripgrep fd-find` | `winget install BurntSushi.ripgrep.MSVC`, `winget install sharkdp.fd` |
+| poppler | PDF の読み取り | `brew install poppler` | `sudo apt install poppler-utils` | `winget install oschwartz10612.Poppler` |
+| ocrmypdf（任意） | スキャンした PDF | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` | [OCRmyPDF の Windows 向け手順](https://ocrmypdf.readthedocs.io/en/latest/installation.html#installing-on-windows)を参照 |
+| DjVuLibre（任意） | DjVu ファイル | `brew install djvulibre` | `sudo apt install djvulibre-bin` | `winget install DjVuLibre.DjView` |
+| LibreOffice（任意） | 古い `.doc`、`.xls`、`.ppt` ファイル | `brew install --cask libreoffice` | `sudo apt install libreoffice` | `winget install TheDocumentFoundation.LibreOffice` |
 
-OCR の行では英語・中国語・日本語が入ります。MISAKA がスキャン画像を読むときの既定の言語です。必須のツールが足りないときは、どれが足りず、どう入れればよいかをセットアップウィザードが教えてくれます。
+OCR の行では英語・中国語・日本語が入ります。MISAKA がスキャン画像を読むときの既定の言語です。必須のツールが足りないときは、どれが足りず、どう入れればよいかをセットアップウィザードが教えてくれます。Windows では `winget install` のあと、新しいターミナルを開くと入れたツールが見つかります。
 
 ## 2. MISAKA をインストールする
 
@@ -46,7 +46,8 @@ uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misak
 研究用のフォルダを作り、その中でウィザードを実行します：
 
 ```sh
-mkdir my-research && cd my-research
+mkdir my-research
+cd my-research
 misaka setup
 ```
 

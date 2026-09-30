@@ -84,9 +84,9 @@ def test_the_contract_deliverable_is_read_from_the_card_body(tmp_path):
     task = {"body": BODY, "output_dir": str(out)}
     assert worker.contract_deliverable(task) == "choson-tusol-genealogy.md"
     assert worker.missing_deliverable(task) == "choson-tusol-genealogy.md"
-    (out / "choson-tusol-genealogy.md").write_text("")
+    (out / "choson-tusol-genealogy.md").write_text("", encoding="utf-8")
     assert worker.missing_deliverable(task) == "choson-tusol-genealogy.md"     # empty is not delivered
-    (out / "choson-tusol-genealogy.md").write_text("# report\n")
+    (out / "choson-tusol-genealogy.md").write_text("# report\n", encoding="utf-8")
     assert worker.missing_deliverable(task) is None
     assert worker.missing_deliverable({"body": "## research question\nq\n", "output_dir": str(out)}) is None
     assert worker.contract_deliverable({"body": "## deliverable\n`quoted.md`\n"}) == "quoted.md"
@@ -119,7 +119,7 @@ async def test_complete_refuses_while_the_deliverable_is_missing(tmp_path, monke
 async def test_complete_then_a_turn_end_submits_the_card(tmp_path, monkeypatch, request):
     con, tid, out = _board(tmp_path, request)
     part = _part(monkeypatch, con, tid)
-    (out / "choson-tusol-genealogy.md").write_text("# genealogy\nKwon Kun -> Toegye.\n")
+    (out / "choson-tusol-genealogy.md").write_text("# genealogy\nKwon Kun -> Toegye.\n", encoding="utf-8")
     reply = await _tool(part, "misaka_card_complete").execute(
         None, {"summary": "Genealogy traced from Kwon Kun to the Horak debate."}, None, None, None)
     assert "Completion recorded" in reply["content"][0]["text"]
@@ -132,7 +132,7 @@ async def test_complete_then_a_turn_end_submits_the_card(tmp_path, monkeypatch, 
 async def test_completion_does_not_carry_into_a_turn_that_did_not_end_cleanly(tmp_path, monkeypatch, request):
     con, tid, out = _board(tmp_path, request)
     part = _part(monkeypatch, con, tid)
-    (out / "choson-tusol-genealogy.md").write_text("# genealogy\n")
+    (out / "choson-tusol-genealogy.md").write_text("# genealogy\n", encoding="utf-8")
     await _tool(part, "misaka_card_complete").execute(None, {"summary": "done"}, None, None, None)
     await part.agent_end(_turn("aborted", ""))
     await part.agent_settled()
@@ -188,11 +188,11 @@ def test_a_deliverable_written_by_an_earlier_attempt_is_still_the_cards_product(
     """2026-09-27: a divergence card reopened after a resume declared again without rewriting its
     file; only files changed in the attempt were listed, and divergence.md lost its registration."""
     con, tid, out = _board(tmp_path, request)
-    (out / "choson-tusol-genealogy.md").write_text("# genealogy\n")    # written by attempt 1
+    (out / "choson-tusol-genealogy.md").write_text("# genealogy\n", encoding="utf-8")    # written by attempt 1
     con.execute("UPDATE tasks SET generation=2 WHERE id=?", (tid,))    # reopened to declare again
     worker.record_output_baseline(con, tasks.get(con, tid))            # attempt 2 starts with the file there
     submission = worker.build_submission(con, tasks.get(con, tid), "declared again")
-    assert os.path.relpath(out / "choson-tusol-genealogy.md", tmp_path) in submission["artifacts"]
+    assert (out / "choson-tusol-genealogy.md").relative_to(tmp_path).as_posix() in submission["artifacts"]
 
 
 def test_bookkeeping_lists_know_the_tool():

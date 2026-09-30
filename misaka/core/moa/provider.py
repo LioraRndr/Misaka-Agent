@@ -56,7 +56,7 @@ def _default_slots():
             # without constructing another registry (or splitting raw slash IDs).
             providers = set(get_providers()) | {cfg["provider"]}
             try:
-                with open(home.path("models"), encoding="utf-8") as handle:
+                with open(home.path("models"), encoding="utf-8-sig") as handle:
                     configured = json.load(handle)
                 configured = configured.get("providers") if isinstance(configured, dict) else None
                 if isinstance(configured, dict):
@@ -600,7 +600,7 @@ def _save_trace(cfg, session_id, preset_name, advisor_traces, agg_slot,
                 "output_location": "inline" if agg_output is not None else "assistant_message_in_session_db",
             },
         }
-        with open(os.path.join(base, f"{sid}.jsonl"), "a", encoding="utf-8") as f:
+        with open(os.path.join(base, f"{sid}.jsonl"), "a", encoding="utf-8") as f:  # windows-footgun: ok - an append
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception:  # noqa: BLE001, S110 - a trace is a sidecar; losing one never breaks the call
         pass

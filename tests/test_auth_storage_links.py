@@ -15,7 +15,7 @@ KEY = {"type": "api_key", "key": "sk-test"}
 
 
 def _seed(path):
-    path.write_text(json.dumps({"anthropic": KEY}))
+    path.write_text(json.dumps({"anthropic": KEY}), encoding="utf-8")
     os.chmod(path, 0o600)
 
 
@@ -32,7 +32,7 @@ def test_a_symlinked_store_is_read_and_written_through_the_link(tmp_path):
     storage.set("openai", {"type": "api_key", "key": "sk-other"})
 
     assert link.is_symlink() and os.readlink(link) == str(real)
-    assert json.loads(real.read_text())["openai"]["key"] == "sk-other"
+    assert json.loads(real.read_text(encoding="utf-8"))["openai"]["key"] == "sk-other"
     assert AuthStorage.create(str(link)).get("openai")["key"] == "sk-other"
 
 
@@ -44,7 +44,7 @@ def test_a_hard_linked_store_is_read_and_written(tmp_path):
     storage = AuthStorage.create(str(path))
     assert storage.get("anthropic") == KEY
     storage.set("openai", {"type": "api_key", "key": "sk-other"})
-    assert json.loads(path.read_text())["openai"]["key"] == "sk-other"
+    assert json.loads(path.read_text(encoding="utf-8"))["openai"]["key"] == "sk-other"
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
@@ -67,6 +67,6 @@ def test_a_link_to_a_directory_is_refused(tmp_path):
 
 def test_an_empty_store_is_still_refused(tmp_path):
     path = tmp_path / "auth.json"
-    path.write_text("")
+    path.write_text("", encoding="utf-8")
     with pytest.raises(RuntimeError, match="empty"):
         FileAuthStorageBackend(str(path))._read_file()

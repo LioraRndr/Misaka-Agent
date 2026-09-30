@@ -18,7 +18,6 @@ ctrl+b again sends a literal ctrl+b.
 import base64
 import concurrent.futures
 import enum
-import fcntl
 import json
 import os
 import select
@@ -26,9 +25,7 @@ import signal
 import socket
 import struct
 import sys
-import termios
 import time
-import tty
 
 from misaka.config import home
 from misaka.ui.panel import client as net
@@ -40,6 +37,17 @@ from misaka.ui.panel import selection as selmod
 from misaka.ui.panel.selection import Selection
 from misaka.ui.panel.selection import absolute_row as _abs_row
 from misaka.ui.panel.text_editor import TextEditor, grapheme_width, graphemes
+from misaka.utils import local_socket
+
+# The host terminal is a tty on POSIX and a console on Windows, whose input is read on a thread
+# (utils/win_console) and handed to the loop through a socketpair, the one thing select() takes there.
+WINDOWS = sys.platform == "win32"
+if WINDOWS:
+    from misaka.utils import win_console
+else:
+    import fcntl
+    import termios
+    import tty
 
 
 def _prefix_key():
@@ -515,8 +523,8 @@ def git_info(folder, active_cards=()):
 
     def git(*args):
         try:
-            done = subprocess.run(["git", "-C", folder, *args],
-                                  capture_output=True, text=True, timeout=2, check=False)
+            done = subprocess.run(["git", "-C", folder, *args], capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", timeout=2, check=False)
         except (OSError, subprocess.SubprocessError):
             return None
         return done.stdout if done.returncode == 0 else None
@@ -1456,13 +1464,28 @@ def _cut(text, width):
     return out, used
 
 
+def _shell():
+    """The program a new shell pane runs: ``$SHELL``. Windows has none; there it is PowerShell 7
+    when ``pwsh.exe`` is on PATH, else the inbox Windows PowerShell (herdr pane.rs
+    default_windows_pane_shell)."""
+    if WINDOWS:
+        import shutil
+        return shutil.which("pwsh.exe") or "powershell.exe"
+    return os.environ.get("SHELL", "sh")
+
+
 def _clipboard(text):
-    """Copy to the system clipboard: pbcopy on macOS (what herdr does), otherwise OSC 52 and let the terminal handle it."""
+    """Copy to the system clipboard: pbcopy on macOS and the Win32 clipboard on Windows (what
+    herdr does), otherwise OSC 52 and let the terminal handle it."""
     import subprocess
     try:
-        subprocess.run(["pbcopy"], input=text.encode(), check=True)
+        if WINDOWS:
+            from misaka.utils import win_clipboard
+            win_clipboard.copy(text)
+        else:
+            subprocess.run(["pbcopy"], input=text.encode(), check=True)
         return
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     _write_all(b"\x1b]52;c;" + base64.b64encode(text.encode()) + b"\x07")
 
@@ -1553,7 +1576,7 @@ def format_help_lines(width=46):
 
 
 class _Sock:
-    """Minimal JSONL client over the daemon's Unix socket (one for requests, one for the event stream).
+    """Minimal JSONL client over the daemon's local socket (one for requests, one for the event stream).
 
     Every request carries an id of its own and ``request`` answers only to that id: a reply that
     arrives after its request timed out (the daemon was busy for longer than the socket timeout)
@@ -1562,8 +1585,7 @@ class _Sock:
     the panel died on ``KeyError: 'panes'``."""
 
     def __init__(self, path):
-        self.sock = socket.socket(socket.AF_UNIX)
-        self.sock.connect(path)
+        self.sock = local_socket.connect(path)
         self.sock.settimeout(15)   # If the daemon hangs, fail with a "disconnected" error instead of freezing the keyboard.
         self.buf = b""
         self.seq = 0
@@ -1666,8 +1688,11 @@ def _probe_keyboard_enhancement():
     """terminal_setup.rs query_host_escape_disambiguation: ask for the kitty keyboard flags
     and primary device attributes, and read until DA answers (every terminal answers DA,
     so a host without the kitty protocol costs one round trip). Returns the probe state and
-    the other bytes read meanwhile, which the framer receives first."""
+    the other bytes read meanwhile, which the framer receives first. Windows asks nothing
+    and pushes no flags (terminal_setup.rs, cfg(windows))."""
     state, buffered = {}, bytearray()
+    if WINDOWS:
+        return state, b""
     try:
         _write_all(hin.KEYBOARD_PROBE)
     except OSError:
@@ -1700,6 +1725,8 @@ def _term_size():
     """``(rows, cols)`` of the host terminal, or None when it cannot report a grid: the
     ioctl fails or answers zero (platform terminal_grid_size). Guessing 24x80 instead would
     shrink every pane to that size and reflow its whole history (herdr #3519)."""
+    if WINDOWS:
+        return win_console.size(1)
     try:
         rows, cols = struct.unpack("HHHH", fcntl.ioctl(0, termios.TIOCGWINSZ,
                                                        b"\0" * 8))[:2]
@@ -3100,7 +3127,8 @@ def launch():
     # composition.rs last_tab_bar_width); a manual scroll lasts until then.
     tab_scroll, tab_reveal, tab_seen = 0, True, None
     resized = {"hit": True}
-    signal.signal(signal.SIGWINCH, lambda *_a: resized.update(hit=True))
+    if not WINDOWS:     # a console reports a new size through its input records instead
+        signal.signal(signal.SIGWINCH, lambda *_a: resized.update(hit=True))
 
     def slice_of(pane_id):
         return next((s for s in slices if s[0] == pane_id), None)
@@ -3783,7 +3811,7 @@ def launch():
     def new_space_here():
         """herdr new_workspace (the " new" button): another space in the same folder, its root a shell."""
         space = active_space()
-        new_pane([os.environ.get("SHELL", "sh")], "shell", place={"space": True},
+        new_pane([_shell()], "shell", place={"space": True},
                  cwd=space["folder"] if space else os.getcwd())
 
     def switch_tab(index):
@@ -3846,7 +3874,7 @@ def launch():
             return True
         rect = bar.new_tab_hit_area
         if rect.width and rect.x <= event.x < rect.x + rect.width:
-            new_pane([os.environ.get("SHELL", "sh")], "shell", place={"tab": focused})
+            new_pane([_shell()], "shell", place={"tab": focused})
         return True
 
     def sidebar_mouse(event):
@@ -4277,11 +4305,11 @@ def launch():
         elif text == "z":                        # herdr zoom: the focused pane fills the tab.
             toggle_zoom()
         elif text == "c":                        # herdr new_tab.
-            new_pane([os.environ.get("SHELL", "sh")], "shell", place={"tab": focused})
+            new_pane([_shell()], "shell", place={"tab": focused})
         elif text == "v":                        # split_vertical: side by side.
-            new_pane([os.environ.get("SHELL", "sh")], "shell", place={"split": focused, "direction": "h"})
+            new_pane([_shell()], "shell", place={"split": focused, "direction": "h"})
         elif text == "-":                        # split_horizontal: stacked.
-            new_pane([os.environ.get("SHELL", "sh")], "shell", place={"split": focused, "direction": "v"})
+            new_pane([_shell()], "shell", place={"split": focused, "direction": "v"})
         elif text == "g":                        # herdr goto: the navigator.
             open_nav()
         elif text == "[":                        # herdr copy_mode.
@@ -4376,10 +4404,17 @@ def launch():
     # crossterm enable_raw_mode (cfmakeraw), as herdr runs its host terminal. IEXTEN must go
     # too: left on, the line discipline eats ctrl+v (VLNEXT) and takes ctrl+o as VDISCARD,
     # so neither reached the panel or a pane.
-    old_attrs = termios.tcgetattr(0)
-    new_attrs = termios.tcgetattr(0)
-    tty.cfmakeraw(new_attrs)
-    termios.tcsetattr(0, termios.TCSANOW, new_attrs)
+    if WINDOWS:
+        old_attrs = win_console.enter_raw_mode(0, 1, mouse=True)
+        keys, feed = socket.socketpair()
+        console_input = win_console.ConsoleInput(
+            0, lambda text: feed.sendall(text.encode()), lambda: resized.update(hit=True)).start()
+    else:
+        old_attrs = termios.tcgetattr(0)
+        new_attrs = termios.tcgetattr(0)
+        tty.cfmakeraw(new_attrs)
+        termios.tcsetattr(0, termios.TCSANOW, new_attrs)
+        keys = 0
     # Alternate screen (standard for herdr and every proper TUI): without it Terminal.app
     # adds a "mark" to every line that gets a carriage return, which renders as a pair of
     # dim brackets. Mouse: every motion (?1003, as crossterm's EnableMouseCapture) so a pane
@@ -4390,7 +4425,7 @@ def launch():
     # setup_terminal_with_capabilities: push the flags, probe whether the host took them
     # (a host that did sends Escape and Alt chords as CSI u, so the framer may hold a partial
     # escape sequence instead of releasing it as Escape), then turn on mouse, paste, focus.
-    _write_all(b"\x1b[?1049h\x1b[?7l" + f"\x1b[>{pin.HOST_KITTY_FLAGS}u".encode())
+    _write_all(b"\x1b[?1049h\x1b[?7l" + (b"" if WINDOWS else f"\x1b[>{pin.HOST_KITTY_FLAGS}u".encode()))
     probe, initial_input = _probe_keyboard_enhancement()
     _write_all(HOST_MOUSE_MODES + b"\x1b[?2004h\x1b[?1004h")
     host = hin.HostInput(escape_disambiguation=hin.escape_disambiguation_confirmed(probe))
@@ -4433,7 +4468,7 @@ def launch():
                 wait = min(wait, max(0.0, split_due - now))
             if sel["autoscroll_at"] is not None:
                 wait = min(wait, max(0.0, sel["autoscroll_at"] - now))
-            readable, _, _ = select.select([0, stream.sock], [], [], wait)
+            readable, _, _ = select.select([keys, stream.sock], [], [], wait)
             now = time.monotonic()
             drag_tick(now)
             if sel["autoscroll_at"] is not None and now >= sel["autoscroll_at"]:
@@ -4442,7 +4477,7 @@ def launch():
             if initial_input:          # typed while the keyboard probe was waiting (client/input.rs)
                 events = host.feed(bytes(initial_input), now)
                 initial_input = b""
-            elif pending is not None and now >= pending and 0 not in readable:
+            elif pending is not None and now >= pending and keys not in readable:
                 events = host.flush(now)
             if repaint_after_typing and now > repaint_after_typing:
                 # IME pre-edit text is drawn directly by the host terminal over our cells: the
@@ -4456,8 +4491,8 @@ def launch():
             if sel["clear_at"] is not None and now >= sel["clear_at"]:
                 clear_selection()
 
-            if 0 in readable:
-                events = events + host.feed(os.read(0, 4096), now)
+            if keys in readable:
+                events = events + host.feed(keys.recv(4096) if WINDOWS else os.read(0, 4096), now)
             quitting = False
             for event in events:
                 if isinstance(event, hin.Mouse):
@@ -4592,7 +4627,13 @@ def launch():
         # Nothing waits on an in-flight git probe: it has its own two-second timeout and
         # the panel is on its way out.
         git_pool.shutdown(wait=False, cancel_futures=True)
-        termios.tcsetattr(0, termios.TCSANOW, old_attrs)
+        if WINDOWS:
+            console_input.stop()
+            win_console.restore(old_attrs)
+            keys.close()
+            feed.close()
+        else:
+            termios.tcsetattr(0, termios.TCSANOW, old_attrs)
         # Pop the keyboard flags, turn off mouse tracking, paste and focus reporting, leave
         # the alternate screen, show the cursor again in the terminal's default shape
         # (terminal_setup.rs: "\x1b[?25h\x1b[0 q").

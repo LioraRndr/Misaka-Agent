@@ -94,7 +94,11 @@ def _install_command(binary: str) -> str:
            "pdftotext": "sudo apt install poppler-utils",
            # The chi_sim and jpn packs: documents.ocr_langs defaults to eng+chi_sim+jpn.
            "ocrmypdf": "sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn"}
-    table = brew if sys.platform == "darwin" else apt
+    # OCRmyPDF has no Windows package: it needs Tesseract and Ghostscript first, then pip.
+    winget = {"git": "winget install Git.Git", "rg": "winget install BurntSushi.ripgrep.MSVC",
+              "fd": "winget install sharkdp.fd", "pdftotext": "winget install oschwartz10612.Poppler",
+              "ocrmypdf": "see https://ocrmypdf.readthedocs.io/en/latest/installation.html#installing-on-windows"}
+    table = brew if sys.platform == "darwin" else winget if sys.platform == "win32" else apt
     return table.get(binary, f"install {binary}")
 
 

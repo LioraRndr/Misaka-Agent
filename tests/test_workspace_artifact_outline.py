@@ -126,7 +126,7 @@ async def test_both_live_view_and_saved_index_preserve_binary_paths_without_payl
                                sha256=hashlib.sha256(Path(row['path']).read_bytes()).hexdigest(),
                                branch_id=branch, metadata={'binary': suffix != '.md'})
         aid, path = workflow._refresh_workspace_index(con, run)
-        saved = Path(path).read_text()
+        saved = Path(path).read_text(encoding='utf-8')
         monkeypatch.setitem(tools.CFG, 'db', str(tmp_path / 'board.db'))
         registered = []
         tools.register(SimpleNamespace(registerTool=registered.append))
@@ -158,7 +158,7 @@ def test_code_and_hashtags_are_not_artifact_headings(tmp_path):
 
 
 def test_project_brief_outline_reads_headings_like_artifacts(tmp_path):
-    (tmp_path / 'PROJECT.md').write_text(FENCED)
+    (tmp_path / 'PROJECT.md').write_text(FENCED, encoding='utf-8')
     node = workspace._project_file(str(tmp_path))
     assert [(h['node_id'], h['title']) for h in node['nodes']] == [
         ('project#L1', 'Real heading'), ('project#L9', 'Indented heading')]
@@ -166,7 +166,7 @@ def test_project_brief_outline_reads_headings_like_artifacts(tmp_path):
 
 
 def test_project_brief_outline_is_bounded(tmp_path):
-    (tmp_path / 'PROJECT.md').write_text(''.join(f'# {n} ' + 'x' * 1000 + '\n' for n in range(130)))
+    (tmp_path / 'PROJECT.md').write_text(''.join(f'# {n} ' + 'x' * 1000 + '\n' for n in range(130)), encoding='utf-8')
     node = workspace._project_file(str(tmp_path))
     assert len(node['nodes']) == 120
     assert max(len(h['title']) for h in node['nodes']) <= 200

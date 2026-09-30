@@ -10,6 +10,7 @@ import os
 import sqlite3
 import sys
 import tarfile
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,7 +50,7 @@ def test_pip_reinstalls_the_package_alone_then_its_dependencies_with_the_extras(
 
 
 def test_a_checkout_syncs_with_the_extras_it_holds(tmp_path, monkeypatch):
-    (tmp_path / "uv.lock").write_text("")
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
     monkeypatch.setattr(update, "installed_extras", lambda: ["pageindex"])
     monkeypatch.setattr(sys, "prefix", str(tmp_path / ".venv"))
     assert update._install_commands(_install("checkout", "uv", tmp_path)) == [["uv", "sync", "--extra=pageindex"]]
@@ -58,9 +59,9 @@ def test_a_checkout_syncs_with_the_extras_it_holds(tmp_path, monkeypatch):
 def test_the_owning_tool_is_read_from_its_receipt(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "prefix", str(tmp_path))
     assert update._manager("pip") == "pip"
-    (tmp_path / "pipx_metadata.json").write_text("{}")
+    (tmp_path / "pipx_metadata.json").write_text("{}", encoding="utf-8")
     assert update._manager("pip") == "pipx"                 # pipx installs through pip
-    (tmp_path / "uv-receipt.toml").write_text("")
+    (tmp_path / "uv-receipt.toml").write_text("", encoding="utf-8")
     assert update._manager("uv") == "uv tool"
 
 
@@ -127,11 +128,11 @@ def test_a_checkout_that_cannot_start_is_put_back(tmp_path, monkeypatch):
 # -- backups ----------------------------------------------------------------------------------
 
 def _seed_home(root: Path) -> None:
-    home.path("settings").write_text('{"a": 1}')
+    home.path("settings").write_text('{"a": 1}', encoding="utf-8")
     home.path("credentials").mkdir(parents=True)
-    home.path("auth").write_text("{}")
+    home.path("auth").write_text("{}", encoding="utf-8")
     home.path("db").parent.mkdir(parents=True)
-    with sqlite3.connect(home.path("db")) as con:
+    with closing(sqlite3.connect(home.path("db"))) as con, con:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("CREATE TABLE t(x)")
         con.execute("INSERT INTO t VALUES (1)")
@@ -139,19 +140,20 @@ def _seed_home(root: Path) -> None:
     (root / "cache" / "big.bin").write_bytes(b"x" * 10)
     role = home.path("roles_root") / "last_order"
     role.mkdir(parents=True)
-    (role / "settings.json").write_text("{}")
+    (role / "settings.json").write_text("{}", encoding="utf-8")
 
 
 def test_an_update_snapshot_holds_settings_credentials_boards_and_roles(fresh_home, monkeypatch):
     _seed_home(fresh_home)
     shot = backup.snapshot("update")
-    assert (shot / "settings.json").read_text() == '{"a": 1}'
+    assert (shot / "settings.json").read_text(encoding="utf-8") == '{"a": 1}'
     assert (shot / "credentials" / "auth.json").exists()
     assert (shot / "profiles" / "last_order" / "settings.json").exists()
-    with sqlite3.connect(shot / "state" / "board.db") as con:
+    with closing(sqlite3.connect(shot / "state" / "board.db")) as con:
         assert con.execute("SELECT x FROM t").fetchone() == (1,)
     assert not (shot / "cache").exists()
-    assert home.path("backups").stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":                                       # POSIX modes; Windows keeps it private by ACL
+        assert home.path("backups").stat().st_mode & 0o777 == 0o700
     for n in range(backup.KEEP + 2):                          # bounded, oldest first
         (home.path("backups") / f"update-2000010{n}-000000").mkdir()
     backup.snapshot("update")
@@ -163,7 +165,8 @@ def test_the_uninstall_archive_is_private_and_leaves_rebuildables_out(fresh_home
     backup.snapshot("update")
     target = tmp_path / "out.tar.gz"
     assert backup.archive(target) == []
-    assert target.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o600
     with tarfile.open(target) as tar:
         names = set(tar.getnames())
     assert f"{home.DIR_NAME}/credentials/auth.json" in names and f"{home.DIR_NAME}/state/board.db" in names
@@ -176,12 +179,12 @@ def _project(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     config = project / home.DIR_NAME
     (config / "subagents").mkdir(parents=True)
-    (config / "settings.json").write_text("{}")
+    (config / "settings.json").write_text("{}", encoding="utf-8")
     (config / "lcm").mkdir()
-    (config / "lcm.gate").write_text("")
-    (project / "report.md").write_text("mine")
+    (config / "lcm.gate").write_text("", encoding="utf-8")
+    (project / "report.md").write_text("mine", encoding="utf-8")
     home.path("db").parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(home.path("db")) as con:
+    with closing(sqlite3.connect(home.path("db"))) as con, con:
         con.execute("CREATE TABLE tasks(workspace TEXT)")
         con.execute("CREATE TABLE research_runs(workspace TEXT)")
         con.execute("INSERT INTO research_runs VALUES (?)", (str(project),))
@@ -198,7 +201,7 @@ def test_only_what_misaka_derived_in_a_project_is_offered_for_removal(fresh_home
 def test_links_into_the_home_are_found_and_others_are_not(fresh_home, tmp_path, monkeypatch):
     tool = fresh_home / "shared" / "tool"
     tool.parent.mkdir()
-    tool.write_text("")
+    tool.write_text("", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     os.symlink(tool, bin_dir / "tool")
@@ -231,7 +234,7 @@ def test_data_only_removes_the_home_and_derived_files_but_nothing_a_person_wrote
     assert ran == [] and not fresh_home.exists()
     config = project / home.DIR_NAME
     assert sorted(path.name for path in config.iterdir()) == ["settings.json", "subagents"]
-    assert (project / "report.md").read_text() == "mine"
+    assert (project / "report.md").read_text(encoding="utf-8") == "mine"
 
 
 def test_uninstall_refuses_while_misaka_runs(fresh_home, monkeypatch):

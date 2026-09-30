@@ -112,7 +112,7 @@ def _pdf_text_layer(p):
     """The text a PDF already carries, page by page; empty for a scan."""
     try:
         out = subprocess.run(["pdftotext", "-layout", p, "-"], capture_output=True,
-                             text=True, timeout=300, check=False)
+                             text=True, encoding="utf-8", errors="replace", timeout=300, check=False)
         if out.returncode == 0 and out.stdout.strip():
             return _form_feed_pages(out.stdout)
     except (OSError, subprocess.SubprocessError):
@@ -123,7 +123,7 @@ def _pdf_text_layer(p):
     # -- her session, her card -- down with SIGABRT.
     try:
         out = subprocess.run([sys.executable, "-c", _PDFIUM_TEXT_CHILD, p], capture_output=True,
-                             text=True, timeout=300, check=False)
+                             text=True, encoding="utf-8", timeout=300, check=False)
         if out.returncode == 0 and out.stdout.strip():
             pages = json.loads(out.stdout)
             if isinstance(pages, list) and all(isinstance(page, str) for page in pages):
@@ -212,7 +212,8 @@ def _ocr_pages(p, meta=None):
             out = subprocess.run(
                 [OCR_BINARY, "--sidecar", sidecar, "--skip-text", "-l", langs,
                  p, os.path.join(tmp, "ocr.pdf")],
-                capture_output=True, text=True, timeout=OCR_TIMEOUT, check=False)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=OCR_TIMEOUT,
+                check=False)
             if out.returncode != 0:
                 _note(meta, "ocr_error",
                       " ".join((out.stderr or "").split())[-200:] or f"exit {out.returncode}")
@@ -903,8 +904,8 @@ def _djvu_pages(p, meta=None):
         _note(meta, "djvu_error", f"{DJVU_TEXT_BINARY} is not installed (brew install djvulibre)")
         return []
     try:
-        out = subprocess.run([DJVU_TEXT_BINARY, p], capture_output=True, text=True,
-                             timeout=DJVU_TIMEOUT, check=False)
+        out = subprocess.run([DJVU_TEXT_BINARY, p], capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=DJVU_TIMEOUT, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         _note(meta, "djvu_error", str(error)[:200])
         return []
@@ -917,8 +918,8 @@ def _djvu_pages(p, meta=None):
     with tempfile.TemporaryDirectory(prefix=".djvu-", dir=os.path.dirname(os.path.abspath(p))) as tmp:
         rendered = os.path.join(tmp, "scan.pdf")
         try:
-            run = subprocess.run([DJVU_RENDER_BINARY, "-format=pdf", p, rendered],
-                                 capture_output=True, text=True, timeout=DJVU_TIMEOUT, check=False)
+            run = subprocess.run([DJVU_RENDER_BINARY, "-format=pdf", p, rendered], capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace", timeout=DJVU_TIMEOUT, check=False)
         except (OSError, subprocess.SubprocessError) as error:
             _note(meta, "djvu_error", str(error)[:200])
             return pages

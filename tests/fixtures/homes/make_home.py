@@ -36,7 +36,7 @@ def build(version: str) -> Path:
 
     home.ensure()
     layout.ensure()
-    home.path("settings").write_text(json.dumps({"defaultProvider": "anthropic", "defaultModel": "claude-sonnet-4-5"}, indent=2))
+    home.path("settings").write_text(json.dumps({"defaultProvider": "anthropic", "defaultModel": "claude-sonnet-4-5"}, indent=2), encoding="utf-8")
     ok, note = roster.create_sister("10032", specialty="archival sources")
     assert ok, note
     project = scratch / "project"
@@ -44,7 +44,7 @@ def build(version: str) -> Path:
     cards.init_project(str(project), git=False)
     config = home.project_dir(project)
     config.mkdir(exist_ok=True)
-    (config / "settings.json").write_text(json.dumps({"research": {"plan_approval": True}}, indent=2))
+    (config / "settings.json").write_text(json.dumps({"research": {"plan_approval": True}}, indent=2), encoding="utf-8")
 
     con = tasks.connect(CFG["db"])
     try:

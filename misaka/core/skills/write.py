@@ -77,7 +77,7 @@ def snapshot(root, *, store=True):
         return []
     out = []
     for f in sorted(root.rglob("*")):                     # rglob does not descend symlinked dirs
-        rel = str(f.relative_to(root))
+        rel = f.relative_to(root).as_posix()     # the same key on every OS (Hermes #62310)
         if f.is_symlink():
             # Recorded rather than followed. A role's skill is often a link into a library
             # (layers.py:84), so a snapshot that did not name the link left `restore` with
@@ -117,7 +117,7 @@ def _collect_blobs():
                           for item in change.get(side, {}).get("files", []) if item.get("sha256"))
     for path in _journal_dir().glob("*.json"):
         try:
-            journal = json.loads(path.read_text())
+            journal = json.loads(path.read_text(encoding="utf-8-sig"))
             referenced.update(item["sha256"] for change in journal["changes"]
                               for side in ("before", "after")
                               for item in change.get(side, {}).get("files", []) if item.get("sha256"))
@@ -208,7 +208,7 @@ def tree_image(root, *, store=True):
     exists = root.is_dir()
     return {"exists": exists, "files": snapshot(root, store=store),
             "mode": stat.S_IMODE(root.stat().st_mode) if exists else 0o755,
-            "directories": {str(p.relative_to(root)): stat.S_IMODE(p.stat().st_mode)
+            "directories": {p.relative_to(root).as_posix(): stat.S_IMODE(p.stat().st_mode)
                             for p in sorted(root.rglob("*")) if p.is_dir() and not p.is_symlink()} if exists else {}}
 
 
@@ -334,7 +334,7 @@ def entries(limit=None):
     """Read valid ledger entries from oldest to newest."""
     out = []
     try:
-        with open(_ledger_path(), encoding="utf-8") as f:
+        with open(_ledger_path(), encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -378,7 +378,7 @@ def _recover(journal):
 def recover_transactions():
     """Replay unsettled durable journals under mutation_lock before new writes."""
     for path in sorted(_journal_dir().glob("*.json")):
-        journal = json.loads(path.read_text())
+        journal = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(journal, dict) or journal.get("version") != 2 or path.stem != journal.get("id"):
             raise ValueError(f"Invalid Skill transaction journal: {path}")
         if journal.get("state") == "prepared":
@@ -539,7 +539,7 @@ def list_pending():
     out = []
     for f in files:
         try:
-            item = json.loads(f.read_text(encoding="utf-8"))
+            item = json.loads(f.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             continue
         if not isinstance(item, dict):

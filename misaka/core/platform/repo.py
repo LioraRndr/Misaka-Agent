@@ -5,18 +5,20 @@ user's. ``misaka init`` creates the repository; ``project_commit`` and ``/commit
 user confirms, under the user's own git identity. Commits record selected files, never deliver
 them through branches or merges.
 """
-import fcntl
 import functools
 import os
 import subprocess
 import time
+
+from misaka.utils import file_lock
 
 
 def _git(cwd, *args):
     """Run git; an index.lock held by another process is retried briefly, a stale one still
     fails and the caller stops."""
     for attempt in range(5):
-        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                              check=False)
         if done.returncode == 0 or "index.lock" not in done.stderr or attempt == 4:
             return done
         time.sleep(0.2 * (attempt + 1))
@@ -42,7 +44,7 @@ def _serialized(operation):
         directory = os.path.realpath(os.path.join(workspace, common.stdout.strip()))
         # Git's index.lock protects one command, not an add/commit sequence.
         with open(os.path.join(directory, "misaka-git.lock"), "a", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            file_lock.lock_fd(lock.fileno())
             return operation(workspace, *args, **kwargs)
     return locked
 

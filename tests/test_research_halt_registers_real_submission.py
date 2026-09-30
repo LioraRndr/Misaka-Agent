@@ -22,7 +22,7 @@ async def test_an_interrupted_run_registers_what_the_sisters_delivered(root_run,
     runs.link_task(con, run["id"], tid, kind="research", node=root, local_id="source")
     task = tasks.get(con, tid)
     evidence = Path(task["output_dir"]) / "evidence.md"
-    evidence.write_text("accepted bytes\n")
+    evidence.write_text("accepted bytes\n", encoding="utf-8")
     rel = str(evidence.relative_to(run["workspace"]))
     con.execute("UPDATE tasks SET status='running',claim_lock='fixture',claim_expires=? WHERE id=?", (10**12, tid))
     assert dispatch.accept_state(con, tasks.get(con, tid), {"summary": "fixture", "artifacts": [rel]},

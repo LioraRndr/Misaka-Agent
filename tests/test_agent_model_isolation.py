@@ -53,12 +53,12 @@ def make_role(tmp_path, name, model):
     role.mkdir()
     provider, _, model_id = model.partition("/")
     (role / "settings.json").write_text(json.dumps(
-        {"defaultProvider": provider, "defaultModel": model_id, "custom": {"keep": True}}))
+        {"defaultProvider": provider, "defaultModel": model_id, "custom": {"keep": True}}), encoding="utf-8")
     return role
 
 
 def pin_of(role):
-    data = json.loads((role / "settings.json").read_text())
+    data = json.loads((role / "settings.json").read_text(encoding="utf-8"))
     return f"{data['defaultProvider']}/{data['defaultModel']}"
 
 
@@ -94,7 +94,7 @@ async def test_two_roles_save_independent_full_model_identity(tmp_path, monkeypa
     first.setDefaultModelAndProvider("vendor-b", "org/nested")
     await first.flush()
 
-    assert json.loads((first_role / "settings.json").read_text()) == {
+    assert json.loads((first_role / "settings.json").read_text(encoding="utf-8")) == {
         "defaultProvider": "vendor-b", "defaultModel": "org/nested", "custom": {"keep": True},
     }
     assert (second_role / "settings.json").read_bytes() == second_before
@@ -180,7 +180,7 @@ def test_role_pin_takes_precedence_over_project_default(tmp_path, registry, shar
 def test_invalid_role_pin_does_not_silently_become_global_default(tmp_path, registry, shared_storage, stored):
     role = tmp_path / "10032"
     role.mkdir()
-    (role / "settings.json").write_text(json.dumps(stored))
+    (role / "settings.json").write_text(json.dumps(stored), encoding="utf-8")
     before = (role / "settings.json").read_bytes()
     settings = bind(shared_storage, role, registry)
     with pytest.raises(ValueError):
@@ -233,20 +233,20 @@ def test_provider_switch_rejects_model_missing_on_new_provider(tmp_path, registr
 @pytest.mark.parametrize("broken", ["{broken json", "[]", '"not an object"'])
 def test_role_configuration_read_error_is_not_a_silent_global_fallback(tmp_path, registry, shared_storage, broken):
     role = make_role(tmp_path, "10032", "vendor-a/unique")
-    (role / "settings.json").write_text(broken)
+    (role / "settings.json").write_text(broken, encoding="utf-8")
     settings = bind(shared_storage, role, registry)
     with pytest.raises((ValueError, TypeError)):
         default_pair(settings)
-    assert (role / "settings.json").read_text() == broken
+    assert (role / "settings.json").read_text(encoding="utf-8") == broken
 
 
 @pytest.mark.parametrize("broken", ["{broken json", "[]", '"not an object"'])
 def test_strict_role_write_rejects_corruption_without_destroying_it(tmp_path, broken):
     config = tmp_path / "settings.json"
-    config.write_text(broken)
+    config.write_text(broken, encoding="utf-8")
     with pytest.raises((ValueError, TypeError)):
         profiles.persist_role_default_model(str(tmp_path), "vendor-a/unique", strict=True)
-    assert config.read_text() == broken
+    assert config.read_text(encoding="utf-8") == broken
     assert profiles.persist_role_default_model(str(tmp_path), "vendor-a/unique") is False
 
 

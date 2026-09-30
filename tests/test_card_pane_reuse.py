@@ -360,7 +360,7 @@ async def test_an_allys_card_runs_in_its_acp_runner_and_is_continued_with_a_mess
     """Who runs a card is the one fork: an ally's attempt is its ACP runner (``misaka ally-card``),
     claimed, hosted and continued exactly as a Sister's session is."""
     monkeypatch.setattr(d, "ALLY_CARD", IDLE)
-    (home / "settings.json").write_text(json.dumps({"allies": {"codex": {}}}))
+    (home / "settings.json").write_text(json.dumps({"allies": {"codex": {}}}), encoding="utf-8")
     task_id, _ = _card(panel, home, status="ready", assignee="codex")
     pane = await panel.run_card(task_id)
     assert pane.argv == [*IDLE, task_id]

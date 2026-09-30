@@ -1,6 +1,7 @@
 """Regression tests for the September Web audit; no network or real accounts."""
 import asyncio
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,7 +49,7 @@ async def test_browser_truncation_keeps_dialog_redacted(scope, tmp_path, monkeyp
     harness = Harness(); tools.register(harness, str(tmp_path))
     result = await harness.tools['browser_snapshot'].execute('id', {}, None, None, None)
     assert secret not in result['content'][0]['text'], result
-    stored = (tmp_path / result['details']['saved_paths'][0]).read_text()
+    stored = (tmp_path / result['details']['saved_paths'][0]).read_text(encoding='utf-8')
     assert secret not in stored and '<redacted>' in stored
 
 async def test_browser_dialog_obeys_result_budget(scope, tmp_path, monkeypatch):
@@ -90,11 +91,12 @@ async def test_extract_keeps_restricted_original_and_redacted_evidence(scope, tm
     row = rendered['results'][0]
     assert secret not in row['content']
     path = tmp_path / row['saved_path']
-    assert secret not in path.read_text()
+    assert secret not in path.read_text(encoding='utf-8')
     originals = list((home.path('web_evidence', tmp_path) / 'originals').glob('*.md'))
-    assert len(originals) == 1 and secret in originals[0].read_text()
-    assert originals[0].stat().st_mode & 0o777 == 0o600
-    assert originals[0].parent.stat().st_mode & 0o777 == 0o700
+    assert len(originals) == 1 and secret in originals[0].read_text(encoding='utf-8')
+    if os.name != "nt":
+        assert originals[0].stat().st_mode & 0o777 == 0o600
+        assert originals[0].parent.stat().st_mode & 0o777 == 0o700
 
 async def test_controller_uses_default_deadline_not_requested_operation(scope, tmp_path, monkeypatch):
     # serve() forwards owner.run(call) without _tool_name, demonstrated separately in source.
@@ -169,7 +171,7 @@ async def test_web_fetch_hides_server_presigned_redirect(scope, tmp_path, monkey
     result = await web_fetch.create_web_fetch_tool_definition(str(tmp_path)).execute('fixture', {'url': 'https://93.184.216.34/start'})
     assert signed not in result.content[0].text
     assert 'X-Amz-Signature' not in json.dumps(result.details)
-    assert 'X-Amz-Signature' not in (tmp_path / result.details['saved_path']).read_text()
+    assert 'X-Amz-Signature' not in (tmp_path / result.details['saved_path']).read_text(encoding='utf-8')
 
 async def test_actual_reference_controller_honors_browser_operation_deadline(scope, tmp_path):
     import sys
@@ -186,8 +188,10 @@ async def action(self, *args):
     return {'success': True}
 BrowserManager.perform = action
 asyncio.run(serve())
-''')
+''', encoding='utf-8')
     cfg = {'controller_command': [sys.executable, str(fixture)]}
+    if os.name == 'nt':                 # a Windows Python needs these to start and find home (Hermes's minimal env)
+        scope.environment = {name: os.environ[name] for name in ('SYSTEMROOT', 'USERPROFILE')}
     write_web({'operation_timeout': {'default': .03, 'browser_exec': 2}, 'browser': cfg}, profile=tmp_path)
     controller = Controller(str(tmp_path), cfg)
     try:
@@ -195,6 +199,9 @@ asyncio.run(serve())
         assert result['success']
     finally:
         await controller.close()
+        if controller.proc is not None:
+            # Windows reports the pipe's EOF after the exit status; let it land before the loop closes.
+            await asyncio.wait_for(controller.proc.stdout.read(), 5)
 
 async def test_removed_oopif_leaves_frame_tree(scope):
     from misaka.core.web.browser.cdp import Supervisor
@@ -227,7 +234,7 @@ def test_extract_index_eviction_removes_body_file(scope, monkeypatch):
 def upstream_symbols(path, names, namespace=None):
     import ast
     source = Path(__file__).parent / 'fixtures/hermes_990473a' / path
-    tree = ast.parse(source.read_text())
+    tree = ast.parse(source.read_text(encoding='utf-8'))
     selected = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names]
     assert {node.name for node in selected} == set(names)
     prefix = ast.parse('from __future__ import annotations').body
@@ -251,7 +258,7 @@ def test_autodetect_perplexity_priority_matches_pinned_hermes(scope, monkeypatch
     assert registry.resolve_search_provider().name == 'perplexity'
     import ast
     source = Path(__file__).parent / 'fixtures/hermes_990473a/agent/web_search_registry.py'
-    tree = ast.parse(source.read_text())
+    tree = ast.parse(source.read_text(encoding='utf-8'))
     preference = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == '_LEGACY_PREFERENCE')
     assert preference.index('perplexity') < preference.index('exa')
     assert registry._LEGACY_PREFERENCE.index('perplexity') < registry._LEGACY_PREFERENCE.index('exa')

@@ -64,7 +64,7 @@ async def search(part, query="private research question", call_id="call", ctx=No
 
 
 def records(tmp_path, profile="profile"):
-    return [json.loads(p.read_text()) for p in (tmp_path / profile / "logs/web").glob("web-debug-*.json")]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / profile / "logs/web").glob("web-debug-*.json")]
 
 
 async def test_enabled_real_tool_records_session_call_attempt_and_private_parameters(tmp_path, monkeypatch):
@@ -162,7 +162,7 @@ async def test_every_http_provider_records_actual_attempts(name, extract, tmp_pa
             tool = next(t for t in part.tools if t.name == "web_extract")
             result = await tool.execute("extract", {"urls": [doc["url"]]}, None, None, None)
             assert result["isError"] is False and result["details"]["saved_paths"]
-            assert all(doc["content"] in Path(path).read_text() for path in result["details"]["saved_paths"])
+            assert all(doc["content"] in Path(path).read_text(encoding="utf-8") for path in result["details"]["saved_paths"])
         else:
             await search(part)
     finally:
@@ -201,7 +201,7 @@ async def test_keyless_attempts_are_not_double_recorded(name, extract, tmp_path,
             tool = next(t for t in part.tools if t.name == "web_extract")
             result = await tool.execute("extract", {"urls": [doc["url"]]}, None, None, None)
             assert result["isError"] is False and result["details"]["saved_paths"]
-            assert all(doc["content"] in Path(path).read_text() for path in result["details"]["saved_paths"])
+            assert all(doc["content"] in Path(path).read_text(encoding="utf-8") for path in result["details"]["saved_paths"])
         else:
             await search(part)
     finally:
@@ -420,12 +420,12 @@ async def test_retention_permissions_and_bounded_events_preserve_unrelated_files
     root = tmp_path / "profile/logs/web"
     root.mkdir(parents=True)
     untouched = root / "notes.json"
-    untouched.write_text("keep")
+    untouched.write_text("keep", encoding="utf-8")
     target = tmp_path / "private.json"
-    target.write_text("keep private")
+    target.write_text("keep private", encoding="utf-8")
     (root / ("web-debug-" + "a" * 32 + ".json")).symlink_to(target)
     old = root / ("web-debug-" + "b" * 32 + ".json")
-    old.write_text("old")
+    old.write_text("old", encoding="utf-8")
     os.utime(old, (time.time() - 9 * 86400,) * 2)
     runtime = WebRuntime(WebScope(str(tmp_path / "profile")))
     async def work():
@@ -439,11 +439,11 @@ async def test_retention_permissions_and_bounded_events_preserve_unrelated_files
         await runtime.close()
     files = [p for p in root.glob("web-debug-*.json") if not p.is_symlink()]
     assert len(files) == 3 and not old.exists()
-    assert untouched.read_text() == "keep" and target.read_text() == "keep private"
+    assert untouched.read_text(encoding="utf-8") == "keep" and target.read_text(encoding="utf-8") == "keep private"
     assert root.stat().st_mode & 0o777 == 0o700
     for path in files:
         assert path.stat().st_size <= 2048 and path.stat().st_mode & 0o777 == 0o600
-        row = json.loads(path.read_text())
+        row = json.loads(path.read_text(encoding="utf-8"))
         assert row["events_dropped"] + len(row["events"]) == 300
 
 
@@ -456,7 +456,7 @@ async def test_real_ddgs_worker_records_native_operation_not_invented_http_calls
     (stub / "ddgs.py").write_text(
         'class DDGS:\n def __init__(self, timeout, verify=True): pass\n def __enter__(self): return self\n'
         ' def __exit__(self, *args): pass\n def text(self, query, max_results):\n'
-        '  return [{"title":"fixture", "href":"https://example.org/", "body":"private body"}]\n')
+        '  return [{"title":"fixture", "href":"https://example.org/", "body":"private body"}]\n', encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(stub))
     monkeypatch.setattr(ddgs.DDGSWebSearchProvider, "is_available", lambda _self: True)
     part = owner(tmp_path)
@@ -628,12 +628,12 @@ def test_failed_write_does_not_prune_previous_records(tmp_path, monkeypatch):
 
     monkeypatch.setattr(debug, "MAX_FILES", 1)
     previous = tmp_path / ("web-debug-" + "a" * 32 + ".json")
-    previous.write_text("keep")
+    previous.write_text("keep", encoding="utf-8")
     def fail(*_args, **_kwargs):
         raise OSError("disk full")
     monkeypatch.setattr(debug, "write_bytes", fail)
     debug._save(tmp_path, {"trace_id": "b" * 32, "events": [], "events_dropped": 0})
-    assert previous.read_text() == "keep"
+    assert previous.read_text(encoding="utf-8") == "keep"
 
 
 async def test_process_writers_share_retention_lock_without_corrupting_records(tmp_path):
@@ -659,7 +659,7 @@ async def test_process_writers_share_retention_lock_without_corrupting_records(t
                 worker.kill()
         await asyncio.gather(*(worker.wait() for worker in workers))
     paths = list(root.glob("web-debug-*.json"))
-    assert len(paths) == 3 and len({json.loads(p.read_text())["trace_id"] for p in paths}) == 3
+    assert len(paths) == 3 and len({json.loads(p.read_text(encoding="utf-8"))["trace_id"] for p in paths}) == 3
 
 
 async def test_bad_optional_context_and_invalid_signature_still_leave_failure_records(tmp_path, monkeypatch):

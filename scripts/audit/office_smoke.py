@@ -132,7 +132,7 @@ async def smoke(out, render):
         records['formats'].append({'format': suffix, 'receipt': receipt, 'pdfium_text': texts,
                                    'pdf_layout_text': layout,
                                    'legacy': legacy, 'source_unchanged_on_read': True})
-    (out / 'results.json').write_text(json.dumps(records, ensure_ascii=False, indent=2))
+    (out / 'results.json').write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps(records, ensure_ascii=False, indent=2))
 
 

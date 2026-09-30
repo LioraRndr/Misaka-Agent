@@ -73,18 +73,18 @@ def local_models(isolated, monkeypatch):
                    "models": [{"id": model, "name": model, "reasoning": False, "input": ["text"],
                                "contextWindow": 200000, "maxTokens": 1024,
                                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}
-        for provider, model in pairs.items()}}))
+        for provider, model in pairs.items()}}), encoding="utf-8")
     home.path("settings").write_text(json.dumps({
         "defaultProvider": "fixture-global", "defaultModel": "global", "retry": {"enabled": False},
         # A shared cycling scope must not replace a role's independent default.
         "enabledModels": ["fixture-global/global"], "theme": "dark",
-    }))
+    }), encoding="utf-8")
     for role, provider in (("last_order", "fixture-lo"), ("sisters/10032", "fixture-a"),
                            ("sisters/10036", "fixture-b")):
         profile = home.path("roles_root") / role
         profile.mkdir(parents=True, exist_ok=True)
         (profile / "settings.json").write_text(json.dumps({"defaultProvider": provider, "defaultModel": pairs[provider],
-                                                         "custom": "preserve"}))
+                                                         "custom": "preserve"}), encoding="utf-8")
     try:
         yield isolated, requests
     finally:
@@ -143,7 +143,7 @@ async def test_native_saved_default_isolated_and_reused(local_models):
         assert session.settingsManager.getDefaultModelPair() == ("fixture-lo", "shared")
         await prompt(session, "SAVED_MARKER")
     assert [path.read_bytes() for path in paths] == before
-    assert json.loads((home.path("profiles_root") / "10032/settings.json").read_text()) == {
+    assert json.loads((home.path("profiles_root") / "10032/settings.json").read_text(encoding="utf-8")) == {
         "defaultProvider": "fixture-lo", "defaultModel": "shared", "custom": "preserve"}
     async with opened(root, "sisters/10032", "foreground") as (_, session):
         assert (session.model.provider, session.model.id) == ("fixture-lo", "shared")
@@ -193,17 +193,17 @@ async def test_lo_thinking_defaults_and_native_research_fork(local_models, model
 
     root, requests = local_models
     models_path = home.path("models")
-    models = json.loads(models_path.read_text())
+    models = json.loads(models_path.read_text(encoding="utf-8"))
     model = models["providers"]["fixture-lo"]["models"][0]
     model.update(reasoning=True, thinkingLevelMap={"max": "max"},
                  compat={"forceAdaptiveThinking": True})
-    models_path.write_text(json.dumps(models))
+    models_path.write_text(json.dumps(models), encoding="utf-8")
     settings_path = home.path("settings")
-    settings = json.loads(settings_path.read_text())
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     settings["defaultThinkingLevel"] = "max"
     if model_preference:
         settings["modelThinkingLevels"] = {"fixture-lo/shared": model_preference}
-    settings_path.write_text(json.dumps(settings))
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
 
     # Both transports enter the same native settings path; no phase sets its own effort.
     for kind in ("foreground", "headless"):

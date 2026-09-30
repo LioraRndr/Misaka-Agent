@@ -29,6 +29,7 @@ import contextlib
 import os
 import signal
 import sys
+import threading
 from types import SimpleNamespace
 
 from misaka.config import CFG, home
@@ -475,15 +476,28 @@ async def run_attempt(task, generation, claim_lock, *, db_path, say=None, out=No
     attempt = Attempt(task, generation, claim_lock, db_path=db_path, out=out)
     if out is not None:
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGINT, attempt.interrupt)
-        for signum in (signal.SIGTERM, signal.SIGHUP):
-            loop.add_signal_handler(signum, attempt.leave)
+        if sys.platform == "win32":
+            # A Windows event loop takes no signal handlers, and ctrl+c is the one signal a
+            # console program gets: closing the pane's console ends it outright.
+            signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(attempt.interrupt))
+        else:
+            loop.add_signal_handler(signal.SIGINT, attempt.interrupt)  # windows-footgun: ok - POSIX branch
+            for signum in (signal.SIGTERM, signal.SIGHUP):  # windows-footgun: ok - POSIX branch
+                loop.add_signal_handler(signum, attempt.leave)  # windows-footgun: ok - POSIX branch
         _read_lines(loop, attempt.typed_line)
     await attempt.run(say)
 
 
 def _read_lines(loop, deliver):
     """Lines typed in the pane (its terminal is in line mode), each handed to ``deliver``."""
+    if sys.platform == "win32":
+        # A console cannot be watched by the event loop: a thread reads its lines.
+        def pump():
+            for line in sys.stdin:
+                loop.call_soon_threadsafe(deliver, line.rstrip("\r\n"))
+
+        threading.Thread(target=pump, name="pane-lines", daemon=True).start()
+        return
     try:
         fd = sys.stdin.fileno()
     except (OSError, ValueError):

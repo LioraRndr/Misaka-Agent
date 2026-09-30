@@ -140,7 +140,7 @@ def relocate(src, dest, skill_name, action):
         was_bundled = skill_usage.is_bundled(skill_name)
         alias = skill_usage._read_skill_name(src / "SKILL.md", src.name)
         origins_path = root / ".archive-origins.json"
-        origins = json.loads(origins_path.read_text()) if origins_path.exists() else {}
+        origins = json.loads(origins_path.read_text(encoding="utf-8-sig")) if origins_path.exists() else {}
         if action == "archive":
             origins[skill_name] = {"source": src.relative_to(root).as_posix(), "archive": dest.relative_to(root).as_posix()}
         else:
@@ -162,7 +162,7 @@ def restore_archive(name):
     from .scope import _skills_dir
     scope = current_scope()
     origins = _skills_dir() / ".archive-origins.json"
-    if origins.exists() and (record := json.loads(origins.read_text()).get(name)):
+    if origins.exists() and (record := json.loads(origins.read_text(encoding="utf-8-sig")).get(name)):
         return relocate(_skills_dir() / record["archive"], _skills_dir() / record["source"], name, "restore")
     for row in reversed(write.entries()):
         ev = row.get("evidence") or {}

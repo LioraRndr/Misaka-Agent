@@ -276,12 +276,12 @@ def test_orphan_discovery_excludes_live_and_other_profile_owners(monkeypatch, is
     import psutil
 
     from misaka.core.web.browser import ownership
-    root = Path(tempfile.mkdtemp(prefix=ownership.prefix(), dir='/tmp'))
+    root = Path(tempfile.mkdtemp(prefix=ownership.prefix(), dir='/tmp' if os.name == 'posix' else None))
     try:
-        (root / 'owner.json').write_text(json.dumps({'parent': ownership.parent()}))
+        (root / 'owner.json').write_text(json.dumps({'parent': ownership.parent()}), encoding='utf-8')
         assert root not in [p for p, _ in ownership.stale()]
         process = psutil.Process(os.getpid())
-        (root / 'owner.json').write_text(json.dumps({'parent': [process.pid, process.create_time() - 100]}))
+        (root / 'owner.json').write_text(json.dumps({'parent': [process.pid, process.create_time() - 100]}), encoding='utf-8')
         assert root in [p for p, _ in ownership.stale()]
         with WebScope(str(isolated / 'other')).activate():
             assert root not in [p for p, _ in ownership.stale()]
@@ -348,7 +348,7 @@ def test_auth_rotation_changes_extract_cache_namespace(isolated):
     from misaka.core.web.cache import _url_digest
     from misaka.core.web.scope import cache_namespace
     before = cache_namespace(), _url_digest('https://page.test', 'markdown', 'nous')
-    (isolated / 'auth.json').write_text(json.dumps({'nous': {'type': 'oauth', 'access': 'changed-token'}}))
+    (isolated / 'auth.json').write_text(json.dumps({'nous': {'type': 'oauth', 'access': 'changed-token'}}), encoding='utf-8')
     assert before[0] != cache_namespace()
     assert before[1] != _url_digest('https://page.test', 'markdown', 'nous')
 

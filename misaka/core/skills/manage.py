@@ -942,7 +942,7 @@ def pending_diff(payload):
 
     def read(path):
         try:
-            return path.read_text(encoding="utf-8") if path.is_file() else ""
+            return path.read_text(encoding="utf-8-sig") if path.is_file() else ""
         except UnicodeDecodeError:
             return None          # binary: previewed by name only
         except OSError:

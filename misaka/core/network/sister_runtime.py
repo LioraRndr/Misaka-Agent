@@ -73,8 +73,12 @@ def _process_identity(pid: int | None) -> str | None:
 def _pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
+    if os.name == "nt":
+        # os.kill(pid, 0) is no probe on Windows: it sends CTRL_C_EVENT to the target's console
+        # group (bpo-14484). Hermes gateway.status._pid_exists asks psutil instead.
+        return psutil.pid_exists(int(pid))
     try:
-        os.kill(int(pid), 0)
+        os.kill(int(pid), 0)  # windows-footgun: ok - POSIX branch
         return True
     except (OSError, ValueError):
         return False

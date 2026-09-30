@@ -117,7 +117,7 @@ def test_artifact_publish_database_failure_preserves_last_checkpoint(state, lock
             assert error is None
         row = runs.artifact(con, aid)
         expected = "before" if locked else "after"
-        assert Path(path).read_text() == expected, (
+        assert Path(path).read_text(encoding="utf-8") == expected, (
             "failed DB publication overwrote the previous checkpoint file"
         )
         assert runs.artifact_text(row) == expected
@@ -139,7 +139,7 @@ def test_research_registration_does_not_relabel_post_submission_bytes(state, mut
     task = tasks.get(con, tid)
     path = Path(task["output_dir"]) / "evidence.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("accepted bytes")
+    path.write_text("accepted bytes", encoding="utf-8")
     rel = str(path.relative_to(run["workspace"]))
     original_sha = hashlib.sha256(path.read_bytes()).hexdigest()
     # Match the real submit_task ownership fence, without spawning a worker.
@@ -155,7 +155,7 @@ def test_research_registration_does_not_relabel_post_submission_bytes(state, mut
         claim_lock="fixture",
     )
     if mutated:
-        path.write_text("changed after acceptance")
+        path.write_text("changed after acceptance", encoding="utf-8")
     if mutated:
         # 2026-09-24: changed bytes send the card back to its Sister to declare again instead
         # of failing the run; nothing is registered under the stale declaration.
@@ -189,7 +189,7 @@ async def test_live_skill_guard_covers_office_writer(tmp_path, monkeypatch, tool
     live = tmp_path / "profile" / "skills" / "fixture"
     live.mkdir(parents=True)
     path = live / "SKILL.md"
-    path.write_text("before")
+    path.write_text("before", encoding="utf-8")
     monkeypatch.setattr(
         SkillsPart,
         "_refresh_roots",
@@ -208,7 +208,7 @@ async def test_live_skill_guard_covers_office_writer(tmp_path, monkeypatch, tool
         await create_office_tool_definition(str(tmp_path)).execute(
             "fixture", params, None, None, None
         )
-    assert path.read_text() == "before", (
+    assert path.read_text(encoding="utf-8") == "before", (
         "office changed protected skill without skill_manage approval/scan/ledger"
     )
     assert decision and decision.get("block")
@@ -445,7 +445,7 @@ def test_publication_follows_outer_transaction(state, monkeypatch, end):
     con.execute("BEGIN IMMEDIATE")
     runs.write_text(con, run["id"], "draft", "Draft", name, "first")
     runs.write_text(con, run["id"], "draft", "Draft", name, "second")
-    assert Path(path).read_text() == "second"
+    assert Path(path).read_text(encoding="utf-8") == "second"
     if end == "commit_error":
         real = con.commit
 
@@ -462,7 +462,7 @@ def test_publication_follows_outer_transaction(state, monkeypatch, end):
     else:
         getattr(con, end)()
     expected = "second" if end == "commit" else "before"
-    assert Path(path).read_text() == expected
+    assert Path(path).read_text(encoding="utf-8") == expected
     peer = tasks.connect(str(Path(run["workspace"]) / "board.db"))
     try:
         assert runs.artifact_text(runs.artifact(peer, aid)) == expected
@@ -490,7 +490,7 @@ def test_publication_caught_inner_failure_keeps_prior_write(
             monkeypatch.setattr(runs, "_atomic_write", broken)
             with pytest.raises(OSError, match="after replace"):
                 runs.write_text(con, run["id"], "draft", "Draft", name, "second")
-            assert Path(path).read_text() == "first"
+            assert Path(path).read_text(encoding="utf-8") == "first"
             if rollback_outer:
                 raise ValueError("outer rollback")
     except ValueError:
@@ -540,11 +540,11 @@ os._exit(73)
         check=False,
     )
     assert result.returncode == 73, result.stderr.decode()
-    assert Path(path).read_text() == "after"
+    assert Path(path).read_text(encoding="utf-8") == "after"
     expected = "after" if committed else "before"
     runs.recover_publications(con, run)
     assert runs.artifact_text(runs.artifact(con, aid)) == expected
-    assert Path(path).read_text() == expected
+    assert Path(path).read_text(encoding="utf-8") == expected
     assert not list(Path(run["workspace"]).rglob("*.research-publish.json"))
 
 
@@ -578,14 +578,14 @@ async def test_office_guard_checks_secondary_exports_and_freezes_ops(
     destination = alias / "export.pdf" if protected else tmp_path / "ordinary.pdf"
     ops = [{"export_pdf": {"out": str(destination)}}]
     source = tmp_path / "ops.json"
-    source.write_text(json.dumps(ops))
+    source.write_text(json.dumps(ops), encoding="utf-8")
     args = {"path": "document.docx", "ops": "@ops.json" if ops_file else ops}
     decision = await part.tool_call({"toolName": "office", "input": args}, None)
     if protected:
         assert decision["block"]
     else:
         assert not decision.get("block")
-        source.write_text(json.dumps([{"export_pdf": {"out": str(live / "bad.pdf")}}]))
+        source.write_text(json.dumps([{"export_pdf": {"out": str(live / "bad.pdf")}}]), encoding="utf-8")
         _, _, checked = prepare_office_input(decision["updatedInput"], str(tmp_path))
         assert checked == ops
 
@@ -807,7 +807,7 @@ async def test_office_executes_the_approved_ops_not_later_file_bytes(
     live = tmp_path / "skills"
     live.mkdir()
     protected = live / "SKILL.md"
-    protected.write_text("keep")
+    protected.write_text("keep", encoding="utf-8")
     monkeypatch.setattr(
         SkillsPart,
         "_refresh_roots",
@@ -821,16 +821,16 @@ async def test_office_executes_the_approved_ops_not_later_file_bytes(
         runtime=SimpleNamespace(close=lambda: None),
     )
     ops = tmp_path / "ops.json"
-    ops.write_text(json.dumps([{"create": {"content": "approved"}}]))
+    ops.write_text(json.dumps([{"create": {"content": "approved"}}]), encoding="utf-8")
     decision = await part.tool_call(
         {"toolName": "office", "input": {"path": "output.md", "ops": "@ops.json"}}, None
     )
-    ops.write_text(json.dumps([{"export_pdf": {"out": str(protected)}}]))
+    ops.write_text(json.dumps([{"export_pdf": {"out": str(protected)}}]), encoding="utf-8")
     await create_office_tool_definition(str(tmp_path)).execute(
         "fixture", decision["updatedInput"], None, None, None
     )
-    assert (tmp_path / "output.md").read_text() == "approved"
-    assert protected.read_text() == "keep"
+    assert (tmp_path / "output.md").read_text(encoding="utf-8") == "approved"
+    assert protected.read_text(encoding="utf-8") == "keep"
 
 
 @pytest.mark.parametrize("change", ["deleted", "outside", "undigested", "forged"])
@@ -845,7 +845,7 @@ def test_attachment_manifest_boundary(state, change):
     row = tasks.get(con, tid)
     path = Path(row["output_dir"]) / "evidence.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("accepted")
+    path.write_text("accepted", encoding="utf-8")
     rel = str(path.relative_to(run["workspace"]))
     con.execute(
         "UPDATE tasks SET status='running',claim_lock='claim',claim_expires=? WHERE id=?",
@@ -896,7 +896,7 @@ def test_read_only_artifact_lookup_never_recovers_files(state):
     aid, path = runs.write_text(con, run["id"], "draft", "Draft", name, "before")
     with tasks.write_txn(con):
         publication.prepare(con, Path(path), aid, hashlib.sha256(b"after").hexdigest())
-        Path(path).write_text("after")
+        Path(path).write_text("after", encoding="utf-8")
     viewer = sqlite3.connect(
         f"file:{Path(run['workspace']) / 'board.db'}?mode=ro", uri=True
     )
@@ -908,11 +908,11 @@ def test_read_only_artifact_lookup_never_recovers_files(state):
             == hashlib.sha256(b"before").hexdigest()
         )
         assert runs.artifacts(viewer, run["id"])
-        assert Path(path).read_text() == "after"
+        assert Path(path).read_text(encoding="utf-8") == "after"
     finally:
         viewer.close()
     runs.recover_publications(con, run)
-    assert Path(path).read_text() == "before"
+    assert Path(path).read_text(encoding="utf-8") == "before"
 
 
 def test_panel_stop_checks_driver_at_receipt_not_just_sender(state):
@@ -973,7 +973,7 @@ def test_native_connection_context_finishes_publication(state, rollback):
                 raise ValueError("fixture rollback")
     except ValueError:
         assert rollback
-    assert Path(path).read_text() == ("before" if rollback else "after")
+    assert Path(path).read_text(encoding="utf-8") == ("before" if rollback else "after")
     assert not list(Path(run["workspace"]).rglob("*.research-publish.json"))
     assert runs.artifact_text(runs.artifact(con, aid)) == (
         "before" if rollback else "after"
@@ -999,7 +999,7 @@ def test_caller_owned_sqlite_connection_uses_shared_transaction_callback(
                     raise ValueError("fixture rollback")
         except ValueError:
             assert rollback
-        assert Path(path).read_text() == ("before" if rollback else "after")
+        assert Path(path).read_text(encoding="utf-8") == ("before" if rollback else "after")
         assert runs.artifact_text(runs.artifact(con, aid)) == (
             "before" if rollback else "after"
         )

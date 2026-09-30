@@ -14,7 +14,7 @@ from misaka.ui.tui.interactive.components.ask_user_question import (
 
 
 def research_questions():
-    tree = ast.parse(Path(research.__file__).read_text())
+    tree = ast.parse(Path(research.__file__).read_text(encoding="utf-8"))
     call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name) and node.func.id == "AskUserQuestionComponent")
     options = next(node.value for node in ast.walk(tree) if isinstance(node, ast.Assign)

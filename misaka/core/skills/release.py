@@ -40,7 +40,7 @@ def check_write(profile, *, activating=False):
     if scope is not None and scope.profile == profile and scope.generation != current:
         raise ValueError('This Skill owner belongs to an older generation; start a new session.')
     if current and not activating:
-        record = json.loads((profile / 'skills' / MARKER).read_text())
+        record = json.loads((profile / 'skills' / MARKER).read_text(encoding='utf-8-sig'))
         if record.get('engine') != ENGINE:
             raise ValueError('The physical Skill tree belongs to another writer implementation.')
 

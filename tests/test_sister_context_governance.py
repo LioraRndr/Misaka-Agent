@@ -69,8 +69,8 @@ class SisterCatalogTests(unittest.IsolatedAsyncioTestCase):
             for sid in ("10032", "10033"):
                 folder = Path(directory) / sid
                 folder.mkdir()
-                (folder / "DESCRIBE.md").write_text("---\ndescription: Methods\n---\n" + "x" * 201)
-                (folder / "config.json").write_text('{"model":"PRIVATE_MODEL"}')
+                (folder / "DESCRIBE.md").write_text("---\ndescription: Methods\n---\n" + "x" * 201, encoding="utf-8")
+                (folder / "config.json").write_text('{"model":"PRIVATE_MODEL"}', encoding="utf-8")
             with patch.object(roster, "capability_catalog", side_effect=AssertionError("skill discovery")):
                 data = roster.routing_catalog(directory)
             self.assertEqual([item["id"] for item in data], ["10032", "10033"])

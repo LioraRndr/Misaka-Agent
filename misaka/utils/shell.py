@@ -189,10 +189,10 @@ def kill_process_tree(pid: int) -> None:
         return
 
     try:
-        os.killpg(pid, signal.SIGKILL)
+        os.killpg(pid, signal.SIGKILL)  # windows-footgun: ok - POSIX branch
     except (OSError, ProcessLookupError):
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, signal.SIGKILL)  # windows-footgun: ok - POSIX branch
         except (OSError, ProcessLookupError):
             return
 

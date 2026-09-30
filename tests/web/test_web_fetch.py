@@ -873,4 +873,4 @@ async def test_short_or_paywall_like_material_is_returned_and_saved(monkeypatch,
     result = await _run_in(tmp_path)
     assert prose in _text(result)
     saved = tmp_path / result.details["saved_path"]
-    assert prose in saved.read_text()
+    assert prose in saved.read_text(encoding="utf-8")

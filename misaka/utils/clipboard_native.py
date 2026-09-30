@@ -76,7 +76,16 @@ def _load_clipboard(
     try:
         pyperclip = pyperclip_module
         if pyperclip is None:
-            import pyperclip  # type: ignore[no-redef]
+            try:
+                import pyperclip  # type: ignore[no-redef]
+            except ImportError:
+                if resolved_platform != "win32":
+                    raise
+                # MISAKA: pi's native addon writes through the Win32 clipboard API on Windows;
+                # herdr's write_clipboard is the same call, ported.
+                from misaka.utils import (
+                    win_clipboard as pyperclip,  # type: ignore[no-redef]
+                )
 
         image_grab = image_grab_module
         if image_grab is None:

@@ -218,7 +218,7 @@ async def test_canonical_url_preserves_body_identity_cache_and_saved_page(monkey
     assert one == two
     assert one['requested_url'] == URL and one['final_url'] == final and one['input_index'] == 0
     assert one['provider'] == provider.removesuffix('-keyless')
-    saved = (tmp_path / one['saved_path']).read_text()
+    saved = (tmp_path / one['saved_path']).read_text(encoding="utf-8")
     meta = yaml.safe_load(saved.split('---', 2)[1])
     assert meta['source_url'] == URL and meta['final_url'] == final and 'returned body' in saved
 
@@ -234,7 +234,7 @@ async def test_multi_url_canonical_results_without_ids_are_saved_not_guessed_or_
         for i, entry in enumerate(out[2:]):
             assert entry['requested_url'] is None and entry['input_index'] is None
             assert entry['association'] == 'unresolved' and entry['final_url'] == rows[i]['url']
-            saved = (tmp_path / entry['saved_path']).read_text()
+            saved = (tmp_path / entry['saved_path']).read_text(encoding="utf-8")
             assert f'body {i}' in saved and 'source_url: null' in saved
     assert len(calls) == 2, 'One batch per call, no rescue of already returned unassociated material'
     assert all(cache.extract_cache_get(url, provider='parallel') is None for url in requested)
@@ -261,7 +261,7 @@ async def test_excess_unassociated_records_use_one_bounded_saved_json_document(m
     out = json.loads(raw)['results']
     assert len(calls) == 1 and len(raw) < extract.MAX_RESULT_SIZE_CHARS
     assert len(out) == 2 and out[1]['association'] == 'unresolved'
-    saved = (tmp_path / out[1]['saved_path']).read_text()
+    saved = (tmp_path / out[1]['saved_path']).read_text(encoding="utf-8")
     assert all(f'body {i}' in saved for i in range(200))
 
 
@@ -270,7 +270,7 @@ async def test_parallel_excerpts_stay_labelled_through_cache_and_evidence(monkey
     for _ in range(2):
         entry = json.loads(await extract.web_extract_tool([URL], cwd=str(tmp_path)))['results'][0]
         assert entry['content_kind'] == 'excerpts' and entry['content'] == 'only this passage'
-        assert 'content_kind: "excerpts"' in (tmp_path / entry['saved_path']).read_text()
+        assert 'content_kind: "excerpts"' in (tmp_path / entry['saved_path']).read_text(encoding="utf-8")
     assert len(calls) == 1
 
 

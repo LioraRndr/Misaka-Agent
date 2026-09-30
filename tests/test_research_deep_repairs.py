@@ -148,7 +148,7 @@ def test_rebuild_keeps_cited_bundle_link(state, monkeypatch, cite_bundle):
     monkeypatch.setattr(bundle.corpus, "docs", lambda **k: [])
     source = Path(run["workspace"]) / "downloads/source.md"
     source.parent.mkdir()
-    source.write_text("fixture source")
+    source.write_text("fixture source", encoding="utf-8")
     relative = runs.run_path(run, "final.md")
     runs.write_text(
         con,
@@ -166,12 +166,12 @@ def test_rebuild_keeps_cited_bundle_link(state, monkeypatch, cite_bundle):
         runs.write_text(
             con, run["id"], "final", "Final", relative, f"## Sources\n- {locator}\n"
         )
-    manifest = Path(bundle.final_bundle(con, run)).read_text()
+    manifest = Path(bundle.final_bundle(con, run)).read_text(encoding="utf-8")
     if cite_bundle:
         assert not linked.exists()
         assert "disposable bundle source" in manifest
         assert "## Cited, already in this folder" not in manifest
-        assert source.read_text() == "fixture source"
+        assert source.read_text(encoding="utf-8") == "fixture source"
     else:
         assert linked.is_file()
 
@@ -299,7 +299,7 @@ def test_bundle_honors_shared_private_material_boundary(state, monkeypatch, rest
     )
     source = Path(run["workspace"]) / name
     source.parent.mkdir(parents=True)
-    source.write_text("PRIVATE_FIXTURE_ONLY" if restricted else "PUBLIC_FIXTURE")
+    source.write_text("PRIVATE_FIXTURE_ONLY" if restricted else "PUBLIC_FIXTURE", encoding="utf-8")
     if restricted:
         with pytest.raises(ValueError):
             check_material_read(str(source))

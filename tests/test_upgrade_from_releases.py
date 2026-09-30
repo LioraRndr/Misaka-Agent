@@ -14,7 +14,8 @@ import pytest
 
 from misaka.config import CFG, current_config, home
 
-SAMPLES = sorted(path for path in (Path(__file__).parent / "fixtures" / "homes").iterdir() if path.is_dir())
+SAMPLES = sorted(path for path in (Path(__file__).parent / "fixtures" / "homes").iterdir()
+                 if path.is_dir() and path.name != "__pycache__")   # make_home.py is imported beside them
 
 
 @pytest.mark.parametrize("sample", SAMPLES, ids=[path.name for path in SAMPLES])

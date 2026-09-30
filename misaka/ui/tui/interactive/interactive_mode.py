@@ -2767,6 +2767,7 @@ class InteractiveMode(Conversation):
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
             )
         except Exception as error:  # noqa: BLE001
             self.showError(f"Failed to check GitHub CLI auth: {error}")
@@ -2789,6 +2790,7 @@ class InteractiveMode(Conversation):
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
             )
             if result.returncode != 0:
                 message = (result.stderr or "Unknown error").strip()
@@ -5042,7 +5044,7 @@ class InteractiveMode(Conversation):
                 status = None
 
             if status is not None and status.returncode == 0:
-                new_content = re.sub(r"\n$", "", tmp_file.read_text(encoding="utf-8"))
+                new_content = re.sub(r"\n$", "", tmp_file.read_text(encoding="utf-8-sig"))   # pi stripBom
                 self._set_editor_text(new_content)
         finally:
             with contextlib.suppress(OSError):
@@ -5624,7 +5626,7 @@ class InteractiveMode(Conversation):
 
         signal_numbers: list[int] = [signal.SIGTERM]
         if sys.platform != "win32" and hasattr(signal, "SIGHUP"):
-            signal_numbers.append(signal.SIGHUP)
+            signal_numbers.append(signal.SIGHUP)  # windows-footgun: ok - guarded above
 
         def _install_signal(signum: int, handler: Callable[[int, Any], None]) -> None:
             try:

@@ -1,5 +1,6 @@
 """Offline checks for role-scoped model UI/setup; no real profiles or authentication."""
 import json
+import os
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 
@@ -60,7 +61,8 @@ def test_setup_saves_only_selected_scope(catalog, monkeypatch, scope):
     assert prompts[0][1] == ["Global default (roles without their own default)", "Last Order", "Sister 10032"]
     if scope:
         suffix = "/last_order" if scope == 1 else "/sisters/10032"
-        assert role_writes == [(cfg["roles_root"] + suffix, "custom/vendor/model", {"strict": True})]
+        assert [(os.path.normpath(path), *rest) for path, *rest in role_writes] == [
+            (os.path.normpath(cfg["roles_root"] + suffix), "custom/vendor/model", {"strict": True})]
         assert global_writes == []
     else:
         assert role_writes == []
@@ -74,7 +76,7 @@ def test_setup_role_preselects_its_own_provider_and_model(catalog, monkeypatch):
 
     cfg, _ = catalog
     (Path(cfg["roles_root"]) / "last_order/settings.json").write_text(
-        json.dumps({"defaultProvider": "custom", "defaultModel": "vendor/model"}))
+        json.dumps({"defaultProvider": "custom", "defaultModel": "vendor/model"}), encoding="utf-8")
     seen = []
 
     def pick(title, choices, default=0, description=None):

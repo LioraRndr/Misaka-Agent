@@ -266,7 +266,7 @@ def _load_index() -> dict:
     if path is None or not path.exists():
         return {}
     try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
+        loaded = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001 - a corrupt index is an empty cache
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -450,7 +450,7 @@ def extract_cache_get(
         # case, since resolving follows one out of the directory.
         if cache_root is None or cache_root.resolve() not in file_path.resolve().parents:
             return None
-        page = json.loads(file_path.read_text(encoding="utf-8"))
+        page = json.loads(file_path.read_text(encoding="utf-8-sig"))
         if (not isinstance(page, dict) or page.get("url") != url
                 or not isinstance(page.get("content"), str)
                 or not isinstance(page.get("metadata"), dict)):

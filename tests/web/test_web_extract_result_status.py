@@ -88,7 +88,7 @@ async def test_partial_success_keeps_card_artifact_and_research_source(web_sessi
 
     saved = scope / 'downloads/page.md'
     saved.parent.mkdir()
-    saved.write_text('# A saved source\nVerified page text.\n')
+    saved.write_text('# A saved source\nVerified page text.\n', encoding='utf-8')
     _reply(monkeypatch, {'results': [
         {'content': '' if saved_only else 'Verified page text.', 'saved_path': 'downloads/page.md', 'error': None},
         {'content': '', 'error': 'timeout'},
@@ -115,7 +115,7 @@ async def test_partial_success_keeps_card_artifact_and_research_source(web_sessi
         assert json.loads(tasks.latest_payload(con, tid, 'artifact_written')) == {'path': 'downloads/page.md'}
         assert tasks.get(con, tid)['status'] == 'running'
         transcript = scope / 'session.jsonl'
-        transcript.write_text(json.dumps({'message': result.model_dump()}) + '\n')
+        transcript.write_text(json.dumps({'message': result.model_dump()}) + '\n', encoding='utf-8')
         assert consulted_in_session(str(transcript), _Index(str(scope))) == {str(saved.resolve())}
     finally:
         await todo.session_shutdown()

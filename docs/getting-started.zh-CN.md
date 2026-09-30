@@ -4,23 +4,23 @@
 
 这一页带你从零开始，一直到拿到第一份研究报告。全程大约十分钟，大部分时间花在设置向导上。
 
-**你需要**一台 Mac 或 Linux 电脑、一个终端，以及至少一个模型服务商的使用权限：API 密钥，或者可以登录使用的订阅，比如 ChatGPT 或 GitHub Copilot。Claude 账号也能登录，但这部分用量由 Anthropic 按 token 另计为额外用量，不走套餐额度。
+**你需要**一台 Mac、Linux 或 Windows 10/11 电脑、一个终端（Windows 上用 Windows Terminal），以及至少一个模型服务商的使用权限：API 密钥，或者可以登录使用的订阅，比如 ChatGPT 或 GitHub Copilot。Claude 账号也能登录，但这部分用量由 Anthropic 按 token 另计为额外用量，不走套餐额度。
 
 除本页外，其余文档目前只有英文版。
 
 ## 1. 安装 MISAKA 需要的工具
 
-| 工具 | 用途 | macOS | Debian / Ubuntu |
-|---|---|---|---|
-| [uv](https://docs.astral.sh/uv/) | 安装 MISAKA；你的 Python 低于 3.12 时，它会另装一个 | `brew install uv` | 见 uv 官网 |
-| git | 项目及其历史 | `xcode-select --install` | `sudo apt install git` |
-| ripgrep、fd | 搜索文件 | `brew install ripgrep fd` | `sudo apt install ripgrep fd-find` |
-| poppler | 读取 PDF | `brew install poppler` | `sudo apt install poppler-utils` |
-| ocrmypdf（可选） | 扫描版 PDF | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` |
-| DjVuLibre（可选） | DjVu 文件 | `brew install djvulibre` | `sudo apt install djvulibre-bin` |
-| LibreOffice（可选） | 旧版 `.doc`、`.xls`、`.ppt` 文件 | `brew install --cask libreoffice` | `sudo apt install libreoffice` |
+| 工具 | 用途 | macOS | Debian / Ubuntu | Windows |
+|---|---|---|---|---|
+| [uv](https://docs.astral.sh/uv/) | 安装 MISAKA；你的 Python 低于 3.12 时，它会另装一个 | `brew install uv` | 见 uv 官网 | `winget install astral-sh.uv` |
+| git | 项目及其历史 | `xcode-select --install` | `sudo apt install git` | `winget install Git.Git` |
+| ripgrep、fd | 搜索文件 | `brew install ripgrep fd` | `sudo apt install ripgrep fd-find` | `winget install BurntSushi.ripgrep.MSVC`, `winget install sharkdp.fd` |
+| poppler | 读取 PDF | `brew install poppler` | `sudo apt install poppler-utils` | `winget install oschwartz10612.Poppler` |
+| ocrmypdf（可选） | 扫描版 PDF | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` | 见 [OCRmyPDF 的 Windows 安装说明](https://ocrmypdf.readthedocs.io/en/latest/installation.html#installing-on-windows) |
+| DjVuLibre（可选） | DjVu 文件 | `brew install djvulibre` | `sudo apt install djvulibre-bin` | `winget install DjVuLibre.DjView` |
+| LibreOffice（可选） | 旧版 `.doc`、`.xls`、`.ppt` 文件 | `brew install --cask libreoffice` | `sudo apt install libreoffice` | `winget install TheDocumentFoundation.LibreOffice` |
 
-OCR 那一行会装好英文、中文和日文，这是 MISAKA 默认识别扫描件时用的语言。必需的工具如果缺了，设置向导会告诉你缺哪个、怎么装。
+OCR 那一行会装好英文、中文和日文，这是 MISAKA 默认识别扫描件时用的语言。必需的工具如果缺了，设置向导会告诉你缺哪个、怎么装。Windows 上 `winget install` 之后要新开一个终端，新装的工具才找得到。
 
 ## 2. 安装 MISAKA
 
@@ -46,7 +46,8 @@ uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misak
 为你的研究建一个文件夹，在里面运行向导：
 
 ```sh
-mkdir my-research && cd my-research
+mkdir my-research
+cd my-research
 misaka setup
 ```
 

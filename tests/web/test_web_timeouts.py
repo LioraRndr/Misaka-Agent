@@ -504,7 +504,7 @@ async def test_ddgs_worker_receives_profile_scalar_timeout_as_data(tmp_path, mon
 
     module = tmp_path / "native"
     module.mkdir()
-    (tmp_path / "ddgs.py").write_text("raise AssertionError('workspace module must not shadow the dependency')\n")
+    (tmp_path / "ddgs.py").write_text("raise AssertionError('workspace module must not shadow the dependency')\n", encoding="utf-8")
     (module / "ddgs.py").write_text(
         "import os\n"
         "class DDGS:\n"
@@ -513,7 +513,7 @@ async def test_ddgs_worker_receives_profile_scalar_timeout_as_data(tmp_path, mon
         " def __exit__(self,*args): pass\n"
         " def text(self,*args,**kwargs):\n"
         "  assert 'PARALLEL_API_KEY' not in os.environ\n"
-        "  return [{'href':'https://example.org/', 'title':'fixture', 'body':str(self.timeout)}]\n"
+        "  return [{'href':'https://example.org/', 'title':'fixture', 'body':str(self.timeout)}]\n", encoding="utf-8"
     )
     monkeypatch.setenv("PYTHONPATH", str(module))
     monkeypatch.setenv("PARALLEL_API_KEY", "should-not-reach-worker")
@@ -544,7 +544,7 @@ async def test_ddgs_deadline_kills_and_reaps_owned_worker(tmp_path, monkeypatch)
     write(operation_timeout={"ddgs": 0.2})
     with pytest.raises(TimeoutError, match="timed out after 0.2s"):
         await ddgs._run_ddgs_search_bounded("query", 1)
-    assert not psutil.pid_exists(int(pidfile.read_text()))
+    assert not psutil.pid_exists(int(pidfile.read_text(encoding="utf-8")))
 
 
 async def test_timeout_rotation_preserves_busy_pool_and_retires_it_after_drain(tmp_path, monkeypatch):

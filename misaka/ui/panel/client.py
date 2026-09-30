@@ -1,13 +1,13 @@
 """Thin client: connect to the daemon, starting it if it is not running (herdr-style auto-detect)."""
 import json
 import os
-import socket
 import subprocess
 import sys
 import threading
 import time
 
 from misaka.config import CFG, home
+from misaka.utils import local_socket
 
 
 def _sock_path():
@@ -21,10 +21,11 @@ def check_sock_path():
 
 def request(method, params=None, *, timeout=10):
     """Send one request and return its result. Raises ConnectionError if the daemon is not running."""
-    con = socket.socket(socket.AF_UNIX)
     try:
-        con.settimeout(timeout)
-        con.connect(_sock_path())
+        con = local_socket.connect(_sock_path(), timeout)
+    except TimeoutError as error:
+        raise TimeoutError(f"Panel request {method!r} timed out after {timeout}s; result unknown") from error
+    try:
         con.sendall((json.dumps(
             {"id": "1", "method": method, "params": params or {}},
             ensure_ascii=False) + "\n").encode())
@@ -55,24 +56,21 @@ def _wait_for_dying_daemon(timeout):
     deadline = time.monotonic() + timeout
     path = _sock_path()
     while time.monotonic() < deadline and os.path.exists(path):
-        probe = socket.socket(socket.AF_UNIX)
-        probe.settimeout(0.5)
         try:
-            probe.connect(path)
+            local_socket.connect(path, 0.5).close()
         except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
             return                       # herdr's stale classification: the old daemon is gone
         except OSError:
             pass
-        finally:
-            probe.close()
         time.sleep(0.05)
 
 
 def _spawn_and_wait(timeout):
     log_path = _sock_path() + ".log"
     os.makedirs(os.path.dirname(log_path), mode=0o700, exist_ok=True)
-    with os.fdopen(os.open(log_path, os.O_CREAT | os.O_RDWR | os.O_APPEND, 0o600), "a+b") as log:
-        os.fchmod(log.fileno(), 0o600)
+    with os.fdopen(os.open(log_path, os.O_CREAT | os.O_RDWR | os.O_APPEND, 0o600), "a+b") as log:  # windows-footgun: ok - binary mode
+        if hasattr(os, "fchmod"):
+            os.fchmod(log.fileno(), 0o600)
         log_start = log.seek(0, os.SEEK_END)
         process = subprocess.Popen(
             # The daemon hosts PTYs, not model sessions. The CLI entry eagerly imports
@@ -80,6 +78,8 @@ def _spawn_and_wait(timeout):
             [sys.executable, "-u", "-m", "misaka.ui.panel.daemon"],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             start_new_session=True,
+            # Windows: no console to share with the panel's terminal (herdr detach_server_daemon_command).
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
         )
         # Reap our child without tying its lifetime to this client or holding up a reply.
         threading.Thread(target=process.wait, daemon=True).start()

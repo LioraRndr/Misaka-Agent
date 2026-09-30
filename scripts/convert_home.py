@@ -77,7 +77,7 @@ POINTER_COLUMNS = (("tasks", "session_file"), ("tasks", "session_dir"), ("task_r
 
 def running() -> list[str]:
     """Other MISAKA processes. A daemon or a session holds the board, the socket and auth.json."""
-    listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=False).stdout
+    listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).stdout
     mine = str(os.getpid())
     return [line.strip() for line in listing.splitlines()
             if ("misaka" in line and ("-m misaka" in line or "/bin/misaka" in line or "misaka.ui.panel.daemon" in line))

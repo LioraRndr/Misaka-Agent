@@ -20,5 +20,5 @@ def office_state(tmp_path, monkeypatch):
     monkeypatch.setitem(CFG, "office_cache", str(tmp_path / "cache"))
     # Unit tests do not launch external applications. Dedicated integration smoke
     # checks exercise the real installed LibreOffice separately.
-    monkeypatch.setattr(soffice, "_MACOS_PATH", "/nonexistent/soffice")
+    monkeypatch.setattr(soffice, "_APP_PATH", "/nonexistent/soffice")
     monkeypatch.setattr(soffice.shutil, "which", lambda name: None)

@@ -9,8 +9,8 @@ per pane, a ``RenderState`` to read the viewport the way herdr's renderer does, 
 formatter for text extraction.
 
 The shared library is built from the source herdr vendors and shipped under ``lib/`` next to
-this file, one per platform (``libghostty-vt-<os>-<arch>.<ext>``: macOS and Linux, arm64 and
-x86_64). Anywhere else, build ghostty's libghostty-vt yourself and point ``MISAKA_GHOSTTY_VT``
+this file, one per platform (``libghostty-vt-<os>-<arch>.<ext>``: macOS, Linux and Windows, arm64
+and x86_64). Anywhere else, build ghostty's libghostty-vt yourself and point ``MISAKA_GHOSTTY_VT``
 at it; without one the panel is unavailable and ``misaka`` opens plain chat instead. ghostty is
 MIT-licensed (Mitchell Hashimoto and contributors).
 """
@@ -202,12 +202,12 @@ def unavailable():
 def library_path():
     """Where the library is looked for: ``MISAKA_GHOSTTY_VT``, else the package's ``lib`` dir,
     which ships one build per platform (``libghostty-vt-<os>-<arch>.<ext>``: macOS and Linux,
-    arm64 and x86_64). A build named without the platform is accepted as a fallback."""
+    arm64 and x86_64; Windows x86_64). A build named without the platform is accepted as a fallback."""
     override = os.environ.get("MISAKA_GHOSTTY_VT")
     if override:
         return override
     folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-    system, suffix = ("darwin", ".dylib") if sys.platform == "darwin" else ("linux", ".so")
+    system, suffix = {"darwin": ("darwin", ".dylib"), "win32": ("windows", ".dll")}.get(sys.platform, ("linux", ".so"))
     machine = platform.machine().lower()
     arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(machine, machine)
     specific = os.path.join(folder, f"libghostty-vt-{system}-{arch}{suffix}")

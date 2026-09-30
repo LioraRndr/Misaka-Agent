@@ -11,7 +11,8 @@ import json
 import os
 import secrets
 import shutil
-import socket
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from misaka.config import get_sessions_dir, home, sessions
 from misaka.core.platform import processes
 from misaka.core.session_manager import iter_session_files, read_session_header
 from misaka.core.wiring import KINDS, sender_address
-from misaka.utils import atomic
+from misaka.utils import atomic, local_socket
 
 SESSION_KINDS = KINDS
 
@@ -58,7 +59,9 @@ def owner_record(path):
 
 
 # Where SessionControl puts its socket directory (a short path: macOS sockaddr_un is 104 bytes).
-_CONTROL_PARENTS = {"/tmp", os.path.realpath("/tmp")}
+# Windows has neither /tmp nor that limit; its temp directory is the user's own.
+_CONTROL_PARENT = tempfile.gettempdir() if sys.platform == "win32" else "/tmp"
+_CONTROL_PARENTS = {_CONTROL_PARENT, os.path.realpath(_CONTROL_PARENT)}
 
 
 def _release_control(value):
@@ -78,15 +81,11 @@ def _live_socket(path):
     """Whether a session is still listening on this control socket."""
     if not os.path.exists(path):
         return False
-    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    probe.settimeout(0.2)
     try:
-        probe.connect(path)
+        local_socket.connect(path, 0.2).close()
         return True
     except OSError:
         return False        # refused or unreachable: the process that bound it is gone
-    finally:
-        probe.close()
 
 
 def _sweep_orphan_controls(spoken_for):

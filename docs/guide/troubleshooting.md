@@ -76,7 +76,9 @@ misaka create 10032 --desc "History and social research"
 Make a folder for the research and run MISAKA there:
 
 ```sh
-mkdir ~/research && cd ~/research && misaka
+mkdir ~/research
+cd ~/research
+misaka
 ```
 
 **`Research run ... needs clarification`**
@@ -180,6 +182,18 @@ fix or remove it. `misaka setup`, `update` and `uninstall` still run meanwhile.
 
 **`Warning: Invalid settings file ...`**
 The file is not valid JSON, often a missing comma or quote. The message gives the position.
+
+## Windows
+
+**Text shows as boxes or question marks.**
+Use Windows Terminal. The fonts of the old console window have no letters for most scripts;
+MISAKA itself reads and writes UTF-8.
+
+**`winget install` finished, but the wizard still reports the tool missing.**
+A terminal keeps the PATH it was opened with. Open a new terminal and run `misaka setup` again.
+
+**Shift+Enter sends the message instead of starting a new line.**
+The terminal did not report Shift with Enter. `ctrl+j` starts a new line everywhere.
 
 ## Reporting a problem
 

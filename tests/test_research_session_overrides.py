@@ -110,7 +110,7 @@ def test_nothing_is_applied_without_overrides_or_a_session_id():
 
 def _settings(document):
     home.path("settings").parent.mkdir(parents=True, exist_ok=True)
-    home.path("settings").write_text(json.dumps(document))
+    home.path("settings").write_text(json.dumps(document), encoding="utf-8")
 
 
 def _ctx(session_id):
@@ -258,7 +258,7 @@ async def test_the_pickers_choice_is_the_runs_and_its_window_uses_it_while_the_r
     assert session_overrides.value("window", "context_threshold") is None     # given back when the run paused
     assert any("compaction at 0.5 of the window | output limit 64,000 tokens" in text for text in chat.notices)
     assert "compaction at 0.5" in research._status(board, chat.run["id"], str(tmp_path))
-    assert json.loads(home.path("settings").read_text()) == {"lcm": {"context_threshold": 0.7}}
+    assert json.loads(home.path("settings").read_text(encoding="utf-8")) == {"lcm": {"context_threshold": 0.7}}
 
 
 async def test_the_defaults_leave_the_run_on_the_global_settings(chat):

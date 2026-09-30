@@ -101,7 +101,7 @@ async def test_xai_web_refresh_uses_profile_network(scope, monkeypatch):
     from misaka.core.web.backends.xai import _resolve_credentials
     route = 'http://proxy.example.test:8080'
     write_web({'env': {'HTTPS_PROXY': route}}, profile=scope)
-    (scope / 'auth.json').write_text(json.dumps({'xai': {'type': 'oauth', 'access': 'fixture-old-access', 'refresh': 'fixture-old-refresh', 'expires': 0}}))
+    (scope / 'auth.json').write_text(json.dumps({'xai': {'type': 'oauth', 'access': 'fixture-old-access', 'refresh': 'fixture-old-refresh', 'expires': 0}}), encoding='utf-8')
     constructed = []
     real_client = httpx.AsyncClient
     def client(**kwargs):
@@ -278,7 +278,7 @@ async def test_browser_snapshot_failed_save_does_not_invent_read_pointer(scope, 
     async def perform(self, name, args, call_id=''):
         return {'success': True, 'snapshot': 'material\n' * 5000}
     monkeypatch.setattr(BrowserManager, 'perform', perform)
-    (scope / 'downloads').write_text('Fixture: downloads is a file, so saving fails')
+    (scope / 'downloads').write_text('Fixture: downloads is a file, so saving fails', encoding='utf-8')
     try:
         result = await tool.execute('snapshot-storage-failure', {}, None, None, SimpleNamespace())
         text = result['content'][0]['text']
@@ -293,7 +293,7 @@ async def test_x_search_failed_save_does_not_invent_read_pointer(scope, monkeypa
     async def search(args):
         return {'success': True, 'answer': 'material\n' * 15000}
     monkeypatch.setattr(x_search, 'search', search)
-    (scope / 'downloads').write_text('Fixture: downloads is a file, so saving fails')
+    (scope / 'downloads').write_text('Fixture: downloads is a file, so saving fails', encoding='utf-8')
     result = await definitions[0].execute('x-storage-failure', {'query': 'fixture'}, None, None, SimpleNamespace())
     text = result['content'][0]['text']
     assert '"read"' not in text and '"storage_error"' in text, text[:300]
@@ -312,7 +312,7 @@ async def test_failed_browser_use_reload_still_reaps_owned_harness(scope, monkey
     from misaka.core.web.browser.ownership import alive
     # Real subprocess, PID+birth-time ownership; only the shutdown CLI is a failing fixture.
     cli = scope / 'browser-use-failing-reload'
-    cli.write_text(f'#!{sys.executable}\nimport sys\nsys.exit(1)\n')
+    cli.write_text(f'#!{sys.executable}\nimport sys\nsys.exit(1)\n', encoding='utf-8')
     cli.chmod(0o700)
     monkeypatch.setattr(settings, 'executable', lambda name: str(cli if failure == 'nonzero' else scope / 'absent-fixture'))
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(60)', start_new_session=True)

@@ -30,7 +30,7 @@ def inventory(tmp_path, monkeypatch):
 def _transcript(path, cwd, ident):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({'type': 'session', 'version': 3, 'id': ident,
-                                'cwd': str(cwd), 'timestamp': '2026-09-20T00:00:00Z'}) + '\n')
+                                'cwd': str(cwd), 'timestamp': '2026-09-20T00:00:00Z'}) + '\n', encoding='utf-8')
 
 
 @pytest.mark.parametrize('status', ['completed', 'failed', 'killed', 'running', None])
@@ -43,7 +43,7 @@ def test_child_lifecycle_is_not_the_parent_card_status(inventory, status):
     if status:
         child.with_suffix('.meta.json').write_text(json.dumps({
             'status': status, 'agentType': 'Explore', 'description': 'check source',
-        }))
+        }), encoding='utf-8')
     rows = {row['id']: row for row in session_catalog.list_entries(con)}
     assert rows['parent']['task_status'] == 'running'
     assert rows['parent']['kind'] == 'card'
@@ -58,7 +58,7 @@ def test_child_lifecycle_is_not_the_parent_card_status(inventory, status):
 def _gather(entries, cwd, side=None):
     # Execute the panel's real pure listing closure, without starting its TUI or daemon.
     path = Path(__file__).parents[1] / 'misaka/ui/panel/panel.py'
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding='utf-8'))
     node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'gather_sessions')
     scope = {'os': os, 'spaces': {}, 'listing': [], 'focused': None, 'side': side or {'ws': 0, 'sess_mode': 'all'},
              'cards_cache': {'sessions': entries},
@@ -93,7 +93,7 @@ def test_panel_renders_child_status_independently_from_parent(inventory):
     child = directory / 'parent' / 'subagents' / 'agent-child.jsonl'
     _transcript(parent, cwd, 'parent')
     _transcript(child, cwd, 'child')
-    child.with_suffix('.meta.json').write_text(json.dumps({'status': 'completed', 'agentType': 'Explore'}))
+    child.with_suffix('.meta.json').write_text(json.dumps({'status': 'completed', 'agentType': 'Explore'}), encoding='utf-8')
     rows = {row['id']: row for row in _gather(session_catalog.list_entries(con), cwd)}
     assert rows['child']['label'].startswith('completed · card running · ')
     assert rows['parent']['label'].startswith('card running · ')

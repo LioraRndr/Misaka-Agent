@@ -178,7 +178,7 @@ def _snapshot_path(root):
 
 def _load_snapshot(root, manifest):
     try:
-        with open(_snapshot_path(root), encoding="utf-8") as f:
+        with open(_snapshot_path(root), encoding="utf-8-sig") as f:
             snapshot = json.load(f)
     except (OSError, ValueError):
         return None

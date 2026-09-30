@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import select
+import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -214,12 +216,12 @@ def test_carry_rejects_missing_modified_or_cross_project_sources(tmp_path, damag
     if damage == "missing":
         source.unlink()
     else:
-        lines = [json.loads(line) for line in source.read_text().splitlines()]
+        lines = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines()]
         if damage == "entry":
             next(item for item in lines if item["type"] == "message")["message"]["content"] = "tampered"
         else:
             next(item for item in lines if item.get("customType") == "lcm-project")["data"]["workspace"] = str(tmp_path / "other")
-        source.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        source.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
     with pytest.raises((ValueError, FileNotFoundError)):
         ce.sync(target)
 
@@ -286,11 +288,11 @@ def test_unknown_files_are_set_aside_intact_and_symlinks_refused(tmp_path):
     project = tmp_path / "project"
     root = storage.directory(project)
     root.mkdir(parents=True)
-    (root / "valuable").write_text("keep")
+    (root / "valuable").write_text("keep", encoding="utf-8")
     storage.acquire(project)
     [aside] = root.parent.glob("lcm.unrecognized-*")
-    assert (aside / "valuable").read_text() == "keep"
-    assert (root / storage._MARKER).read_text() == "misaka-lcm\n"
+    assert (aside / "valuable").read_text(encoding="utf-8") == "keep"
+    assert (root / storage._MARKER).read_text(encoding="utf-8") == "misaka-lcm\n"
     storage.release(project)
     assert not root.exists() and (aside / "valuable").exists()
     elsewhere = tmp_path / "elsewhere"
@@ -300,6 +302,7 @@ def test_unknown_files_are_set_aside_intact_and_symlinks_refused(tmp_path):
         storage.acquire(project)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows refuses to move a folder whose database is open")
 def test_a_cache_deleted_under_a_running_session_is_rebuilt_from_its_transcript(tmp_path):
     """2026-09-27: a project's `.misaka` went to the Trash while Last Order's session ran. Her
     engine kept writing into the moved folder, a path-level open recreated the directory without
@@ -316,7 +319,7 @@ def test_a_cache_deleted_under_a_running_session_is_rebuilt_from_its_transcript(
     ce.sync(ctx)
     new = ce.bound_engine(ctx)
     assert new is not old
-    assert (root / storage._MARKER).read_text() == "misaka-lcm\n"
+    assert (root / storage._MARKER).read_text(encoding="utf-8") == "misaka-lcm\n"
     assert new._store.db_path == root / "lcm.db"
     assert count(new) == 2                      # both turns, re-ingested from the transcript
     assert storage.current(storage.project(ctx)) == new._misaka_cache
@@ -329,7 +332,7 @@ def test_a_joiner_restores_a_cache_that_is_missing_or_unmarked(tmp_path):
         root = storage.directory(project)
         shutil.rmtree(root)
         storage.acquire(project)                # cannot take the exclusive lease, restores anyway
-        assert (root / storage._MARKER).read_text() == "misaka-lcm\n"
+        assert (root / storage._MARKER).read_text(encoding="utf-8") == "misaka-lcm\n"
         storage.release(project)
     finally:
         proc.communicate("finish\n", timeout=20)
@@ -368,10 +371,20 @@ storage.release(p)
 '''
 
 
+def _first_line(stream, timeout):
+    """The child's first line, or None after ``timeout`` (select() takes only sockets on Windows)."""
+    lines = queue.Queue()
+    threading.Thread(target=lambda: lines.put(stream.readline()), daemon=True).start()
+    try:
+        return lines.get(timeout=timeout)
+    except queue.Empty:
+        return None
+
+
 def child(project):
     proc = subprocess.Popen([sys.executable, "-c", _CHILD, str(project)],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if not select.select([proc.stdout], [], [], 20)[0] or proc.stdout.readline().strip() != "ready":
+    if (_first_line(proc.stdout, 20) or "").strip() != "ready":
         proc.kill()
         raise AssertionError(proc.communicate(timeout=10))
     return proc
@@ -382,14 +395,14 @@ def test_cross_process_last_owner_and_crash_recovery(tmp_path):
     storage.acquire(project)
     proc = child(project)
     root = storage.directory(project)
-    (root / "payload").write_text("active")
+    (root / "payload").write_text("active", encoding="utf-8")
     storage.release(project)
     assert (root / "payload").exists()
     out, err = proc.communicate("finish\n", timeout=20)
     assert proc.returncode == 0, (out, err)
     assert not root.exists()
     proc = child(project)
-    (root / "payload").write_text("abandoned")
+    (root / "payload").write_text("abandoned", encoding="utf-8")
     proc.kill()
     proc.communicate(timeout=20)
     assert root.exists()
@@ -545,14 +558,14 @@ def test_operator_import_keeps_payloads_scoped_and_live_owner_intact(tmp_path, m
         {"type": "session", "id": "source", "version": 3, "cwd": str(tmp_path)},
         {"type": "message", "id": "entry", "parentId": None,
          "timestamp": "2026-09-15T00:00:00Z", "message": {"role": "user", "content": raw}},
-    ]) + "\n")
+    ]) + "\n", encoding="utf-8")
     saved = source.read_bytes()
     built = ce.bound_engine(ctx)
     assert operators.main(["import", "--source-jsonl", str(source), "--apply", "--json",
                            "--target-d", str(tmp_path / "outside.db")]) == 0
     root = storage.directory(storage.project(ctx))
     payloads = list((root / "lcm-large-outputs").glob("*.json"))
-    assert len(payloads) == 1 and json.loads(payloads[0].read_text())["content"] == raw
+    assert len(payloads) == 1 and json.loads(payloads[0].read_text(encoding="utf-8"))["content"] == raw
     assert not (tmp_path / "outside").exists()
     assert not (tmp_path / "outside.db").exists()
     assert count(built) == 1
@@ -565,7 +578,7 @@ def test_operator_import_keeps_payloads_scoped_and_live_owner_intact(tmp_path, m
 
 def test_core_matches_namespace_import_seams_and_documented_fixes():
     root = Path(__file__).resolve().parents[1] / "misaka/extensions/misaka_lcm"
-    manifest = json.loads((root / "CORE_INTEGRITY.json").read_text())
+    manifest = json.loads((root / "CORE_INTEGRITY.json").read_text(encoding="utf-8"))
     fixes = manifest.get("documented_fixes", {})
     assert fixes.keys() <= manifest["files"].keys()
     for fix in fixes.values():
@@ -813,8 +826,9 @@ ce.release_project(ctx)
                  for i in range(6)]
     try:
         for process in processes:
-            assert select.select([process.stdout], [], [], 30)[0], 'child startup timed out'
-            assert process.stdout.readline().strip() == 'ready', process.stderr.read()
+            line = _first_line(process.stdout, 30)
+            assert line is not None, 'child startup timed out'
+            assert line.strip() == 'ready', process.stderr.read()
         root = storage.directory(project)
         with closing(sqlite3.connect(f'file:{root / "lcm.db"}?mode=ro', uri=True)) as connection:
             assert connection.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == 6

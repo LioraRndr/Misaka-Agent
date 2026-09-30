@@ -5,26 +5,26 @@ English · [简体中文](getting-started.zh-CN.md) · [日本語](getting-start
 This page takes you from nothing installed to your first research report. It takes about ten
 minutes, most of it the setup wizard.
 
-**You will need** a Mac or a Linux machine, a terminal, and access to at least one model
-provider: an API key, or a subscription you sign in with, such as ChatGPT or GitHub Copilot. A
-Claude account can sign in too; Anthropic bills that use per token as extra usage, outside your
-plan's limits.
+**You will need** a Mac, a Linux machine or a Windows 10/11 PC, a terminal (on Windows, Windows
+Terminal), and access to at least one model provider: an API key, or a subscription you sign in
+with, such as ChatGPT or GitHub Copilot. A Claude account can sign in too; Anthropic bills that use
+per token as extra usage, outside your plan's limits.
 
 ## 1. Install what MISAKA needs
 
-| Tool | What for | macOS | Debian / Ubuntu |
-|---|---|---|---|
-| [uv](https://docs.astral.sh/uv/) | installs MISAKA, and a Python 3.12 if yours is older | `brew install uv` | see uv's site |
-| git | projects and their history | `xcode-select --install` | `sudo apt install git` |
-| ripgrep, fd | searching files | `brew install ripgrep fd` | `sudo apt install ripgrep fd-find` |
-| poppler | reading PDFs | `brew install poppler` | `sudo apt install poppler-utils` |
-| ocrmypdf (optional) | scanned PDFs | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` |
-| DjVuLibre (optional) | DjVu files | `brew install djvulibre` | `sudo apt install djvulibre-bin` |
-| LibreOffice (optional) | old `.doc`, `.xls`, `.ppt` files | `brew install --cask libreoffice` | `sudo apt install libreoffice` |
+| Tool | What for | macOS | Debian / Ubuntu | Windows |
+|---|---|---|---|---|
+| [uv](https://docs.astral.sh/uv/) | installs MISAKA, and a Python 3.12 if yours is older | `brew install uv` | see uv's site | `winget install astral-sh.uv` |
+| git | projects and their history | `xcode-select --install` | `sudo apt install git` | `winget install Git.Git` |
+| ripgrep, fd | searching files | `brew install ripgrep fd` | `sudo apt install ripgrep fd-find` | `winget install BurntSushi.ripgrep.MSVC`, `winget install sharkdp.fd` |
+| poppler | reading PDFs | `brew install poppler` | `sudo apt install poppler-utils` | `winget install oschwartz10612.Poppler` |
+| ocrmypdf (optional) | scanned PDFs | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` | [OCRmyPDF's Windows guide](https://ocrmypdf.readthedocs.io/en/latest/installation.html#installing-on-windows) |
+| DjVuLibre (optional) | DjVu files | `brew install djvulibre` | `sudo apt install djvulibre-bin` | `winget install DjVuLibre.DjView` |
+| LibreOffice (optional) | old `.doc`, `.xls`, `.ppt` files | `brew install --cask libreoffice` | `sudo apt install libreoffice` | `winget install TheDocumentFoundation.LibreOffice` |
 
 The OCR line installs English, Chinese and Japanese, the languages MISAKA reads scans in by
 default. If something required is missing, the setup wizard tells you which tool and how to
-install it.
+install it. On Windows, open a new terminal after `winget install` so it sees the new tools.
 
 ## 2. Install MISAKA
 
@@ -51,7 +51,8 @@ Several at once: `"misaka[providers,pageindex] @ git+https://..."`.
 Make a folder for your research and run the wizard in it:
 
 ```sh
-mkdir my-research && cd my-research
+mkdir my-research
+cd my-research
 misaka setup
 ```
 

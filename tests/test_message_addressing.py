@@ -387,7 +387,7 @@ def test_catalog_records_its_space_from_the_environment_and_keeps_it(world, monk
     from misaka.core.wiring import SessionSpec
 
     path = world.tmp / "s.jsonl"
-    path.write_text(json.dumps({"type": "session", "id": "fixture", "cwd": world.workspace}) + "\n")
+    path.write_text(json.dumps({"type": "session", "id": "fixture", "cwd": world.workspace}) + "\n", encoding="utf-8")
     manager = SimpleNamespace(getSessionId=lambda: "fixture", getSessionFile=lambda: str(path),
                               isPersisted=lambda: True, flushed=True, getCwd=lambda: world.workspace)
     spec = SessionSpec(profile_dir=world.workspace, role="10036", workspace=world.workspace,
@@ -422,8 +422,8 @@ def test_spaces_in_use_counts_saved_sessions_too(world):
     saved = _sid()
     _live(world, saved, role="10037", space=SPACE_T2)
     record = world.index / f"{saved}.json"
-    value = json.loads(record.read_text())
-    record.write_text(json.dumps({**value, "state": "saved"}))
+    value = json.loads(record.read_text(encoding="utf-8"))
+    record.write_text(json.dumps({**value, "state": "saved"}), encoding="utf-8")
     _live(world, _sid(), role="10038", space=None)
     assert session_catalog.spaces_in_use() == {SPACE_T1, SPACE_T2}
     assert session_catalog.live_readers("10037", SPACE_T2) == []       # saved is not a reader
@@ -469,7 +469,7 @@ def test_a_research_card_is_told_its_node_last_order_by_session_id(world):
     lo_file = Path(home.path("sessions")) / "research" / "lo.jsonl"
     lo_file.parent.mkdir(parents=True, exist_ok=True)
     lo_id = _sid()
-    lo_file.write_text(json.dumps({"type": "session", "version": 3, "id": lo_id, "cwd": world.workspace}) + "\n")
+    lo_file.write_text(json.dumps({"type": "session", "version": 3, "id": lo_id, "cwd": world.workspace}) + "\n", encoding="utf-8")
     task = {"question": "Q", "rationale": "R", "deliverable": "notes.md"}
     body = planner.task_body(task, lo_session=home.stored(lo_file))
     assert f"Your node's Last Order is session `{lo_id}`" in body

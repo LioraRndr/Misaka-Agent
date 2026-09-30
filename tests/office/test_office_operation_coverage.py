@@ -103,4 +103,4 @@ def test_every_operation_executes_and_package_reopens(tmp_path, suffix, writer):
             from pptx import Presentation
             assert Presentation(path).slides
         else:
-            assert Path(path).read_text()
+            assert Path(path).read_text(encoding="utf-8")

@@ -107,7 +107,7 @@ def usage_events():
     path = _skills_dir() / ".usage.json"
     if not path.exists():
         return set()
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise TypeError("Invalid usage data; existing bytes preserved")
     events = data.get(USAGE_EVENTS_KEY, [])
@@ -168,7 +168,7 @@ def atomic_write_text(path, content, **kwargs):
         if path.is_symlink():
             raise ValueError("Skill state target is a symlink: " + str(path))
         if (path.name in (".usage.json", ".curator_state", ".sync_state", ".sync_manifest")
-            and path.exists() and not isinstance(json.loads(path.read_text()), dict)):
+            and path.exists() and not isinstance(json.loads(path.read_text(encoding="utf-8-sig")), dict)):
             raise ValueError("Invalid Skill state; existing bytes preserved: " + str(path))
         return atomic.write_text(path, content, **kwargs)
 

@@ -33,8 +33,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.chdir(workspace)
     profile = home.path("profiles_root") / "10032"
     profile.mkdir(parents=True)
-    (profile / "SOUL.md").write_text("Fixture Sister.\n")
-    (home.path("roles_root") / "MISAKA.md").write_text("Fixture shared identity.\n")
+    (profile / "SOUL.md").write_text("Fixture Sister.\n", encoding="utf-8")
+    (home.path("roles_root") / "MISAKA.md").write_text("Fixture shared identity.\n", encoding="utf-8")
     # Prevent editable installs from sending children to a different checkout.
     guard = tmp_path / "python"
     guard.mkdir()
@@ -43,7 +43,7 @@ def isolated(tmp_path, monkeypatch):
         "def audit(event, args):\n"
         "    if event == 'socket.connect' and isinstance(args[1], tuple) and args[1][0] != '127.0.0.1':\n"
         "        raise RuntimeError('test forbids external network connections')\n"
-        "sys.addaudithook(audit)\n"
+        "sys.addaudithook(audit)\n", encoding="utf-8"
     )
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(guard), str(Path(__file__).resolve().parents[1]))))
     return tmp_path
@@ -95,7 +95,7 @@ def endpoint(isolated, request):
         "baseUrl": f"http://127.0.0.1:{server.server_port}", "api": "anthropic-messages",
         "apiKey": "fixture-not-a-real-key", "models": [{"id": "fixture-model", "name": "Fixture",
         "reasoning": False, "input": ["text"], "contextWindow": 200000, "maxTokens": 1024,
-        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}))
+        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}), encoding="utf-8")
     try:
         yield requests
     finally:
@@ -149,7 +149,8 @@ async def test_native_first_turn_and_resume(isolated, endpoint, kind, background
         task = await create(manager, session, kind, background)
         assert task.transcript.is_file(), "New child needs a durable session before --session opens it"
         original_id = SessionManager.open(str(task.transcript)).getSessionId()
-        assert task.transcript.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":                  # POSIX modes; Windows keeps the profile private by ACL
+            assert task.transcript.stat().st_mode & 0o777 == 0o600
         assert not task.initial_prompt_sent
         async with asyncio.timeout(20):
             await manager._drive(task, "FIRST_MARKER", notify=False)
@@ -172,7 +173,7 @@ async def test_native_first_turn_and_resume(isolated, endpoint, kind, background
         assert "FIRST_MARKER" in json.dumps(endpoint[1]["messages"])
         assert "SECOND_MARKER" in json.dumps(endpoint[1]["messages"])
         assert "Fixture answer." in json.dumps(endpoint[1]["messages"])
-        entries = [json.loads(line) for line in task.transcript.read_text().splitlines()]
+        entries = [json.loads(line) for line in task.transcript.read_text(encoding="utf-8").splitlines()]
         assert sum(e["type"] == "session" for e in entries) == 1
         users = [e for e in entries if e.get("message", {}).get("role") == "user"]
         assert len(users) == 2
@@ -207,9 +208,9 @@ async def test_background_child_uses_live_card_output_grant(isolated, endpoint, 
         async with asyncio.timeout(20):
             await manager._drive(task, "Write the assigned report.", notify=False)
         assert task.status == "completed", (task.error, task.stderr)
-        assert (output / "report.md").read_text() == "Written by child."
+        assert (output / "report.md").read_text(encoding="utf-8") == "Written by child."
         assert len(endpoint) == 2
-        entries = [json.loads(line) for line in task.transcript.read_text().splitlines()]
+        entries = [json.loads(line) for line in task.transcript.read_text(encoding="utf-8").splitlines()]
         results = [entry["message"] for entry in entries if entry.get("message", {}).get("role") == "toolResult"]
         assert results and all(result["isError"] is False for result in results)
     finally:
@@ -222,7 +223,7 @@ async def test_fork_keeps_seed_history(isolated, endpoint):
     session.agent.state.messages = [{"role": "user", "content": [{"type": "text", "text": "PARENT_MARKER"}], "timestamp": 0}]
     try:
         task = await create(manager, session, "fork", True)
-        assert "PARENT_MARKER" in task.transcript.read_text()
+        assert "PARENT_MARKER" in task.transcript.read_text(encoding="utf-8")
         async with asyncio.timeout(20):
             await manager._drive(task, "FORK_MARKER", notify=False)
         assert task.status == "completed", (task.error, task.stderr)
@@ -248,7 +249,7 @@ async def test_resume_rejects_lost_history(isolated, damage):
         if damage == "missing":
             task.transcript.unlink(missing_ok=True)
         else:
-            task.transcript.write_text("not-json\n")
+            task.transcript.write_text("not-json\n", encoding="utf-8")
         with pytest.raises(ValueError, match="does not exist|malformed"):
             await manager.send_message(task.id, "resume", context=session)
         with pytest.raises((FileNotFoundError, ValueError)):
@@ -258,7 +259,7 @@ async def test_resume_rejects_lost_history(isolated, damage):
         if damage == "missing":
             assert not task.transcript.exists()
         else:
-            assert task.transcript.read_text() == "not-json\n"
+            assert task.transcript.read_text(encoding="utf-8") == "not-json\n"
     finally:
         await manager.close()
 
@@ -276,7 +277,7 @@ async def test_native_startup_failure_preserves_traceback(isolated):
         assert str(task.transcript) in task.error
         assert "exit code 1" in task.error
         assert "STALE_ERROR" not in task.error
-        assert json.loads(task.metadata_path.read_text())["error"] == task.error
+        assert json.loads(task.metadata_path.read_text(encoding="utf-8"))["error"] == task.error
         assert not task.initial_prompt_sent and task.turn_count == 0 and task.process is None
     finally:
         await manager.close()

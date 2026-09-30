@@ -139,7 +139,7 @@ def describe(sid, root=None):
     """Return the short description and body from DESCRIBE.md."""
     from misaka.utils.frontmatter import parse_frontmatter
     try:
-        with open(os.path.join(root or ROOT, sid, "DESCRIBE.md"), encoding="utf-8") as f:
+        with open(os.path.join(root or ROOT, sid, "DESCRIBE.md"), encoding="utf-8-sig") as f:
             parsed = parse_frontmatter(f.read())
     except OSError:
         return None, None

@@ -126,6 +126,31 @@ class Controller:
                 raise cancelled
 
 
+class _ThreadedStdio:
+    """Windows: the controller's stdin and stdout, read and written on worker threads."""
+
+    def __init__(self):
+        self._pending = b''
+
+    async def readline(self):
+        return await asyncio.to_thread(sys.stdin.buffer.readline, _LIMIT + 1)
+
+    def write(self, data):
+        self._pending += data
+
+    async def drain(self):
+        data, self._pending = self._pending, b''
+        await asyncio.to_thread(self._send, data)
+
+    @staticmethod
+    def _send(data):
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+
+    def close(self):
+        pass
+
+
 async def serve():
     from misaka.core.web.browser import BrowserManager
     from misaka.core.web.runtime import WebRuntime
@@ -137,11 +162,15 @@ async def serve():
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
     if os.name == 'posix':
-        loop.add_signal_handler(signal.SIGTERM, task.cancel)
-    reader = asyncio.StreamReader(limit=_LIMIT)
-    input_transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer)
-    output_transport, protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout.buffer)
-    writer = asyncio.StreamWriter(output_transport, protocol, None, loop)
+        loop.add_signal_handler(signal.SIGTERM, task.cancel)  # windows-footgun: ok - POSIX branch
+        reader = asyncio.StreamReader(limit=_LIMIT)
+        input_transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer)
+        output_transport, protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout.buffer)
+        writer = asyncio.StreamWriter(output_transport, protocol, None, loop)
+    else:
+        # A Windows event loop cannot watch the pipes its parent handed it (the proactor needs
+        # overlapped handles): a thread reads each request line and writes each reply.
+        reader = writer = input_transport = _ThreadedStdio()
     try:
         while True:
             raw = await reader.readline()

@@ -21,7 +21,6 @@ Differences from Hermes are structural, not semantic:
 - Every delivery is recorded as delivered in messages.db for auditing.
 - Sessions run with cwd=~ (Hermes ``--in ~``).
 """
-import fcntl
 import json
 import os
 import sys
@@ -29,6 +28,7 @@ import time
 from contextlib import contextmanager
 
 from misaka.config import CFG, current_config, home
+from misaka.utils import file_lock
 
 DM_TITLE = "Bot Chat"   # Hermes BOT_CHAT_TITLE verbatim; the injection gate keys on it.
 WAKE_ATTEMPTS = 5          # contact turns one automatic wake-up may start before it gives up
@@ -78,7 +78,7 @@ def protocol_file():
     path = str(home.path("dm_protocol"))
     text = _PROTOCOL.format(roster=','.join(sorted({"last-order"} | sisters())))
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             if f.read() == text:
                 return path
     except OSError:
@@ -104,7 +104,7 @@ def _serial(to):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        file_lock.lock_fd(fd)
         yield
     finally:
         os.close(fd)   # Closing releases the lock.

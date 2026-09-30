@@ -100,7 +100,7 @@ async def image_content(body, question, ctx):
 
 
 def register(harn, cwd):
-    schemas = json.loads((Path(__file__).parent / 'schemas.json').read_text())
+    schemas = json.loads((Path(__file__).parent / 'schemas.json').read_text(encoding='utf-8-sig'))
     schemas.extend([
         {'name': 'browser_cdp', 'description': 'Send a CDP command on this session-owned tab or an OOPIF frame from browser_snapshot. target_id and frame_id are exclusive. State persists on one connection; disconnected commands are not replayed. Shared browsers reject browser-wide mutations.',
          'parameters': {'type': 'object', 'properties': {'method': {'type': 'string'},

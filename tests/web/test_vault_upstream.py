@@ -36,6 +36,7 @@ from misaka.core.web.browser.vault.store import (
     normalize_origin,
     scrub_secret_from_text,
 )
+from tests import posix
 
 
 @pytest.fixture()
@@ -75,6 +76,7 @@ class TestVaultStore:
         blob = (tmp_path / "vault" / "vault.json.enc").read_bytes()
         assert b"s3cret-pw" not in blob
 
+    @posix.modes
     def test_file_permissions_0600(self, store, tmp_path):
         _add_login(store)
         for name in ("vault.json.enc", "vault.key"):

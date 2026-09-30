@@ -73,7 +73,7 @@ class WorkerModelTests(unittest.TestCase):
     def pin(self, reference):
         provider, _, model = reference.partition("/")
         (self.profile / "settings.json").write_text(json.dumps(
-            {"defaultProvider": provider, "defaultModel": model, "other": "retained"}))
+            {"defaultProvider": provider, "defaultModel": model, "other": "retained"}), encoding="utf-8")
 
     def role_entry(self, model=None, **kwargs):
         from misaka.core.wiring import role_session_setup
@@ -121,11 +121,11 @@ class WorkerModelTests(unittest.TestCase):
         self.assertEqual(self.manager().model, "other-provider/other-model")
 
     def test_an_unpinned_role_follows_the_global_pair_not_lo_current_model(self):
-        (self.profile / "settings.json").write_text(json.dumps({"other": "retained"}))
+        (self.profile / "settings.json").write_text(json.dumps({"other": "retained"}), encoding="utf-8")
         self.assertEqual(self.manager().model, "other-provider/other-model")
 
     def test_half_a_pin_fails_instead_of_borrowing_lo_provider(self):
-        (self.profile / "settings.json").write_text(json.dumps({"defaultModel": "shared"}))
+        (self.profile / "settings.json").write_text(json.dumps({"defaultModel": "shared"}), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "go together"):
             self.manager()
 
@@ -137,7 +137,7 @@ class WorkerModelTests(unittest.TestCase):
         self.assertEqual(self.manager("other-provider/other-model").model, "other-provider/other-model")
 
     def test_malformed_profile_fails_instead_of_using_global_default(self):
-        (self.profile / "settings.json").write_text("not json")
+        (self.profile / "settings.json").write_text("not json", encoding="utf-8")
         with self.assertRaises(ValueError):
             self.manager()
 
@@ -145,7 +145,7 @@ class WorkerModelTests(unittest.TestCase):
         for raw in ("not json", '{"defaultModel":"shared"}',
                     '{"defaultProvider":"sister-provider","defaultModel":"removed-model"}'):
             with self.subTest(raw=raw):
-                (self.profile / "settings.json").write_text(raw)
+                (self.profile / "settings.json").write_text(raw, encoding="utf-8")
                 self.assertEqual(self.manager("other-provider/other-model").model, "other-provider/other-model")
                 with self.assertRaises(ValueError):
                     self.manager("inherit")
@@ -184,7 +184,7 @@ class MoADefaultModelTests(unittest.TestCase):
                 patch("misaka.ai.models.get_providers", return_value=["builtin-provider", "global-provider"]), \
                 patch("misaka.core.model_registry.ModelRegistry", side_effect=AssertionError("recursive registry")):
             home.path("models").parent.mkdir(parents=True, exist_ok=True)
-            home.path("models").write_text(json.dumps({"providers": {"custom-provider": {}}}))
+            home.path("models").write_text(json.dumps({"providers": {"custom-provider": {}}}), encoding="utf-8")
             for reference, expected in (
                 ("builtin-provider/role-model", {"provider": "builtin-provider", "model": "role-model"}),
                 ("custom-provider/family/role-model", {"provider": "custom-provider", "model": "family/role-model"}),

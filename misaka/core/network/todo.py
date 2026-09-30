@@ -6,6 +6,8 @@ import secrets
 import time
 from pathlib import Path
 
+from misaka.utils.paths import posix_relpath
+
 STATUSES = ("open", "doing", "done", "blocked")
 MAX_TEXT = 200
 MAX_NOTE = 300
@@ -643,7 +645,7 @@ class TodoPart:
         path = Path(str(value))
         try:
             path = (path if path.is_absolute() else root / path).resolve(strict=True)
-            relative = os.path.relpath(path, root)
+            relative = posix_relpath(path, root)
             path.relative_to(root)
         except (OSError, RuntimeError, ValueError):
             return

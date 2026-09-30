@@ -65,7 +65,7 @@ def test_appended_bookkeeping_is_preserved_in_archive_and_branch(tmp_path, engin
 
     assert saved["parentId"] == appended[-1]
     assert [entry["id"] for entry in manager.getBranch()][-4:] == [*appended, saved["id"]]
-    entries = [json.loads(line) for line in Path(manager.getSessionFile()).read_text().splitlines()]
+    entries = [json.loads(line) for line in Path(manager.getSessionFile()).read_text(encoding="utf-8").splitlines()]
     assert [entry["id"] for entry in entries][-4:] == [*appended, saved["id"]]
     assert session.messages == manager.buildSessionContext().messages
     assert manager.getSessionName() == "renamed during compaction"

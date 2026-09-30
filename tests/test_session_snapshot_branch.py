@@ -50,7 +50,7 @@ async def test_snapshot_socket_still_fences_session_owner(tmp_path):
     manager.appendMessage({"role": "user", "content": "fixture", "timestamp": 0})
     record = {"id": manager.sessionId, "instance": "original"}
     path = tmp_path / "catalog.json"
-    path.write_text(json.dumps(record))
+    path.write_text(json.dumps(record), encoding="utf-8")
     session = SimpleNamespace(sessionManager=manager, sessionId=manager.sessionId, isIdle=True,
                               getSteeringMessages=list, getFollowUpMessages=list,
                               state=SimpleNamespace(streamingMessage=None),
@@ -62,7 +62,7 @@ async def test_snapshot_socket_still_fences_session_owner(tmp_path):
     try:
         snapshot = await request(record, "snapshot")
         assert snapshot["entries"] == manager.buildContextEntries()
-        path.write_text(json.dumps({**record, "instance": "replacement"}))
+        path.write_text(json.dumps({**record, "instance": "replacement"}), encoding="utf-8")
         with pytest.raises(ValueError, match="changed owners"):
             await request(record, "snapshot")
     finally:

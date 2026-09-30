@@ -37,7 +37,7 @@ class PromptGovernanceTests(unittest.TestCase):
                         if soul is None:
                             path.unlink(missing_ok=True)
                         else:
-                            path.write_text(soul)
+                            path.write_text(soul, encoding="utf-8")
                         sections = identity.prompt_sections(directory, role)
                         prompt = "\n\n".join(sections)
                         self.assertEqual(prompt.count(identity.COMMON_CHARTER), 1)
@@ -45,7 +45,7 @@ class PromptGovernanceTests(unittest.TestCase):
                         self.assertNotIn("You are an agent of the MISAKA Network", prompt)
                         if soul:
                             self.assertEqual(sections[0], soul)
-                        self.assertEqual(path.read_text() if path.exists() else None, soul)
+                        self.assertEqual(path.read_text(encoding="utf-8") if path.exists() else None, soul)
             self.assertIn(identity.SISTER_ROLE, identity.prompt_sections(directory, "10032"))
             self.assertIn(identity.COORDINATOR_ROLE, identity.prompt_sections(directory, "last-order"))
 
@@ -53,7 +53,7 @@ class PromptGovernanceTests(unittest.TestCase):
         from misaka.config import home
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {home.ENV_HOME: directory}):
             path = home.path("shared_soul")
-            path.write_text("User's existing language and personality preferences.")
+            path.write_text("User's existing language and personality preferences.", encoding="utf-8")
             before = path.read_bytes()
             self.assertEqual(profiles.shared_soul(), str(path))
             self.assertEqual(path.read_bytes(), before)
@@ -244,7 +244,7 @@ class PromptGovernanceTests(unittest.TestCase):
 
     def test_vendor_provenance_records_native_policy_change(self):
         vendor = Path(index.__file__).parent / "vendor"
-        entries = json.loads((vendor / "PROVENANCE.json").read_text())["files"]
+        entries = json.loads((vendor / "PROVENANCE.json").read_text(encoding="utf-8"))["files"]
         entry = next(e for e in entries if e["file"] == "visibility.py")
         self.assertEqual(entry["sha256"], hashlib.sha256((vendor / "visibility.py").read_bytes()).hexdigest())
         self.assertIn("can_manage", entry["patch"])

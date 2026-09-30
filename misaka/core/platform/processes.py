@@ -146,7 +146,7 @@ def identity_is_alive(pid: int | None, expected: str | None) -> bool:
 
 def _group_exists(pgid: int) -> bool:
     try:
-        os.killpg(int(pgid), 0)
+        os.killpg(int(pgid), 0)  # windows-footgun: ok - POSIX only: callers return early elsewhere
         return True
     except ProcessLookupError:
         return False
@@ -185,9 +185,9 @@ def terminate_orphaned_group(pgid: int, leader_identity: str) -> bool:
     if not _group_exists(pgid):
         return True
 
-    for sig, deadline in ((signal.SIGTERM, 1.0), (signal.SIGKILL, 3.0)):
+    for sig, deadline in ((signal.SIGTERM, 1.0), (signal.SIGKILL, 3.0)):  # windows-footgun: ok - POSIX only: returned early above
         try:
-            os.killpg(pgid, sig)
+            os.killpg(pgid, sig)  # windows-footgun: ok - POSIX only: returned early above
         except ProcessLookupError:
             return True
         except (PermissionError, OSError):

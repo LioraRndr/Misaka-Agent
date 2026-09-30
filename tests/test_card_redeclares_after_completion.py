@@ -75,7 +75,7 @@ def _submissions(con, tid):
 
 
 async def _complete(con, tid, out, part):
-    (out / "report.md").write_text("first version\n")
+    (out / "report.md").write_text("first version\n", encoding="utf-8")
     from misaka.core.network import worker
     worker.declare_completion(con, tasks.get(con, tid), "delivered")   # what misaka_card_complete records
     await _end_turn(part, "delivered")
@@ -86,14 +86,14 @@ async def _complete(con, tid, out, part):
 async def test_a_later_turn_that_changed_the_deliverable_declares_it_again(card):
     con, tid, out, part = card
     await _complete(con, tid, out, part)
-    (out / "report.md").write_text("revised after Last Order's note\n")
-    (out / "extra.csv").write_text("a,b\n")
+    (out / "report.md").write_bytes(b"revised after Last Order's note\n")
+    (out / "extra.csv").write_text("a,b\n", encoding="utf-8")
 
     await _end_turn(part, "revised as asked")
 
     rows = _submissions(con, tid)
     assert len(rows) == 2 and rows[-1]["summary"] == rows[0]["summary"]
-    rel = str((out / "report.md").relative_to(out.parents[2]))
+    rel = (out / "report.md").relative_to(out.parents[2]).as_posix()
     assert rows[-1]["artifact_digests"][rel] == hashlib.sha256(b"revised after Last Order's note\n").hexdigest()
     assert any(path.endswith("extra.csv") for path in rows[-1]["artifacts"])
     row = tasks.get(con, tid)
@@ -112,7 +112,7 @@ async def test_a_turn_that_changed_nothing_declares_nothing(card):
 async def test_an_aborted_turn_and_another_session_do_not_declare(card):
     con, tid, out, part = card
     await _complete(con, tid, out, part)
-    (out / "report.md").write_text("changed\n")
+    (out / "report.md").write_text("changed\n", encoding="utf-8")
     await _end_turn(part, "", reason="aborted")
     assert len(_submissions(con, tid)) == 1
     part.session.sessionManager.sessionFile = str(out.parents[2] / "someone-else.jsonl")

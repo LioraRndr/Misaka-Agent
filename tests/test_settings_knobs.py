@@ -19,7 +19,7 @@ ROOT = Path(product.__file__).resolve().parents[1]
 def _write(document):
     path = home.path("settings")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(document))
+    path.write_text(json.dumps(document), encoding="utf-8")
 
 
 def test_every_knob_read_in_the_code_is_registered_with_its_type():

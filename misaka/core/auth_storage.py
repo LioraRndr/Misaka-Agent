@@ -42,7 +42,11 @@ from misaka.ai.utils.oauth import (
 from misaka.config import get_auth_path
 from misaka.core.resolve_config_value import resolveConfigValue
 from misaka.utils import atomic
-from misaka.utils.paths import get_file_revision, normalize_path
+from misaka.utils.paths import (
+    file_revision_from_stat,
+    get_file_revision,
+    normalize_path,
+)
 from misaka.utils.values import signal_aborted
 
 type ApiKeyCredential = dict[str, Any]
@@ -61,7 +65,8 @@ type AuthStatusSource = Literal[
 
 
 def _file_revision_from_stat(value: os.stat_result) -> FileRevision:
-    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+    # The same revision get_file_revision reads by path, or the two never match on Windows.
+    return file_revision_from_stat(value)
 
 
 @dataclass(slots=True)
@@ -164,7 +169,9 @@ class FileAuthStorageBackend(AuthStorageBackend):
             raise
 
     def _restrict_file_mode(self, fd: int) -> None:
-        if os.fstat(fd).st_mode & 0o077 and hasattr(os, "fchmod"):
+        # Windows reports every file as 0o666 and its fchmod (3.13+) refuses a read-only
+        # descriptor; there the user's profile ACL keeps the store private, as for pi.
+        if os.name != "nt" and os.fstat(fd).st_mode & 0o077 and hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
 
     def ensureFileExists(self) -> None:
@@ -194,7 +201,7 @@ class FileAuthStorageBackend(AuthStorageBackend):
         created = None
         try:
             created = os.fstat(fd)
-            if hasattr(os, "fchmod"):
+            if os.name != "nt" and hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)
             payload = memoryview(b"{}")
             while payload:
