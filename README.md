@@ -34,7 +34,7 @@ the final report arrives in your project folder as a research article, every cit
 <tr><td><b>A directed acyclic graph of possibilities</b></td><td>Each new direction forks from Last Order's session, inheriting all prior reasoning, and becomes a node with its own team and red team. The graph unfolds level by level: each possibility is opened once, and a question raised by several lines is researched once. Lines that converge are confronted where they meet, integrated where they can be, and where they cannot, their disagreement is stated precisely.</td></tr>
 <tr><td><b>Dissolving the question</b></td><td>Research may show that a question rests on a conceptual confusion or an ideological presupposition and cannot stand as posed. That is a legitimate conclusion in its own right. Before it alters the question you asked, Last Order seeks your consent.</td></tr>
 <tr><td><b>Beyond doxa</b></td><td>A single exchange tends to stop at a model's most frequent answer: a doxa, widely held and seldom examined. Every plan carries a coverage table whose empty cells are declared gaps. The coverage maps derive from the schemes disciplines use to classify their own literature, whose blank spaces mark what a field has not counted as a question, and literature scans locate the question within the scholarship.</td></tr>
-<tr><td><b>Traceability</b></td><td>Citations trace to the page. PageIndex builds chapter outlines of long documents, so agents read by chapter, cite printed pages and locate any quotation; OCR covers scans in Chinese, English and Japanese, and DjVu is supported. Context traces to the source. When a conversation exceeds the model's window, lossless context management (LCM) compresses it into summaries that each lead back to the original text, and every agent in a project searches the same memory.</td></tr>
+<tr><td><b>Traceability</b></td><td>Citations trace to the page and character offset, and context to the original conversation; the mechanisms are described below, under Context and materials for humanities research.</td></tr>
 <tr><td><b>An auditable research process</b></td><td>Plans, task cards, every version of a conclusion, critiques and source lists are kept as Markdown files in the project, which is itself a git repository. MISAKA commits only at your request and after you have reviewed the files, so the way an argument evolved under criticism is preserved in its history.</td></tr>
 <tr><td><b>Under your direction</b></td><td>No plan proceeds without your approval, which you give in ordinary conversation. Each branch has its own tab in the panel, and every agent runs in a pane you can enter at any time. Runs can be halted and resumed.</td></tr>
 </table>
@@ -94,6 +94,52 @@ sets aside becomes a node beneath it, level by level.
 
 The [research guide](docs/guide/research.md) covers depth, concurrency, monitoring a run and
 resuming it.
+
+## Context and materials for humanities research
+
+The materials of humanities and social science research are often voluminous and multilingual,
+and their provenance must be verifiable; together these exceed what a single model's context
+window can hold. MISAKA addresses the following problems by design.
+
+| Problem | Approach |
+|---|---|
+| Long works exceed the capacity of the context window | PageIndex builds a hierarchical chapter index of long documents, which are then read on demand by section or page range |
+| Context compression over a long inquiry distorts earlier material | LCM summarises earlier conversation hierarchically, each summary traceable to the original text; all sessions in a project share one retrieval index |
+| Skill and tool instructions consume the coordinator's context | Skills and tools are assigned to Sisters by specialty, and cards run in separate sessions; Last Order's context is reserved for the materials submitted to her |
+| Citations are hard to verify, and sources may be fabricated | Quotations are located to the page and character offset; conclusions cite only sources actually read, and source lists and original files are archived with them |
+| Scanned documents, DjVu and multilingual materials | OCR in Chinese, English and Japanese, DjVu and legacy Office formats; plain text is structured by headings such as CHAPTER or LIVRE |
+| Model output gravitates toward prevailing views | Disciplinary coverage maps and literature scans mark research gaps, and the divergence review proposes directions not taken |
+
+### PageIndex: hierarchical indexing and reading on demand
+
+- Each project keeps its own document index. Documents of 20 pages or more receive a
+  hierarchical table of contents giving the page range of each section.
+- An agent first consults the outline (`doc_outline`) and then reads by section node or page
+  range (`doc_read`), so that only the required text enters the context.
+- For PDF and DjVu a page is the printed page; other formats are divided at paragraph boundaries
+  into pages of about 3,000 characters, to which page citations refer.
+- `doc_find` performs literal search; `doc_verify` returns the page, character offset and
+  checksum of a quotation; `doc_page_image` reads a page as an image, for figures, maps and scans.
+- Texts produced during the research are indexed on completion. The final report retrieves each
+  node's conclusion as a document, without loading everything into the context at once.
+
+### LCM: traceable hierarchical compression
+
+- When a session reaches a set share of the context window (35% by default), earlier
+  conversation is compressed into summaries, which are in turn merged level by level.
+- The original conversation is preserved in full. Every summary can be expanded to the text it
+  rests on, and the original can be searched directly, so compression entails no irreversible
+  loss of information.
+- All sessions in a project share one retrieval index; any agent can search the conversations of
+  the others.
+- Optional features: semantic retrieval with a local embedding model, proactive recall of
+  relevant history, external storage of very long tool outputs, and daily, weekly and monthly
+  roll-ups.
+- Each research run may set its own compaction threshold and output limit without affecting the
+  global configuration.
+
+See [Documents and the web](docs/guide/sources.md) and the
+[configuration reference](docs/reference/configuration.md).
 
 ## Outputs
 
