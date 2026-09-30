@@ -44,18 +44,21 @@ the final report arrives in your project folder as a research article, every cit
 ```sh
 uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misaka-Agent.git"
 
-mkdir my-research
-cd my-research
+mkdir ~/Documents/my-research
+cd ~/Documents/my-research
 misaka setup     # sign in, choose a model, create your first two Sisters
 misaka           # start MISAKA and type /research
 ```
 
-MISAKA runs on macOS, Linux and Windows (x86_64 or arm64). It requires
+MISAKA runs on macOS, Linux and Windows (x86_64 or arm64); macOS is recommended. It requires
 [uv](https://docs.astral.sh/uv/), git, [ripgrep](https://github.com/BurntSushi/ripgrep),
 [fd](https://github.com/sharkdp/fd) and poppler, and access to a model provider: an API key, or a
 ChatGPT or GitHub Copilot subscription. Claude accounts can also sign in, with that usage billed
 by Anthropic per token as extra usage. Install from this repository: the `misaka` package on PyPI
 is an unrelated project.
+
+Run MISAKA in a working folder under `Documents` (such as `~/Documents/my-research` above),
+never in the root directory.
 
 [Getting started](docs/getting-started.md) covers installation step by step and walks you through
 a first research question.

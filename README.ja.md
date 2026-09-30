@@ -40,13 +40,15 @@ MISAKAでは、コーディネーターの**Last Order**と一緒に問いを分
 ```sh
 uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misaka-Agent.git"
 
-mkdir my-research
-cd my-research
+mkdir ~/Documents/my-research
+cd ~/Documents/my-research
 misaka setup     # サインイン、モデル選択、最初の二人のSisterを作成
 misaka           # MISAKAを起動し、/researchと入力
 ```
 
-動作環境はmacOS、Linux、Windows（x86_64またはarm64）です。[uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd)、popplerのインストールと、モデルプロバイダ（APIキー、またはChatGPT・GitHub Copilotのサブスクリプション）が必要です。Claudeアカウントでもサインインでき、その利用分はAnthropicによりトークン単位の追加利用として課金されます。インストールは本リポジトリから行ってください。PyPIの`misaka`は無関係のパッケージです。
+動作環境はmacOS、Linux、Windows（x86_64またはarm64）で、macOSでの実行を推奨します。[uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd)、popplerのインストールと、モデルプロバイダ（APIキー、またはChatGPT・GitHub Copilotのサブスクリプション）が必要です。Claudeアカウントでもサインインでき、その利用分はAnthropicによりトークン単位の追加利用として課金されます。インストールは本リポジトリから行ってください。PyPIの`misaka`は無関係のパッケージです。
+
+MISAKAは`Documents`以下の作業フォルダ（上の例の`~/Documents/my-research`など）で実行し、ルートディレクトリでは決して実行しないでください。
 
 [はじめに](docs/getting-started.ja.md)では、インストール手順から最初の研究までを順を追って説明しています。
 
