@@ -60,40 +60,125 @@ is an unrelated project.
 [Getting started](docs/getting-started.md) covers installation step by step and walks you through
 a first research question.
 
-## How research proceeds
+## Research: `/research`
 
 > *The plan's ready! Misaka Misaka starts the moment you say so, says Misaka Misaka, holding it out with both hands.*
 
-A run is a graph of possibilities: your question is the root, and each possibility a conclusion
-sets aside becomes a node beneath it, level by level.
+`/research` is the core of MISAKA. A run takes one question and explores the different ways it
+could be answered. Your question is the first node: Last Order agrees the plan with you, the
+Sisters research it, and Last Order writes the conclusion; a red team then reviews that conclusion
+and brings out the possibilities it set aside. Errors and gaps are corrected within the node,
+while genuine alternatives resting on different premises open as new nodes, each with its own
+Last Order, Sisters and red team. The run thus unfolds level by level into a research graph and
+concludes in a research article.
 
 <p align="center">
   <img src="assets/research-graph.svg" alt="A research run as a graph: your question; at level 1, another hypothesis, another method and a critique of the question; at level 2, a path one of them passed over, a question two lines raised and researched once, and two lines joined where they meet; then the report" width="820">
 </p>
 
-1. **Each node is a complete piece of research.** Last Order agrees the plan with you and proceeds
-   only with your approval. Until the specialists submit their materials, she decomposes the
-   question into sub-questions and prior questions and presumes no conclusion. The Sisters work
-   their cards in parallel, recording the source of every finding, and Last Order writes the
-   conclusion once she has studied them.
-2. **Red team and divergence review.** A red-team Sister examines the facts and reasoning and
-   identifies what the conclusion leaves unsaid. A divergence review, conducted in a fresh
-   session, then separates the possibilities the conclusion set aside from the gaps it left. Last
-   Order answers each objection and fills each gap within the node, and the revised conclusion
-   returns for review.
-3. **The graph unfolds.** Only genuine alternatives, resting on different premises, fork from Last
-   Order's session as new nodes, inheriting all prior reasoning. Each has its own Last Order,
-   Sisters and red team, and the graph extends level by level to the depth you set. A question
-   raised by several lines is researched once, each possibility is opened once, and converging
-   lines are confronted where they meet.
-4. **The report.** Once every node has closed, Last Order surveys them all and composes the
-   arguments the research reached into a research article, with notes, a bibliography and
-   appendices recording every line of inquiry, the costs the answer accepts and the paths not
-   taken. An independent red team reviews the draft, and Last Order rules on each objection in the
-   final version.
+### Starting a run
 
-The [research guide](docs/guide/research.md) covers depth, concurrency, monitoring a run and
-resuming it.
+In Last Order's window, type `/research`. A picker confirms nine parameters in turn, then takes
+your research question.
+
+| Parameter | Meaning |
+|---|---|
+| Research depth | how many levels of alternatives may open beneath the question |
+| Node parallelism | how many nodes run at the same time |
+| Card parallelism | how many cards each node runs at the same time |
+| Follow-up rounds | how many further rounds of cards may follow the first |
+| Revisions | how many times a conclusion may be revised after review |
+| Node limit | how many nodes the run may hold, the root included |
+| Plan approval | whether plans wait for your consent |
+| Compaction threshold | the share of the context at which conversation is compressed, for this run only |
+| Output limit | the longest reply a model may write, for this run only |
+
+Parameters and question may also be given on one line, as in
+`/research --depth 2 --max-nodes 12 QUESTION`. Parameters left unspecified take their defaults:
+depth 3, four nodes and four cards at a time, two follow-up rounds, two revisions and a limit of
+30 nodes. From the shell, `misaka research` accepts the same parameters.
+
+### Inside a node
+
+Every node, your question included, passes through the same seven stages:
+
+1. **Plan.** The plan is a research design. It establishes what the question actually asks and
+   what else it could mean, identifies untested premises, sets out the evidence, methods and
+   sources required together with their limits, and justifies each Sister's assignment. Each
+   task receives its own card; a coverage table maps every sub-question, actor and dimension to
+   the cards serving it, so that a gap appears as an empty cell; and the red team is appointed
+   here. Where the question admits mutually exclusive ways of answering it, the plan may record a
+   decision with at least two options and their premises.
+2. **Cards.** The Sisters, and allies such as Claude Code, work their cards in parallel in
+   separate sessions, declaring each finding: the claim, its type (fact, inference,
+   interpretation or value judgement), the file and page it rests on, and the quotation. Once the
+   cards return, Last Order may send out further rounds within the follow-up limit.
+3. **Conclusion.** Last Order studies the deliverables in full and writes the conclusion: shared
+   and competing findings, key evidence and counterevidence, and the limits of the methods; the
+   premises the conclusion rests on and what each gains and gives up, what the materials could
+   not reach and whose voices are absent; and how it answers the node it came from and its rival
+   options. A conclusion may be a position that accepts stated costs, or the dissolution of the
+   question. Factual errors found in an earlier node are recorded as errata, shown beside the
+   original conclusion in every node below it and in the final report.
+4. **Red-team review.** The red-team Sister studies the conclusion, the plans, the evidence, the
+   graph and Last Order's reasoning. She checks the facts, raises gaps, tests whether the
+   conclusion answers its parent and its rivals, and identifies what the conclusion leaves unsaid
+   yet relies on.
+5. **Divergence review.** After the first review, the same Sister conducts a divergence review in
+   a fresh session. She separates possibilities not taken, which rest on different premises, from
+   gaps that any answer must fill, and brings out the presuppositions behind each of the
+   conclusion's choices and what each gains and gives up.
+6. **Response to review.** Last Order gives each material objection and each gap exactly one
+   response: revise, rebut, concede a cost, refer it to the node that owns it, park it, or take
+   it to a decision. Where something is revised, the conclusion is issued in a new version and
+   returned to the same red team, until nothing remains to revise or the revisions are exhausted.
+7. **Decision.** Each possibility not taken is recorded as an option to open, as already covered,
+   or as declined with a reason. A presupposition on which the answer depends may itself become a
+   fork: the node opened for it examines whether it holds, and how the answer changes if it does
+   not.
+
+### How the graph grows
+
+The run proceeds level by level: every node at one depth finishes before the next depth begins.
+Between levels, Last Order surveys the whole graph and reconciles it:
+
+- Waiting options open as new nodes; options that ask the same question are merged into one
+  node, researched once.
+- Lines that reach the same place by different routes may be joined and carried forward by a new
+  node. At the join they confront each other: what can be integrated is integrated, and where
+  they cannot be reconciled the disagreement is drawn sharply.
+- Relations between nodes (convergence, divergence, resonance, appropriation and displacement)
+  are recorded for the final report.
+
+A paths list records every possibility raised in the run and what became of it, so that each is
+opened only once. A new node forks from the session of the node it came from and inherits the
+history of its question.
+
+### Taking part and following a run
+
+- **Plan approval.** Every plan, the reconciliations between levels included, can wait for your
+  consent, given in ordinary conversation. Plans may instead proceed automatically, but a plan
+  that changes the question itself always waits for you. You may also skip a node, cancel a
+  follow-up round or stop the run.
+- **Conversation at any point.** Each node has its own tab in the panel, where you can speak with
+  that node's Last Order at any time.
+- **Commands and recovery.** `/research status` shows progress, `/research stop` ends the run with
+  a partial report, and `/research resume` resumes a stopped or failed run. A failed card is
+  retried up to three times; when a node fails, the rest of its level continues.
+
+### The final report
+
+When every node has closed, Last Order writes a survey of each node, a draft report, an
+independent red-team review of the draft and the final version. The report is a research article
+for readers in the humanities and social sciences, written in the language of the question, with
+a title, abstract and keywords, an introduction, argued chapters and a conclusion. Notes and a
+bibliography carry its traceability; the appendices record every line of inquiry, the costs the
+answer accepts together with errata and paths not taken, the materials used, and the handling of
+the review. The theses, arguments and connections between lines are drawn from the research
+materials: what can be integrated is integrated, and positions whose premises cannot be
+reconciled are kept distinct.
+
+The [research guide](docs/guide/research.md) covers every stage in full.
 
 ## Context and materials for humanities research
 
