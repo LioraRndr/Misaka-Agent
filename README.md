@@ -3,9 +3,9 @@
   MISAKA
 </h1>
 
-<p align="center"><strong>A research team of AI agents for the humanities and social sciences.</strong></p>
+<p align="center"><strong>Pairing a DAG with symptomatic reading to unearth plural narratives: an AI agent architecture built for the humanities and social sciences.</strong></p>
 
-<p align="center"><em>Every conclusion faces a red team and keeps its sources beside it, says Misaka.</em></p>
+<p align="center"><em>More important than presence is absence! says Misaka Misaka, rapping you on the head.</em></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="Licence: Apache 2.0" src="https://img.shields.io/badge/licence-Apache_2.0-blue"></a>
@@ -15,24 +15,25 @@
 
 <p align="center">English · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a></p>
 
-You ask a question. **Last Order**, the coordinator, plans the research with you and hands the
-parts to **Sisters**, the specialists you create. They work in parallel in your terminal, a red
-team attacks every conclusion, and the paths a conclusion passed over become research of their
-own. The report arrives in your project folder as a research article, beside every file it cites.
+Break the question down with **Last Order**, the coordinator, and refine the research plan; send
+each branch of the inquiry to **Sisters**, specialists who report, liaise and consult; gather
+their reports, read them and write; defend the conclusion before the reviewers; and turn whatever
+it cannot cover into new research. Graph algorithms manage the graph of research branches, and
+the final report arrives in your project folder as a research article, every citation traceable.
 
 <p align="center">
   <img src="assets/tui.png" alt="The MISAKA panel: spaces, sessions and agents beside Last Order's window" width="820">
 </p>
 
 <table>
-<tr><td><b>Conclusions that survive a red team</b></td><td>Every conclusion faces a red-team Sister. Last Order answers each objection on the record: she revises, rebuts, or accepts it as a cost the answer carries.</td></tr>
-<tr><td><b>The roads not taken, explored</b></td><td>Hypotheses, methods and readings a conclusion passed over become research of their own, each with its own team and red team. A question two lines raise is researched once, and lines that meet are joined.</td></tr>
-<tr><td><b>Evidence you can open</b></td><td>Every finding names its source and page. Each conclusion keeps the files it cites beside it, and agents find the page a quotation is on.</td></tr>
-<tr><td><b>Claims labelled for what they are</b></td><td>Facts, inferences, interpretations and value judgements are declared as such. Where the evidence cannot decide, rival conclusions stand side by side.</td></tr>
-<tr><td><b>Books read by chapter and page</b></td><td>PageIndex outlines long documents, so agents read a book by chapter, cite the printed page and find the page a quotation is on. OCR reads scans in English, Chinese and Japanese, DjVu included, and literature scans show where a question sits in the scholarship.</td></tr>
-<tr><td><b>A memory that loses nothing</b></td><td>When a conversation outgrows the model, lossless context management (LCM) summarises it, and every summary leads back to the exact words it came from. Every agent in a project searches the same memory, and recall by meaning can run on a small local model.</td></tr>
-<tr><td><b>A record you can audit</b></td><td>Plans, cards, every version of a conclusion, critiques and source lists are Markdown files in your project, which is a git repository. MISAKA commits only when you ask and have seen the files, so how an argument changed under criticism stays on the record.</td></tr>
-<tr><td><b>A team of different minds</b></td><td>Each Sister has her own specialty, skills and model: Claude, GPT, Gemini, or one on your own machine. Claude Code and Codex join as teammates and take cards like any Sister.</td></tr>
+<tr><td><b>No conclusion before the materials</b></td><td>Until the specialists' materials come back, Last Order draws no conclusion: she breaks the question into sub-questions and prior questions and works out how they bear on one another. The views grow out of the materials, and the final report arranges the arguments the research reached, so views that run against the mainstream are not smoothed away.</td></tr>
+<tr><td><b>Each specialist with her craft</b></td><td>Each Sister brings her own specialty, skills and model to her field: Claude, GPT, Gemini, or one on your own machine; Claude Code and Codex join and take cards too. Last Order need not think about tools and keeps her context for what the specialists hand in. Spared the means, she can master the ends.</td></tr>
+<tr><td><b>Symptomatic reading</b></td><td>Beyond checking facts and reasoning, the red-team Sister reads Last Order's thinking for what the conclusion leaves unsaid yet leans on. The divergence review that follows sorts these absences: an oversight the line can repair is filled inside the node; a direction its own premises keep out of view goes to Last Order, who opens it as new research or records why not. These are the two kinds of not-seeing Althusser distinguished in symptomatic reading: what was overlooked, and what the problematic does not let one see.</td></tr>
+<tr><td><b>A graph of possibilities</b></td><td>Each new direction forks from Last Order's conversation, carrying all the thinking before it, and becomes a node with its own team and red team. The graph grows level by level: no possibility opens twice, a question two lines raise is researched once, and lines that meet are joined, integrated where they can be and, where they cannot, kept apart with the disagreement drawn sharply.</td></tr>
+<tr><td><b>Questions can be wrong too</b></td><td>Research may conclude that a question rests on a conceptual confusion or an ideological presupposition and cannot stand as asked. That is a legitimate result; if it is your question that would change, Last Order asks you first.</td></tr>
+<tr><td><b>Beyond the commonplace</b></td><td>Ask once, and a model mostly tells you what it says most often. Every plan carries a coverage table whose empty cells are declared gaps; the coverage maps come from the schemes disciplines use to classify their own literature, and literature scans show where a question sits in the scholarship.</td></tr>
+<tr><td><b>Traceable</b></td><td>Citations trace to the page: PageIndex outlines long documents, so agents read a book by chapter, cite the printed page and find the page a quotation is on; OCR reads scans in English, Chinese and Japanese, DjVu included. Memory traces to the words: when a conversation outgrows the model, lossless context management (LCM) summarises it, every summary leads back to the original, and every agent in a project searches the same memory.</td></tr>
+<tr><td><b>A record you can audit</b></td><td>Plans, cards, every version of a conclusion, critiques and source lists are Markdown files in your project, which is a git repository. MISAKA commits only when you ask and have seen the files, so how an argument changed under criticism stays in its history.</td></tr>
 <tr><td><b>Research you steer</b></td><td>Every plan waits for your word, given in plain conversation. Each branch has its own tab in the panel, with every agent in a pane you can step into. Runs stop and resume.</td></tr>
 </table>
 
@@ -60,27 +61,32 @@ question.
 
 > *The plan's ready! Misaka Misaka starts the moment you say so, says Misaka Misaka, holding it out with both hands.*
 
-A run is a graph of possibilities. Your question is its first node, and the possibilities a
-conclusion passed over become the nodes below it, one level at a time.
+A run is a graph grown from possibilities. Your question is its first node, and every
+possibility a conclusion passed over grows into a node below it, one level at a time.
 
 <p align="center">
   <img src="assets/research-graph.svg" alt="A research run as a graph: your question; at level 1, another hypothesis, another method and a critique of the question; at level 2, a path one of them passed over, a question two lines raised and researched once, and two lines joined where they meet; then the report" width="820">
 </p>
 
 1. **Every node is a piece of research.** Last Order plans it with you and starts when you agree.
-   The Sisters work their cards in parallel and record each finding with its source, and Last
-   Order writes the conclusion.
-2. **A red team reviews it.** A red-team Sister challenges the conclusion, then reads it again for
-   the possibilities it passed over and the gaps it left. Last Order answers every objection and
-   fills every gap inside the node; a revised conclusion goes back for review.
-3. **The graph grows.** Only real alternatives, resting on different premises, open as new nodes,
-   each with its own Last Order, Sisters and red team, level by level down to the depth you
-   choose. A question two lines raise is researched once, no possibility is opened twice, and
-   lines that reach the same place are joined, where they confront each other.
-4. **The report.** When every node has closed, Last Order surveys them all and writes the answer
-   as a research article, with notes, a bibliography and appendices that record every line of
-   inquiry, the costs the answer accepts and the paths not taken. An independent red team reviews
-   the draft, and Last Order rules on each objection in the final report.
+   Until the materials come back she breaks the question down and concludes nothing; the Sisters
+   work their cards in parallel and record each finding with its source, and Last Order reads
+   them before she writes the conclusion.
+2. **Red team and divergence review.** A red-team Sister checks the facts and the reasoning and
+   reads what the conclusion leaves unsaid; then, in a fresh session, a divergence review
+   separates the possibilities the conclusion passed over from the gaps it left. Last Order
+   answers every objection and fills every gap inside the node; a revised conclusion goes back for
+   review.
+3. **The graph grows.** Only real alternatives, resting on different premises, fork from Last
+   Order's conversation as new nodes, carrying all the thinking before them, each with its own
+   Last Order, Sisters and red team, level by level down to the depth you choose. A question two
+   lines raise is researched once, no possibility is opened twice, and lines that reach the same
+   place are joined, where they confront each other.
+4. **The report.** When every node has closed, Last Order surveys them all and arranges the
+   arguments the research reached into a research article, with notes, a bibliography and
+   appendices that record every line of inquiry, the costs the answer accepts and the paths not
+   taken. An independent red team reviews the draft, and Last Order rules on each objection in the
+   final report.
 
 The [research guide](docs/guide/research.md) covers depth, parallelism, following a run and
 resuming it.
@@ -180,6 +186,11 @@ and [PageIndex](https://github.com/VectifyAI/PageIndex) for document structure, 
 tools and skills from [Hermes Agent](https://github.com/NousResearch/hermes-agent) and Office
 support from [FrontierAgent](https://github.com/ApodexAI/FrontierAgent).
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) records what came from where.
+
+Pi is the base because its kernel is simple and a mature community maintains it, so MISAKA can
+follow its updates directly. MISAKA's graph governs the content and possibilities of research: a
+node is a finished piece of research, an edge a line of questioning that forked off with its
+thinking.
 
 ## Licence
 
