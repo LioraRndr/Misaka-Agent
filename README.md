@@ -29,10 +29,11 @@ own. The report arrives in your project folder as a research article, beside eve
 <tr><td><b>The roads not taken, explored</b></td><td>Hypotheses, methods and readings a conclusion passed over become research of their own, each with its own team and red team. A question two lines raise is researched once, and lines that meet are joined.</td></tr>
 <tr><td><b>Evidence you can open</b></td><td>Every finding names its source and page. Each conclusion keeps the files it cites beside it, and agents find the page a quotation is on.</td></tr>
 <tr><td><b>Claims labelled for what they are</b></td><td>Facts, inferences, interpretations and value judgements are declared as such. Where the evidence cannot decide, rival conclusions stand side by side.</td></tr>
+<tr><td><b>Books read by chapter and page</b></td><td>PageIndex outlines long documents, so agents read a book by chapter, cite the printed page and find the page a quotation is on. OCR reads scans in English, Chinese and Japanese, DjVu included, and literature scans show where a question sits in the scholarship.</td></tr>
+<tr><td><b>A memory that loses nothing</b></td><td>When a conversation outgrows the model, lossless context management (LCM) summarises it, and every summary leads back to the exact words it came from. Every agent in a project searches the same memory, and recall by meaning can run on a small local model.</td></tr>
+<tr><td><b>A record you can audit</b></td><td>Plans, cards, every version of a conclusion, critiques and source lists are Markdown files in your project, which is a git repository. MISAKA commits only when you ask and have seen the files, so how an argument changed under criticism stays on the record.</td></tr>
 <tr><td><b>A team of different minds</b></td><td>Each Sister has her own specialty, skills and model: Claude, GPT, Gemini, or one on your own machine. Claude Code and Codex join as teammates and take cards like any Sister.</td></tr>
 <tr><td><b>Research you steer</b></td><td>Every plan waits for your word, given in plain conversation. Each branch has its own tab in the panel, with every agent in a pane you can step into. Runs stop and resume.</td></tr>
-<tr><td><b>A scholar's library</b></td><td>PDFs, EPUB, DjVu and Office files are indexed by chapter, and scans are read with OCR in English, Chinese and Japanese. Web search needs no key; literature scans show where a question sits in the scholarship.</td></tr>
-<tr><td><b>A memory the team shares</b></td><td>Long conversations are summarised as they grow and stay searchable by every agent in the project.</td></tr>
 </table>
 
 ## Quick start
