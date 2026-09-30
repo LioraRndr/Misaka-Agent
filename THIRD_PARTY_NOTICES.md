@@ -11,10 +11,10 @@ MISAKA 的部分文件移植自其它项目。移植代码所附带的许可证�
 ## Pi（coding agent）
 
 - 上游：https://github.com/earendil-works/pi ，npm 包 `@earendil-works/pi-coding-agent`
-- 许可证：MIT。上游 npm 包在任何层级都不含 LICENSE 文件，许可证由其 `package.json` 的
-  `"license": "MIT"` 字段声明；本条即为 MIT 所要求的版权与许可声明的保留。
-- 作者：Mario Zechner
-- 对照件：`@earendil-works/pi-coding-agent` 0.83.0 的 `dist/`
+- 许可证：MIT
+- 版权：Copyright (c) 2025 Mario Zechner
+- 许可证全文：`misaka/LICENSE.pi`，取自上游仓库 `v0.87.1` 的 `LICENSE`（npm 包本身不带 LICENSE 文件）
+- 对照件：`@earendil-works/pi-coding-agent` 0.87.1 的 `dist/`
 - 本仓库位置：`misaka/ai/**`、`misaka/agent/**`、`misaka/ui/tui/**`，以及 `misaka/core/`
   的内核部分。逐目录、逐文件的归属清单是 `misaka/core/PI_ORIGIN.md`。
 - 说明：MISAKA 的内核是 Pi 的 Python 移植，是本仓库最大的单一上游来源。分叉处在代码里
@@ -86,11 +86,37 @@ MISAKA 的部分文件移植自其它项目。移植代码所附带的许可证�
 - 版权：Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
 - 本仓库位置：`misaka/ui/panel/lib/`（完整 MIT 文本在该目录的 `LICENSE.ghostty`）
 - 说明：面板的终端仿真器是 ghostty 的 VT 库。随仓库分发的是预编译产物
-  `libghostty-vt-<os>-<arch>.<ext>`（macOS 与 Linux 各两个架构）。源码取自 herdr 所
+  `libghostty-vt-<os>-<arch>.<ext>`（macOS、Linux 与 Windows 各两个架构）。源码取自 herdr 所
   vendored 的那一份：herdr `v0.8.2` 的 `vendor/libghostty-vt`，ghostty 提交 `c5a21edfc`，
   含 herdr 的 grapheme clustering 补丁——因此这些二进制同时受本条与上面的 herdr 条目约束。
+  macOS 与 Linux 的构建以 `-Dsimd=true` 静态链入了下面两个库，它们的声明见下两条。
   构建方法与 `MISAKA_GHOSTTY_VT` 覆盖路径见该目录的 `README.md`。
   `misaka/ui/panel/ghostty.py` 是本仓库自有的 ctypes 绑定，不是上游代码。
+
+## Highway（随 ghostty 二进制分发）
+
+- 上游：https://github.com/google/highway ，ghostty 固定的提交 `66486a10623fa0d72fe91260f96c892e41aceb06`（1.2.0）
+- 许可证：Apache-2.0 或 BSD-3-Clause 二选一，本仓库按 BSD-3-Clause 分发
+- 版权：Copyright (c) The Highway Project Authors
+- 许可证全文：`misaka/ui/panel/lib/LICENSE.highway`
+- 位置：静态链入 macOS 与 Linux 的 `libghostty-vt` 二进制，仓库里没有它的源码
+
+## simdutf（随 ghostty 二进制分发）
+
+- 上游：https://github.com/simdutf/simdutf ，ghostty 收录的 5.2.8
+- 许可证：Apache-2.0 或 MIT 二选一，本仓库按 MIT 分发
+- 版权：Copyright 2021 The simdutf authors
+- 许可证全文：`misaka/ui/panel/lib/LICENSE.simdutf`
+- 位置：静态链入 macOS 与 Linux 的 `libghostty-vt` 二进制，仓库里没有它的源码
+
+## portable-pty（经 herdr）
+
+- 上游：https://github.com/wezterm/wezterm 的 `pty` crate，herdr `v0.8.2` 收录在 `vendor/portable-pty`
+- 许可证：MIT
+- 版权：Copyright (c) 2018 Wez Furlong
+- 许可证全文：`misaka/ui/panel/LICENSE.portable-pty`
+- 本仓库位置：`misaka/ui/panel/conpty.py`，移植了 `src/win` 下的 `psuedocon.rs`、`conpty.rs`、
+  `procthreadattr.rs` 与 `WinChild`，即 Windows 上窗格的 ConPTY 后端
 
 ## 上游整体移植
 
