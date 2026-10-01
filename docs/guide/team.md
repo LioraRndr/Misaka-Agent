@@ -110,10 +110,11 @@ Agents message each other with the `SendMessage` tool, one recipient per message
   space, or her contact session when she has none open there. If several are open, the sender is
   shown them and picks one;
 - **a card ID** (`t_3cfb45`) reaches the session working that card. A card that has not started
-  gets the message when it does. A finished card gets it in her session if her window is still
-  open; if not, she is woken in her own conversation with the message as her next turn, answers,
-  and completes again. Waking her does not send the cards built on her work back to be redone;
-- **a session ID** reaches that live session; a card's closed session wakes its card.
+  gets the message when it does. A finished card is woken: the message is her next turn in her
+  own conversation (in her window, if it is still open), she answers, and completes again. Waking
+  her does not send the cards built on her work back to be redone;
+- **a session ID** reaches that live session; a finished card's session, open or closed, wakes
+  its card.
 
 A contact session's answer goes back to the window that wrote to it. Last Order can wait for a
 woken Sister's answer with `misaka_sister_output` (`block: true`) before she goes on.

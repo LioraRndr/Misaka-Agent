@@ -1416,11 +1416,14 @@ when evidence warrants it and explain why. No separate planning submission, file
                 return "starts after yours is done"
             return "in parallel with yours"
 
+        # Cards get their ids one by one as they are created, so a sibling made after this one has none
+        # yet: name her Sister, which inside the run reaches her card on this node (2026-10-01).
         company += ("\n## sibling cards\nOther cards on the same node. To reach one's Sister, `SendMessage` "
-                    "her card id, which `misaka_research_view(view=\"workspace\")` lists: a card that has not "
-                    "started gets the message when it does, and a finished one is woken by it.\n"
-                   + "\n".join(f"- {spec.get('local_id')} · {spec.get('title')} → Sister {spec.get('assignee')} "
-                               f"({timing(spec)})" for spec in others) + "\n")
+                    "her number: inside the run it reaches her card on this node, and if she holds several "
+                    "the refusal lists their card ids. A card that has not started gets the message when it "
+                    "does, and a finished one is woken by it.\n"
+                   + "\n".join(f"- {spec.get('title')} → Sister {spec.get('assignee')} ({timing(spec)})"
+                               for spec in others) + "\n")
     return f"""## research question
 {task['question']}
 

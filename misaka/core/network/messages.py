@@ -129,6 +129,9 @@ def send(
 
 
 CARD_ID = re.compile(r"^t_[0-9a-f]{6}$")
+# A card that ended. A parked one (blocked, triage) has not: it waits on an answer, which goes the
+# way the help protocol takes it.
+FINISHED = frozenset({"done", "failed", "stopped"})
 SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -185,12 +188,15 @@ def return_reply(con, role, text, rows, *, since):
         send(con, record["inbox"], text, summary=text[:80], sender=role, to_session=session_id)
 
 
-def _sessionless_card_target(card):
-    """A card with no session to read mail. Not started yet, the row is pinned to its attempt and
-    handed over at its first tool boundary (B16, how the daemon mails a first attempt). Finished,
-    she is woken in her own session: CCB's SendMessage resumes a stopped agent from its transcript
-    with the message (resumeAgentBackground), Hermes' Bot Mode runs the turn in the recipient's own
-    session, and here that is the card's ``pane.continue_card``, what misaka_sister_message makes."""
+def _idle_card_target(card):
+    """A card nobody is running. Not started yet, the row is pinned to its attempt and handed over
+    at its first tool boundary (B16, how the daemon mails a first attempt). Finished, she is woken
+    in her own session: CCB's SendMessage resumes a stopped agent from its transcript with the
+    message (resumeAgentBackground), Hermes' Bot Mode runs the turn in the recipient's own session,
+    and here that is the card's ``pane.continue_card``, what misaka_sister_message makes. Her window
+    may still be open; the wake takes it over all the same, because her answer is then a new
+    attempt the sender can wait for (misaka_sister_output, block) -- a message put into that open
+    session left Last Order nothing to wait on, and she decided without the answer (B121)."""
     from misaka.core.network.sister_runtime import TERMINAL_BOARD_STATUSES
 
     if card["status"] == "review":
@@ -269,6 +275,8 @@ def _reader_target(record, board):
     from misaka.core.platform import tasks
 
     card = tasks.get(board, record["task_id"]) if record.get("task_id") else None
+    if card is not None and card["status"] in FINISHED:
+        return _idle_card_target(card)
     return _card_target(card, record) if card is not None else _session_target(record)
 
 
@@ -300,12 +308,10 @@ def resolve_address(addr, *, sender, space=None, sender_task=None, sender_sessio
             # Without a live session yet she is still starting: the row is pinned to this
             # attempt, and her inbox hands it over at her first tool boundary (B16).
             return {**_card_target(card, record), "starting": record is None}
-        if record is not None and card["status"] != "review":
-            # Finished, her window still open: that session reads it, as a message to its id
-            # would, and no new attempt is opened (what her answer changes is declared again
-            # when the turn ends -- B55, B110).
+        if record is not None and card["status"] not in FINISHED and card["status"] != "review":
+            # Parked for an answer, her window still open: that session reads it.
             return _session_target(record)
-        return _sessionless_card_target(card)
+        return _idle_card_target(card)
     if SESSION_ID.match(addr):
         if addr == sender_session:
             raise ValueError("That is this session; a message to yourself goes nowhere.")
@@ -320,6 +326,17 @@ def resolve_address(addr, *, sender, space=None, sender_task=None, sender_sessio
             raise ValueError(f"Session {addr} is not live; a session is addressed only while it runs.")
         if not record.get("inbox"):
             raise ValueError(f"Session {addr} ({record.get('role')}) reads no mail.")
+        if record.get("task_id"):
+            board = tasks.connect(_board_path())
+            try:
+                card = tasks.get(board, record["task_id"])
+            finally:
+                board.close()
+            if card is not None and card["status"] in FINISHED:
+                # A finished card's open window: wake the card, as for its closed session.
+                return resolve_address(record["task_id"], sender=sender, space=space,
+                                       sender_task=sender_task, sender_session=sender_session,
+                                       contact=contact)
         return _session_target(record)
     from misaka.core.network.ally import presets
     allies = presets.names()
@@ -442,16 +459,19 @@ def send_as(sender, addr, message, summary, *, request_input=False, card_task=No
     if target.get("wake_card"):
         who = "".join((sender, f" · card {card_task}" if card_task else "",
                        f" · session {sender_session}" if sender_session else ""))
-        out = wake_card(target, f"[Message from {who}. Answer with SendMessage; then complete the card "
-                                f"again with misaka_card_complete -- your deliverable stands unless you "
-                                f"change it.]\n{message}")
+        # A note that asks nothing gets no reply: a reply to a finished card wakes her in turn,
+        # and two finished cards thanking each other would wake each other for ever.
+        out = wake_card(target, f"[Message from {who}. If it asks you something, answer with SendMessage; "
+                                f"a note that asks nothing needs no reply. Then complete the card again "
+                                f"with misaka_card_complete -- your deliverable stands unless you change "
+                                f"it.]\n{message}")
         from misaka.core.platform import cards
         try:
             cards.append_log(target["workspace"], target["to_task"], sender, f"[message] {message}")
         except OSError:
             pass
         return {"content": [{"type": "text", "text": (
-            f"{target['label']} had no live session, so she was woken in her own session with your "
+            f"{target['label']} had finished, so she was woken in her own session with your "
             f"message as her next turn (pane {out['pane_id']}). A reply comes back as a message"
             + ("; to hear it before you go on, wait for her with misaka_sister_output "
                f"(task_id={target['to_task']}, block=true)." if sender == "last-order"

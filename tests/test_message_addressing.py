@@ -165,7 +165,7 @@ async def test_a_last_order_message_to_a_closed_card_continues_her_session(world
         "fixture", {"to": done, "message": "dig into the 1803 budget", "summary": "more"},
         None, None, SimpleNamespace())
     assert calls == [("pane.continue_card", {"task_id": done,
-                                             "say": "[Message from last-order · session " + lo + ". Answer with SendMessage; then complete the card again with misaka_card_complete -- your deliverable stands unless you change it.]\ndig into the 1803 budget",
+                                             "say": "[Message from last-order · session " + lo + ". If it asks you something, answer with SendMessage; a note that asks nothing needs no reply. Then complete the card again with misaka_card_complete -- your deliverable stands unless you change it.]\ndig into the 1803 budget",
                                              "expected_generation": 3, "consult": True,
                                              "place": {"grid": "p1"}})]
     assert out["details"]["woken"] and out["details"]["pane_id"] == "p7"
@@ -686,6 +686,8 @@ def test_a_research_card_is_told_which_siblings_wait_for_it():
     body = planner.task_body(spec, siblings=[spec, after, beside])
     assert "→ Sister 10036 (starts after yours is done)" in body
     assert "→ Sister 10038 (in parallel with yours)" in body
+    # 2026-10-01: a Sister sent to "task1", the plan's own label for her sibling; it is no address.
+    assert "C2" not in body and "C3" not in body and "`SendMessage` her number" in body
     body = planner.task_body({**after, "question": "q?", "rationale": "r", "deliverable": "d.md"},
                              siblings=[spec, after])
     assert "→ Sister 10037 (yours starts after it is done)" in body
@@ -708,11 +710,24 @@ def test_a_name_means_the_card_in_the_sender_s_own_node_first(world):
     assert _resolve("10038", sender="10036", sender_task=here)["to_task"] == only_parents
 
 
-def test_a_finished_card_with_its_window_open_is_reached_in_that_session(world):
-    """No new attempt for a card whose session still runs: the message goes to the session, as
-    one sent to its id would (2026-10-01: card A's answer to card B was refused by a wake that
-    could not claim B; the same answer sent to B's session id arrived in 3 s)."""
+def test_a_finished_card_with_its_window_open_is_woken_all_the_same(world):
+    """B121 (2026-10-01): after the red team, Last Order asked two finished cards whose windows
+    were still open; the messages went into those sessions, `misaka_sister_output(block=true)`
+    returned at once on the done cards, and she decided 40 s later without either answer. Her
+    card id, her session id and her name all wake the card, so the answer is an attempt to wait
+    for."""
     done = _finished(world)
-    window = _live(world, _sid(), role="10032", task_id=done)
-    target = _resolve(done, sender="10037", sender_task="t_000000")
+    window = _live(world, _sid(), role="10032", task_id=done, space=SPACE_T1)
+    for addr, kw in ((done, {}), (window, {"sender_session": _sid()}), ("10032", {"space": SPACE_T1})):
+        target = _resolve(addr, sender="last-order", **kw)
+        assert target["wake_card"] and target["to_task"] == done and target["generation"] == 2, addr
+
+
+def test_a_parked_card_with_its_window_open_is_still_reached_in_that_session(world):
+    """A card parked on a help request has not ended: the help protocol answers it, not a wake."""
+    parked = _finished(world)
+    world.board.execute("UPDATE tasks SET status='blocked', block_kind='needs_input' WHERE id=?", (parked,))
+    world.board.commit()
+    window = _live(world, _sid(), role="10032", task_id=parked)
+    target = _resolve(parked, sender="last-order")
     assert target["to_session"] == window and not target.get("wake_card")

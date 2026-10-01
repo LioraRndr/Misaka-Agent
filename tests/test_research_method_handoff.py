@@ -62,8 +62,8 @@ class ResearchMethodHandoffTests(unittest.TestCase):
                     self.assertEqual(body.count("[old-card] Current task → `nodes/n/old-card`"),
                                      int(with_previous))
                     self.assertEqual(body.count("## sibling cards"), int(with_sibling))
-                    self.assertEqual(body.count("r2/b · Other task → Sister 10032"), int(with_sibling))
-                    self.assertNotIn("r2/a · Current task", body)
+                    self.assertEqual(body.count("- Other task → Sister 10032"), int(with_sibling))
+                    self.assertNotIn("- Current task → Sister", body)
                     self.assertEqual(siblings, before)
                     self.assertEqual(previous[0]["output_dir"], "nodes/n/old-card")
 
