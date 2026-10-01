@@ -262,7 +262,11 @@ When a level has finished, Last Order looks across the whole graph, in the windo
 the run in, and rearranges it. With approval on, she presents this to you like a plan.
 
 - **Waiting options open as new nodes**, except those that complement an existing node, that a
-  node already pursues, that are really corrections, or that the depth or node limit stops.
+  node already pursues, that are really corrections, or that the depth or node limit stops. A
+  limit you put in your question counts too ("open two at most"): she opens the options with
+  the strongest reasons and records the rest as not opened because of it. What your question
+  says about how the run is carried out (which or how many Sisters, how many forks, how fast)
+  holds for every node's plan, not only the first.
 - **Options that ask the same question become one node** with several parents, so it is
   researched once. Two readings that share a name but define their key concept differently count
   as different questions.

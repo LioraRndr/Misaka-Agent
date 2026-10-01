@@ -731,3 +731,62 @@ def test_a_parked_card_with_its_window_open_is_still_reached_in_that_session(wor
     window = _live(world, _sid(), role="10032", task_id=parked)
     target = _resolve(parked, sender="last-order")
     assert target["to_session"] == window and not target.get("wake_card")
+
+
+def _node(world, run_id, node_id, *, depth, session_id):
+    now = int(time.time())
+    world.board.execute(
+        "INSERT INTO research_branches (id, run_id, question, depth, status, session_file, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (node_id, run_id, "q", depth, "executing",
+         f"state/sessions/research/{run_id}--node-{node_id}/2026-10-01T15-28-47-603Z_{session_id}.jsonl", now, now))
+    world.board.commit()
+
+
+def test_last_order_inside_a_run_means_the_last_order_of_the_sender_s_own_node(world):
+    """B123 (2026-10-01): a depth-1 card wrote to its node's Last Order by the session id its
+    contract gave, and was refused -- her window read no mail; `last-order` then reached the root's
+    window, which ran a turn for a card that was not hers. Every node's Last Order is a
+    `last-order` window in the one space: inside the run the name means the sender's own."""
+    run = _run(world)
+    root_lo, node_lo = _sid(), _sid()
+    _node(world, run, "b_root", depth=0, session_id=root_lo)
+    _node(world, run, "b_child", depth=1, session_id=node_lo)
+    _live(world, root_lo, role="last-order", space=SPACE_T1)
+    _live(world, node_lo, role="last-order", space=SPACE_T1)
+    child_card = _running(world, assignee="10037", title="T child card")
+    root_card = _running(world, assignee="10036", title="T root card")
+    _link(world, run, child_card, branch="b_child")
+    _link(world, run, root_card, branch="b_root")
+    assert _resolve("last-order", sender="10037", sender_task=child_card, space=SPACE_T1)["to_session"] == node_lo
+    assert _resolve("last-order", sender="10036", sender_task=root_card, space=SPACE_T1)["to_session"] == root_lo
+    assert _resolve(node_lo, sender="10037", sender_task=child_card)["to_session"] == node_lo
+    # Her own Last Order, writing `last-order`, is not sent to herself; outside the run both windows
+    # are candidates and the sender is shown them.
+    with pytest.raises(ValueError, match="2 live sessions"):
+        _resolve("last-order", sender="10032", space=SPACE_T1, sender_session=_sid())
+
+
+def test_a_node_s_window_reads_its_own_mail_and_leaves_the_card_notifications_to_the_root():
+    """B123: the node window ran without a mailbox, so its Sisters could not reach her; reading
+    the workspace's card notifications as well would take them from the root's window."""
+    import ast
+    import inspect
+    import textwrap
+
+    from misaka.core.network.wiring import network
+    from misaka.core.research import node
+    from misaka.core.wiring import SessionSpec
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(node.run_interactive)))
+    call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name) and n.func.id == "role_session_setup")
+    flags = {k.arg: k.value.value for k in call.keywords if isinstance(k.value, ast.Constant)}
+    assert flags["receive_messages"] is True and flags["receive_notifications"] is False
+    spec = SessionSpec(profile_dir="/p", role="last_order", workspace="/w", kind="foreground",
+                       sender="last-order", receive_messages=True, receive_notifications=False)
+    assert network.part(spec).receive_notifications is False
+    assert session_catalog._inbox(spec) == "last-order"
+    root = SessionSpec(profile_dir="/p", role="last_order", workspace="/w", kind="foreground",
+                       sender="last-order", receive_messages=True)
+    assert network.part(root).receive_notifications is True

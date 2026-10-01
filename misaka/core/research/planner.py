@@ -510,8 +510,9 @@ conclusions say something. What relates two nodes is what their conclusions say,
   question: two options named alike whose premises differ -- two readings under one name that rest on different
   definitions of their key concept -- are different possibilities. Write each new node's question for its Last Order.
 - An option stays unopened only for a structural reason: it complements a node that exists or opens now (name it), a
-  node already pursues it, it is a correction rather than a possibility, or the depth or node limit stops it. Record
-  that reason in `not_pursued`. "Not worth it" is not a reason: a genuine possibility is opened.
+  node already pursues it, it is a correction rather than a possibility, the depth or node limit stops it, or a limit
+  the user set for this run does -- how many forks may open, say: then open the options whose reasons weigh most within
+  it. Record that reason in `not_pursued`. "Not worth it" is not a reason: a genuine possibility is opened.
 - A possibility is opened once. An option whose premise a node already pursues -- at any depth, reached from any
   frame, as the paths list shows -- stays unopened: that node is its answer (name it). If
   what the option adds is that possibility meeting the proposing node's line, and the meeting is itself worth
@@ -792,6 +793,16 @@ def plan_approval_prompt(cfg, run=None):
     return PLAN_WAITS if plan_waits_for_user(cfg, run) else PLAN_AUTOMATIC
 
 
+def user_instructions(run):
+    """The run's question in the user's own words, for the phases that decide who works and what opens.
+    What it says about carrying the research out -- which or how many Sisters, how many forks, how fast --
+    holds for every node, not only the root that read it first (B122: a node's plan took a third Sister
+    and the root's reconciliation opened six forks where the user had allowed two)."""
+    return (f"\n# The user's question for this run, in their words\n{run['question']}\n"
+            "What it asks of how the research is carried out -- which or how many Sisters work, how many forks "
+            "open, how soon the run should end -- holds here as it did at the root.\n")
+
+
 def plan(run, cfg, worker, node, *, con, context_path=None):
     """Open or continue the node's Last Order session and return its research plan."""
     session_dir = _lo_session(run, node)
@@ -832,7 +843,7 @@ and without planning what another node of the graph already owns.
 {position(con, run, node)}
 # Context packet (its parents' conclusions, critiques, dispositions and decisions; read it first)
 {context_path}
-"""
+""" + user_instructions(run)
     prompt += navigation(run["id"]) + """
 Read the live workspace view before planning.
 """
@@ -1358,6 +1369,7 @@ def reconcile(con, run, cfg, worker, *, round, material, validate):
     session_dir = _lo_session(run, root)
     command = commands.reconcile_tool(con, run, round=round, validate=validate, session_file=run["root_session"])
     prompt = (RECONCILE_CONTRACT + (RECONCILE_WAITS if plan_waits_for_user(cfg, run) else "")
+              + user_instructions(run)
               + prompt_guard.untrusted("reconciliation", _catalog_text(material)) + navigation(run["id"]))
     recorded, _text = commanded(
         worker, cfg, prompt, command=command, name="misaka_research_reconcile",
@@ -1398,8 +1410,8 @@ when evidence warrants it and explain why. No separate planning submission, file
                   "This card is one piece of it; the rationale above says which piece.\n")
     lo_id = (read_session_header(str(home.from_stored(lo_session))) or {}).get("id") if lo_session else None
     if lo_id:
-        larger += (f"\nYour node's Last Order is session `{lo_id}`: send `SendMessage` to that id (`last-order` "
-                   "reaches her only while she is the one Last Order in this space).\n")
+        larger += (f"\nYour node's Last Order is session `{lo_id}`: send `SendMessage` to that id, or to "
+                   "`last-order`, which inside the run means her.\n")
     others = [spec for spec in siblings if spec.get("local_id") != task.get("local_id")]
     company = ""
     if previous:

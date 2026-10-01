@@ -57,6 +57,10 @@ class SessionSpec:
     sender: str | None = None
     mcp_role: str | None = None
     receive_messages: bool = False
+    # Whether this session also collects the workspace's card notifications; None = as
+    # ``receive_messages``. A research node's window reads its own mail but leaves the card
+    # notifications to the root's window (B123).
+    receive_notifications: bool | None = None
     task_id: str | None = None
     tool_ceiling: tuple[str, ...] | None = None
     # Where this session's skills come from, as ``(layer, root)`` pairs. None = the role's
@@ -256,8 +260,8 @@ def spec_overrides(overrides) -> tuple[tuple[str, Any], ...]:
     return tuple(sorted(clean(overrides).items()))
 
 
-def role_session_setup(profile_dir, workspace, *, model=None,
-                       receive_messages=False, research_context=False, startup_skills=(), overrides=None):
+def role_session_setup(profile_dir, workspace, *, model=None, receive_messages=False,
+                       receive_notifications=None, research_context=False, startup_skills=(), overrides=None):
     """One role session entry, independent of terminal, root/fork and lifetime.
 
     Callers add only their transport/session-selection flags. Research changes the
@@ -276,7 +280,7 @@ def role_session_setup(profile_dir, workspace, *, model=None,
     assembly = assemble(SessionSpec(
         profile_dir=profile_dir, role=role, workspace=workspace, kind="foreground",
         sender=sender, mcp_role=sender, receive_messages=receive_messages,
-        research_context=research_context, startup_skills=tuple(startup_skills),
+        receive_notifications=receive_notifications, research_context=research_context, startup_skills=tuple(startup_skills),
         overrides=spec_overrides(overrides)))
     from misaka.config import env as env_file
 

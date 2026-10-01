@@ -113,9 +113,11 @@ def test_reconcile_nudges_a_reply_that_ends_in_prose(monkeypatch):
     monkeypatch.setattr(planner, "_lo_session", lambda run, node: "/tmp")
     monkeypatch.setattr(planner.commands, "reconcile_tool", lambda *args, **kwargs: object())
     monkeypatch.setattr(planner, "find_most_recent_session", lambda directory: None)
-    run = {"id": "r1", "workspace": "/tmp", "root_session": "root.jsonl", "limits_json": "{}"}
+    run = {"id": "r1", "workspace": "/tmp", "root_session": "root.jsonl", "limits_json": "{}",
+           "question": "why is the sky blue"}
     outcome = planner.reconcile(None, run, {}, None, round=1, material={}, validate=lambda value: value)
     assert outcome == {"round": 1}
+    assert planner.user_instructions(run) in calls[0][0]      # B122: what the user allowed opens
     assert len(calls) == 2
     assert "ended without calling `misaka_research_reconcile`" in calls[1][0]
     assert calls[1][1] is True

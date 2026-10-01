@@ -131,6 +131,25 @@ class PromptGovernanceTests(unittest.TestCase):
                         self.assertIn(expected, call.call_args.args[2])
                         self.assertIn("only if you submit a follow-up plan", call.call_args.args[2])
 
+    def test_the_user_s_instructions_reach_every_node_s_plan_and_the_reconciliation(self):
+        """B122 (2026-10-01): the user allowed two Sisters and two forks; a depth-1 plan took a third
+        Sister by fit, and the reconciliation opened six forks -- its contract admitted no limit of the
+        user's among the reasons to leave an option unopened."""
+        words = "只派俩sis，分歧点如果很多那就先只派出两个"
+        run = {"id": "run", "root_session": "/fixture/session.jsonl", "workspace": "/fixture",
+               "question": words, "limits_json": "{}"}
+        node = {"id": "node", "depth": 1, "question": "a branch", "session_file": None}
+        with patch.object(planner, "_roster", return_value=[]), \
+                patch.object(planner, "_lo_session", return_value="/fixture"), \
+                patch.object(planner, "position", return_value="- fixture option"), \
+                patch.object(planner.runs, "limits", return_value={"max_depth": 3}), \
+                patch.object(planner, "_command", return_value=(
+                    {"payload": {}, "session_file": "/fixture/session.jsonl"}, "raw")) as command:
+            planner.plan(run, {}, SimpleNamespace(session=None), node, con=object())
+        self.assertIn(planner.user_instructions(run), command.call_args.args[5])
+        self.assertIn(words, planner.user_instructions(run))
+        self.assertIn("a limit\n  the user set for this run", planner.RECONCILE_CONTRACT)
+
     def test_research_phase_boundaries_and_saving_contract(self):
         self.assertIn("only deliverable is a research design", planner.ROOT_CONTRACT)
         self.assertNotIn("perform the `coverage_scan` check", planner.ROOT_CONTRACT)

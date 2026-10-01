@@ -209,6 +209,54 @@ def _idle_card_target(card):
             "label": f"card {card['id']} ({card['assignee']}: {card['title']})"}
 
 
+def _sender_node(board, *, sender_task, sender_session):
+    """``(run_id, node_id)`` of the research node the sender works on: her card's node, or the node
+    whose Last Order conversation she is; a run's window outside its nodes has no node, and a
+    sender outside any run has neither."""
+    if sender_task:
+        row = board.execute("SELECT run_id, branch_id FROM research_run_tasks WHERE task_id=?",
+                            (sender_task,)).fetchone()
+        if row:
+            return row["run_id"], row["branch_id"]
+    if sender_session:
+        tail = f"%{sender_session}.jsonl"   # stored session files end in their session id
+        row = board.execute("SELECT run_id, id FROM research_branches WHERE session_file LIKE ?",
+                            (tail,)).fetchone()
+        if row:
+            return row["run_id"], row["id"]
+        row = board.execute("SELECT id FROM research_runs WHERE origin_session=? OR root_session LIKE ?",
+                            (sender_session, tail)).fetchone()
+        if row:
+            return row["id"], None
+    return None, None
+
+
+def _node_last_order(*, sender_task, sender_session):
+    """The Last Order of the sender's own research node, live and reading mail, else None. Every
+    node's Last Order is a `last-order` window in the one panel space, so inside a run the name
+    means hers: the root's window for a root card, a node's own window for that node's (B123)."""
+    from misaka.core import session_catalog
+    from misaka.core.platform import tasks
+
+    if not (sender_task or sender_session):
+        return None
+    board = tasks.connect(_board_path())
+    try:
+        _run, node = _sender_node(board, sender_task=sender_task, sender_session=sender_session)
+        row = (board.execute("SELECT session_file FROM research_branches WHERE id=?", (node,)).fetchone()
+               if node else None)
+    except sqlite3.OperationalError:     # a board research has never touched has no such tables
+        return None
+    finally:
+        board.close()
+    name = os.path.basename((row["session_file"] if row else None) or "")
+    session_id = name[-len("00000000-0000-0000-0000-000000000000.jsonl"):-len(".jsonl")]
+    if not SESSION_ID.match(session_id) or session_id == sender_session:
+        return None
+    record = session_catalog.live_session(session_id)
+    return _session_target(record) if record is not None and record.get("inbox") else None
+
+
 def _run_cards(role, *, sender_task, sender_session):
     """The cards ``role`` holds where the sender works, the sender's own aside: her node's when it
     has any, else the whole run's -- a research graph puts the same Sister on several nodes, joins
@@ -220,22 +268,7 @@ def _run_cards(role, *, sender_task, sender_session):
         return []
     board = tasks.connect(_board_path())
     try:
-        run = branch = None
-        if sender_task:
-            row = board.execute("SELECT run_id, branch_id FROM research_run_tasks WHERE task_id=?",
-                                (sender_task,)).fetchone()
-            if row:
-                run, branch = row["run_id"], row["branch_id"]
-        if run is None and sender_session:
-            tail = f"%{sender_session}.jsonl"   # stored session files end in their session id
-            row = board.execute("SELECT run_id, id FROM research_branches WHERE session_file LIKE ?",
-                                (tail,)).fetchone()
-            if row:
-                run, branch = row["run_id"], row["id"]
-            else:
-                row = board.execute("SELECT id FROM research_runs WHERE origin_session=? OR root_session LIKE ?",
-                                    (sender_session, tail)).fetchone()
-                run = row["id"] if row else None
+        run, branch = _sender_node(board, sender_task=sender_task, sender_session=sender_session)
         if run is None:
             return []
         query = ("SELECT t.id, t.status, t.title FROM research_run_tasks l JOIN tasks t ON t.id=l.task_id "
@@ -346,6 +379,10 @@ def resolve_address(addr, *, sender, space=None, sender_task=None, sender_sessio
             f"Unknown recipient '{addr}'. Names: {', '.join(sorted(roles))}; "
             "or a running card's id, or a live session's id."
         )
+    if addr == "last-order":
+        mine = _node_last_order(sender_task=sender_task, sender_session=sender_session)
+        if mine is not None:
+            return mine
     readers = [record for record in (session_catalog.live_readers(addr, space) if space else [])
                if record.get("id") != sender_session
                and not (sender_task and record.get("task_id") == sender_task)]

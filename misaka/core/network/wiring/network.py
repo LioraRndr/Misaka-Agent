@@ -1194,4 +1194,5 @@ ROLES = {"last_order"}
 
 
 def part(spec):
-    return NetworkPart(receive_notifications=spec.receive_messages)
+    notifications = spec.receive_notifications
+    return NetworkPart(receive_notifications=spec.receive_messages if notifications is None else notifications)

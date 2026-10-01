@@ -105,10 +105,10 @@ local models and thinking levels.
 
 Agents message each other with the `SendMessage` tool, one recipient per message:
 
-- **a name** (`last-order`, `10036`) inside a research run means that Sister's card on the
-  sender's node (else in the run). Otherwise it reaches that role's session in the sender's panel
-  space, or her contact session when she has none open there. If several are open, the sender is
-  shown them and picks one;
+- **a name** inside a research run means that Sister's card on the sender's node (else in the
+  run), and `last-order` the Last Order of the sender's node. Otherwise it reaches that role's
+  session in the sender's panel space, or her contact session when she has none open there. If
+  several are open, the sender is shown them and picks one;
 - **a card ID** (`t_3cfb45`) reaches the session working that card. A card that has not started
   gets the message when it does. A finished card is woken: the message is her next turn in her
   own conversation (in her window, if it is still open), she answers, and completes again. Waking
