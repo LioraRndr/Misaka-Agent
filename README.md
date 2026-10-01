@@ -90,7 +90,7 @@ your research question.
 | Node parallelism | how many nodes run at the same time |
 | Card parallelism | how many cards each node runs at the same time |
 | Follow-up rounds | how many further rounds of cards may follow the first |
-| Revisions | how many times a conclusion may be revised after review |
+| Revisions | how many times a conclusion may be revised in each review loop (the red team's, then the divergence review's) |
 | Node limit | how many nodes the run may hold, the root included |
 | Plan approval | whether plans wait for your consent |
 | Compaction threshold | the share of the context at which conversation is compressed, for this run only |
@@ -127,14 +127,17 @@ Every node, your question included, passes through the same seven stages:
    graph and Last Order's reasoning. She checks the facts, raises gaps, tests whether the
    conclusion answers its parent and its rivals, and identifies what the conclusion leaves unsaid
    yet relies on.
-5. **Divergence review.** After the first review, the same Sister conducts a divergence review in
-   a fresh session. She separates possibilities not taken, which rest on different premises, from
-   gaps that any answer must fill, and brings out the presuppositions behind each of the
-   conclusion's choices and what each gains and gives up.
-6. **Response to review.** Last Order gives each material objection and each gap exactly one
-   response: revise, rebut, concede a cost, refer it to the node that owns it, park it, or take
-   it to a decision. Where something is revised, the conclusion is issued in a new version and
-   returned to the same red team, until nothing remains to revise or the revisions are exhausted.
+5. **Response to review.** Last Order gives each material objection exactly one response: revise,
+   rebut, concede a cost, refer it to the node that owns it, park it, or take it to a decision.
+   Before answering an objection about a card's material she can ask the Sister who wrote it and
+   hear her out. Where something is revised, the conclusion is issued in a new version and
+   returned to the same red team, until nothing material remains or the revisions are exhausted.
+6. **Divergence review.** Once the red team's loop is over, the same Sister conducts a divergence
+   review in a fresh session. She separates possibilities not taken, which rest on different
+   premises, from gaps that any answer must fill, and brings out the presuppositions behind each
+   of the conclusion's choices and what each gains and gives up. Last Order fills or answers every
+   gap within the node; each version that fills one is reviewed again, until no gap is left or
+   the revisions are exhausted.
 7. **Decision.** Each possibility not taken is recorded as an option to open, as already covered,
    or as declined with a reason. A presupposition on which the answer depends may itself become a
    fork: the node opened for it examines whether it holds, and how the answer changes if it does

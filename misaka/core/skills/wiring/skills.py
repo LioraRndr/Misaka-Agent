@@ -272,10 +272,14 @@ class SkillsPart:
                 protected = _touches_live_skills(str(tool or ""), args)
             if protected == "dynamic":
                 return {"block": True, "reason": (
-                    "This session runs unattended, so a shell command carrying substitution "
-                    "($(...), backticks or ${...}) is refused: the guard that keeps live skill trees "
-                    "read-only here cannot resolve where the expansion would point. Rewrite it with "
-                    "literal paths. Skills themselves are read with skill_view and changed with skill_manage."
+                    # The message names a bare $NAME too: it is refused like ${...}, and a message
+                    # that left it out sent Sisters back to the same refusal five times (2026-10-01).
+                    "This session runs unattended, so a shell command that expands a variable or "
+                    "substitutes a command ($NAME, ${...}, $(...), backticks) is refused -- a variable "
+                    "set earlier in the same command included: the guard that keeps live skill trees "
+                    "read-only here cannot resolve where the expansion would point. Write every path out "
+                    "literally; a $ inside single quotes stays literal and is fine. Skills themselves are "
+                    "read with skill_view and changed with skill_manage."
                 )}
             if protected and protected != "path":
                 return {"block": True, "reason": protected}

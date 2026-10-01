@@ -6,7 +6,11 @@ SESSION_KINDS = KINDS
 SISTER_TOOLS = {
     "SendMessage": ("Consult `last-order` or a registered Sister ID about evidence, methods, progress or dependencies. "
                     "A name reaches the one session of that role in your space; with several there, address one "
-                    "by its card or session id. Delivery is asynchronous and may wake a contact session. "
+                    "by its card or session id. To go back to the Sister who did a piece of work, address "
+                    "her card or session id, never her name: a name may reach her contact session, which "
+                    "holds none of that work. A finished card or its closed session is woken in her own "
+                    "conversation by your message; a card that has not started gets it when it does. "
+                    "Delivery is asynchronous and may wake a contact session. "
                     "Owned sub-agent IDs/names are resolved before those names. "
                     "Ordinary messages do not create, start, complete or park a card."),
     "misaka_sister_view": "Read a registered Sister's introduction to choose a collaborator.",

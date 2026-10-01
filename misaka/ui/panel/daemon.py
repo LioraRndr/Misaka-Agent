@@ -48,7 +48,7 @@ else:
 # Wire protocol version (strict equality, as in herdr). Bump it whenever *server
 # behaviour* changes, not only method/event shapes: an unbumped behaviour change
 # once let a stale daemon slip through the version gate.
-PROTOCOL = 53   # 53: panes.list takes {"tab_of": pane_id}, the panes of that pane's tab (Last Order's pane tools); 52: spaces have durable ids (state/spaces.json), a pane's program carries MISAKA_NET_SPACE, place {"space": id} reopens a remembered space, layout.get lists dormant spaces; 51: screen frames carry the program's content revision, a pane's OSC 52 copy reaches the panel, idle scrollback is compressed; 50: one home, one layout table -- a daemon from before it serves the old paths; 49: panes.list says which pane holds a card's claim, and a card is continued in the pane it already has; 48: pane.send/pane.input drain through a per-pane write queue and wait for delivery; 47: drag resizes are fire-and-forget (id=None, no reply) and the layout is persisted at drag end, so the divider never blocks on a busy daemon; 46: a drag resizes the program as fast as it repaints; 44: reflow held until repaint; 43: libghostty-vt; 42: panes.resize acknowledged first; 40: shown frame in a sync block; 38: input state, extract, kitty
+PROTOCOL = 54   # 54: pane.continue_card takes {"consult": true}: a message wakes a finished card without sending its dependents back to todo; 53: panes.list takes {"tab_of": pane_id}, the panes of that pane's tab (Last Order's pane tools); 52: spaces have durable ids (state/spaces.json), a pane's program carries MISAKA_NET_SPACE, place {"space": id} reopens a remembered space, layout.get lists dormant spaces; 51: screen frames carry the program's content revision, a pane's OSC 52 copy reaches the panel, idle scrollback is compressed; 50: one home, one layout table -- a daemon from before it serves the old paths; 49: panes.list says which pane holds a card's claim, and a card is continued in the pane it already has; 48: pane.send/pane.input drain through a per-pane write queue and wait for delivery; 47: drag resizes are fire-and-forget (id=None, no reply) and the layout is persisted at drag end, so the divider never blocks on a busy daemon; 46: a drag resizes the program as fast as it repaints; 44: reflow held until repaint; 43: libghostty-vt; 42: panes.resize acknowledged first; 40: shown frame in a sync block; 38: input state, extract, kitty
 RING_CAP = 256 * 1024          # output tail kept per pane
 SEND_TIMEOUT = 8.0             # pane.send: how long a message may take to enter the pane before it counts as undelivered (under the client's 10 s request timeout)
 INPUT_TIMEOUT = 1.0            # pane.input: keystrokes and pastes wait this long, then stay queued (typing must not block the panel)
@@ -1740,17 +1740,19 @@ class Daemon:
                 f"Card {row['id']}'s previous process is still running; try again."
             )
 
-    async def continue_card(self, task_id, say, place=None, *, expected_generation=None) -> Pane:
+    async def continue_card(self, task_id, say, place=None, *, expected_generation=None, consult=False) -> Pane:
         """Continue a settled card with a new model turn: the same ``claim_resume`` as the
         in-process Sister runtime (a new generation under our lock), after which the
-        session lifecycle settles the card exactly like a first run."""
+        session lifecycle settles the card exactly like a first run. ``consult``: she is woken to
+        answer a message, so the cards built on her answer stay as they are."""
         from misaka.core.platform import admission
         from misaka.core.platform import tasks as db
         async with self._card_lock(task_id):
             return await self._continue_card(task_id, say, place, expected_generation,
-                                             admission=admission, db=db)
+                                             admission=admission, db=db, consult=consult)
 
-    async def _continue_card(self, task_id, say, place, expected_generation, *, admission, db) -> Pane:
+    async def _continue_card(self, task_id, say, place, expected_generation, *, admission, db,
+                             consult=False) -> Pane:
         row, transcript = self._settled_card_with_session(task_id, require_session=False)
         generation = int(row["generation"])
         if expected_generation is not None and generation != int(expected_generation):
@@ -1766,7 +1768,8 @@ class Daemon:
         host_cap, assignee_cap = admission.limits()
         if not db.claim_resume(con, task_id, lock, os.getpid(),
                                expected_generation=generation,
-                               host_cap=host_cap, assignee_cap=assignee_cap):
+                               host_cap=host_cap, assignee_cap=assignee_cap,
+                               consult=consult):
             raise ValueError(f"Card {task_id} could not be claimed for continuation; it changed "
                              "underneath, or the host is at capacity.")
         row = db.get(con, task_id)
@@ -2206,6 +2209,7 @@ class Daemon:
             return self._hosted(self.continue_card(
                 params["task_id"], params["say"], place=params.get("place"),
                 expected_generation=params.get("expected_generation"),
+                consult=bool(params.get("consult")),
             ))
         if method == "pane.read":
             pane = self.panes.get(params["id"])

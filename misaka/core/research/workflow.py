@@ -748,15 +748,13 @@ def _receive_critique(con, run, node, task, round):
     return None
 
 
-def _receive_divergence(con, run, node, task):
-    """Receive the divergence review's frozen submission: its gaps join round 1's material issues,
-    for Last Order to fill inside this node; its proposals of possibilities not taken wait for the
-    node's decision."""
+def _receive_divergence(con, run, node, task, version):
+    """Receive the divergence review of version ``version``: its gaps are this node's to fill before
+    it forks, and its proposals of possibilities not taken wait for the node's decision. Issues of
+    a divergence review are kept per reviewed version, like the red team's."""
     submitted = _submitted_payload(con, task)
     if "alternatives" not in submitted:
         return f"Divergence card {task['id']} has not recorded alternatives through misaka_card_note."
-    if con.execute("SELECT 1 FROM research_issues WHERE task_id=? LIMIT 1", (task["id"],)).fetchone():
-        return None                                   # received with version 1's review; a re-review reads it again
     items = []
     for item in submitted["alternatives"]:
         rationale = f"Premise: {item['premise']}\nThe reviewer's case: {item['rationale']}"
@@ -764,13 +762,68 @@ def _receive_divergence(con, run, node, task):
             rationale += f"\nThe reviewer sees {item['covered_by']} already pursuing it."
         items.append({"kind": item["kind"], "question": item["proposal"], "rationale": rationale,
                       "origin": "gap" if item["gap"] else "divergence"})
-    _receive_issues(con, run, node, task, round=1, items=items)
+    _receive_issues(con, run, node, task, round=version, items=items)
     return None
 
 
-def _gaps(con, run, node):
-    """The divergence review's gaps of this node: material issues of round 1 beside the critique's."""
-    return list(runs.issues(con, run["id"], node_id=node["id"], origin="gap"))
+def _gaps(con, run, node, version):
+    """The gaps the divergence review found in version ``version`` of the conclusion."""
+    return list(runs.issues(con, run["id"], node_id=node["id"], round=version, origin="gap"))
+
+
+def _divergence_requests(con, card):
+    """Every review the divergence card was asked for, oldest first: ``version`` reviewed, its
+    ``round`` (the file it writes), and ``from_generation``, the attempt it went on from."""
+    return [json.loads(row["payload"] or "{}") for row in con.execute(
+        "SELECT payload FROM events WHERE task_id=? AND kind='divergence_review' ORDER BY id", (card["id"],))]
+
+
+def _divergence_request(con, card, version):
+    return next((r for r in reversed(_divergence_requests(con, card)) if int(r.get("version") or 0) == version), None)
+
+
+def _divergence_reviewed(con, card, version):
+    """Whether the card's current attempt is its review of version ``version``."""
+    request = _divergence_request(con, card, version)
+    return request is not None and int(card["generation"]) > int(request["from_generation"])
+
+
+def _divergence_brief(con, run, node, version, *, round):
+    """The divergence review of version ``version``: the card's contract in its first round, the
+    message it is continued with after -- with what Last Order did with every gap so far."""
+    again = None
+    if round > 1:
+        card = _divergence_card(con, run, node)
+        earlier = [r for r in _divergence_requests(con, card) if int(r["round"]) < round]
+        gaps = [row for r in earlier for row in _gaps(con, run, node, int(r["version"]))]
+        again = {"round": round,
+                 "previous": runs.artifact_path(_synthesis(con, run, node, int(earlier[-1]["version"]))),
+                 "reviews": _divergence_paths(con, run, node, card),
+                 "dispositions": prompt_guard.untrusted("dispositions", planner.disposition_table(gaps))}
+    return planner.divergence_body(
+        node, synthesis_path=runs.artifact_path(_synthesis(con, run, node, version)),
+        plan_path=_artifact_paths(con, run, node, "plan"), graph_path=graph.graph_path(run),
+        paths_path=graph.paths_path(run), deliverable=runs.versioned("divergence.md", round), rereview=again)
+
+
+def _divergence_paths(con, run, node, card):
+    """The divergence reviews on file, every round's ``divergence*.md``."""
+    return [runs.artifact_path(row) for row in runs.artifacts(con, run["id"], kind="divergence", task_id=card["id"])
+            if os.path.splitext(row["path"])[1].lower() == ".md"]
+
+
+def _earlier_divergence(con, run, node, version):
+    """What the divergence review of version ``version`` - 1 left, for the gap revision that makes
+    version ``version``: the previous conclusion, the review, and what Last Order did with each gap."""
+    previous = version - 1
+    card = _divergence_card(con, run, node)
+    request = _divergence_request(con, card, previous)
+    name = runs.versioned("divergence.md", int(request["round"])) if request else None
+    return {
+        "previous": runs.artifact_path(_synthesis(con, run, node, previous)),
+        "last_critiques": [path for path in _divergence_paths(con, run, node, card) if os.path.basename(path) == name],
+        "last_dispositions": planner.disposition_table(_gaps(con, run, node, previous)),
+    }
 
 
 def _divergence_card(con, run, node):
@@ -869,12 +922,13 @@ def _append_corrections(con, run, node, version, dispositions):
            runs.versioned("synthesis.md", version), text, version=version)
 
 
-def _revisions(con, run, node, *, before=None):
-    """How many times the node has chosen to revise its conclusion -- its review rounds whose
-    dispositions include a revise -- counting only rounds before ``before`` when given."""
+def _revisions(con, run, node, *, before=None, loop="dispose"):
+    """How many times the node has chosen to revise its conclusion in one review loop -- the red
+    team's (``dispose``) or the divergence review's (``gaps``): its rounds whose dispositions include
+    a revise -- counting only rounds before version ``before`` when given."""
     count = 0
     for row in con.execute("SELECT action_key,payload_json FROM research_actions WHERE run_id=? AND branch_id=? "
-                           "AND action_key LIKE 'dispose:%'", (run["id"], node["id"])):
+                           "AND action_key LIKE ?", (run["id"], node["id"], f"{loop}:%")):
         if before is not None and int(row["action_key"].split(":", 1)[1]) >= before:
             continue
         count += any(item["disposition"] == "revise" for item in json.loads(row["payload_json"])["dispositions"])
@@ -992,14 +1046,15 @@ def _red_team_brief(con, run, node, version, assignee):
         deliberation_path=_artifact_path(con, run, node, "deliberation") if written else None,
         evidence=planner.evidence_block(con, run, node),
         own_cards=[row for row in _done(con, run, node, "research") if row["assignee"] == assignee],
-        rereview=rereview, deliverable=runs.versioned("critique.md", version), gaps=_gaps(con, run, node))
+        rereview=rereview, deliverable=runs.versioned("critique.md", version))
 
 
 def _after_review(con, run, node, set_node):
-    """Where a node goes once its review loop is over: to its decision when it can still fork, else
-    it has finished its own work."""
+    """Where a node goes once its red-team loop is over: to the divergence review when it can still
+    fork -- the gaps it left are filled first, its possibilities not taken become its decision --
+    else it has finished its own work."""
     if node["depth"] < runs.limits(run)["max_depth"]:
-        set_node(status="deciding")
+        set_node(status="diverging")
         return None
     return _close(con, run, node, "closed")
 
@@ -1177,14 +1232,25 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             set_node(status="synthesizing")
 
         elif status == "synthesizing":
+            # A card woken by a message -- a Sister's question, Last Order's consultation -- runs a new
+            # attempt; the conclusion is written from every card, so the node waits for her as it
+            # waits for any card (2026-10-01: version 2 was written while card B answered, and B was
+            # missing from its material map).
+            if any(row["status"] in ("running", "review")
+                   for row in runs.tasks(con, run["id"], kind="research", node_id=nid)):
+                set_node(status="executing")
+                continue
             done = _done(con, run, node, "research")
             # The round whose cards she is reading is the latest one with cards back, not the
             # latest plan: a follow-up plan recorded just before a crash has no cards yet.
             round = max((int(row["round"] or 1) for row in done), default=1)
             left = runs.limits(run)["max_followups"] - (round - 1)    # follow-ups still allowed on this node
-            version = _revisions(con, run, node) + 1
+            version = _revisions(con, run, node) + _revisions(con, run, node, loop="gaps") + 1
+            # The red team reviews the versions of its own loop; once the divergence review has
+            # begun, a revision is reviewed by her divergence review again.
+            reviewer = "diverging" if _divergence_card(con, run, node) is not None else "critiquing"
             if _synthesis(con, run, node, version):
-                set_node(status="critiquing")
+                set_node(status=reviewer)
                 continue
             if _followup_recorded(con, run, node, round):   # a crash after she asked for more cards
                 set_node(status="planning")
@@ -1201,9 +1267,11 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
                 runs.delete_action(con, run["id"], nid, runs.dissolve_key(version))
             revision = None
             if version > 1:
-                earlier = _earlier_review(con, run, node, version)
+                earlier = (_earlier_divergence(con, run, node, version) if reviewer == "diverging"
+                           else _earlier_review(con, run, node, version))
                 revision = {"version": version, "review": version - 1, "previous": earlier["previous"],
-                            "critiques": earlier["last_critiques"], "dispositions": earlier["last_dispositions"]}
+                            "critiques": earlier["last_critiques"], "dispositions": earlier["last_dispositions"],
+                            "reviewer": "divergence" if reviewer == "diverging" else "red_team"}
             text = await asyncio.to_thread(planner.synthesize, con, run, cfg, worker, node, done,
                                            followup=followup, round=round, left=max(left, 0), revision=revision,
                                            dissolve=_dissolve_tool(con, run, node, version),
@@ -1220,7 +1288,7 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
                 continue
             _write(con, run, node, "synthesis", f"Conclusion · {_label(node)}" + (f" · version {version}" if version > 1 else ""),
                    runs.versioned("synthesis.md", version), text, version=version)
-            set_node(status="critiquing")
+            set_node(status=reviewer)
 
         elif status == "critiquing":
             version = len(graph.syntheses(con, run, node))
@@ -1261,20 +1329,7 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
                                     f"yet ({error}); trying again.", run)
                     await asyncio.sleep(poll_seconds)
                     continue
-            if node["depth"] < runs.limits(run)["max_depth"] and _divergence_card(con, run, node) is None:
-                # After the first review, in a session of its own: the possibilities the conclusion did
-                # not take, and the gaps it left -- which this node fills before it forks.
-                spec = {"local_id": "@divergence", "title": f"Divergence review · {_label(node)}",
-                        "question": node["question"], "rationale": "Alternatives the conclusion did not take.",
-                        "assignee": red["assignee"], "deliverable": "divergence.md",
-                        "instructions": planner.divergence_body(
-                            node, synthesis_path=runs.artifact_path(_synthesis(con, run, node, 1)),
-                            plan_path=_artifact_paths(con, run, node, "plan"),
-                            graph_path=graph.graph_path(run), paths_path=graph.paths_path(run))}
-                await _submit_tasks(con, run, node, [spec], kind="divergence", progress=progress)
             outcome = await drive("red_team")
-            if outcome == "done" and _divergence_card(con, run, node) is not None:
-                outcome = await drive("divergence")   # a node at max_depth has none: an empty scope is a failure
             # Terminal, as in the executing phase: a node left non-terminal by a process that has
             # already exited is what the driver turns into a dead run.
             if outcome == "failed":
@@ -1298,13 +1353,7 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             unusable = _receive_critique(con, run, node, red, version)
             if unusable:
                 return fail(red, unusable)
-            divergence = _divergence_card(con, run, node)
-            if divergence is not None:
-                unusable = _receive_divergence(con, run, node, divergence)
-                if unusable:
-                    return fail(divergence, unusable)
-            if runs.issues(con, run["id"], node_id=nid, round=version, origin="critique") or (
-                    version == 1 and _gaps(con, run, node)):
+            if runs.issues(con, run["id"], node_id=nid, round=version, origin="critique"):
                 set_node(status="disposing")
                 continue
             reason = "The red team reported no material issues" + (f" on version {version}." if version > 1 else ".")
@@ -1322,18 +1371,13 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             red = _red_team_card(con, run, node)
             if red is None or red["status"] != "done" or not _reviewed(con, red, version):
                 raise RuntimeError(f"Node {nid} has no completed red-team review to answer.")
-            # Round 1 answers the divergence review's gaps with the critique's issues: a gap is filled
-            # here or conceded here, never handed to the nodes opened from this one.
             issues = list(runs.issues(con, run["id"], node_id=nid, round=version, origin="critique"))
-            divergence = _divergence_card(con, run, node) if version == 1 else None
-            if divergence is not None:
-                issues += _gaps(con, run, node)
             revisions_left = runs.limits(run)["max_revisions"] - _revisions(con, run, node, before=version)
             await _progress(progress, "review_returned",
                             f"The red-team review of {_label(node)} is back with its Last Order: "
                             f"{len(issues)} material issue(s) to answer.", run)
             dispositions = await asyncio.to_thread(planner.dispose, con, run, cfg, worker, node, red, issues,
-                                                   round=version, revisions_left=revisions_left, divergence=divergence)
+                                                   round=version, revisions_left=revisions_left)
             with runs.owned_txn(con, owner_run, owner_node):
                 for item in dispositions:
                     runs.dispose(con, item["issue_id"], item["disposition"], covered_by=item["covered_by"] or None,
@@ -1351,6 +1395,96 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             closed = _after_review(con, run, node, set_node)
             if closed is not None:
                 return closed
+
+        elif status == "diverging":
+            # After the red-team loop, in a session of its own: the possibilities the conclusion did
+            # not take, and the gaps it left. The gaps are this node's to fill, and every version a
+            # gap revision makes is reviewed again, until a review finds no gap or the node's gap
+            # revisions are spent; only then do the possibilities become its decision (2026-10-01).
+            version = len(graph.syntheses(con, run, node))
+            card = _divergence_card(con, run, node)
+            if card is None:
+                assignee = _red_team_assignee(con, run, node)
+                await _progress(progress, "divergence", f"Preparing Sister {assignee}'s divergence review of "
+                                f"{_label(node)}" + (f", version {version}" if version > 1 else "") + ".", run)
+                spec = {"local_id": "@divergence", "title": f"Divergence review · {_label(node)}",
+                        "question": node["question"], "rationale": "Alternatives the conclusion did not take.",
+                        "assignee": assignee, "deliverable": "divergence.md",
+                        "instructions": _divergence_brief(con, run, node, version, round=1)}
+                await _submit_tasks(con, run, node, [spec], kind="divergence", progress=progress)
+                card = _divergence_card(con, run, node)
+                task_store.add_event(con, card["id"], "divergence_review",
+                                     {"version": version, "round": 1, "from_generation": 0},
+                                     generation=int(card["generation"]))
+            elif not _divergence_reviewed(con, card, version):
+                request = _divergence_request(con, card, version)
+                if request is None:
+                    await _progress(progress, "divergence",
+                                    f"Sister {card['assignee']} goes on with her divergence review of "
+                                    f"{_label(node)}: version {version}.", run)
+                    task_store.add_event(con, card["id"], "divergence_review",
+                                         {"version": version, "round": len(_divergence_requests(con, card)) + 1,
+                                          "from_generation": int(card["generation"])},
+                                         generation=int(card["generation"]))
+                    request = _divergence_request(con, card, version)
+                try:
+                    await runner.continue_card(card["id"], _divergence_brief(con, run, node, version,
+                                                                             round=request["round"]),
+                                               expected_generation=int(request["from_generation"]))
+                except (ValueError, RuntimeError, OSError) as error:
+                    await _progress(progress, "divergence", f"Sister {card['assignee']}'s card could not be "
+                                    f"continued yet ({error}); trying again.", run)
+                    await asyncio.sleep(poll_seconds)
+                    continue
+            outcome = await drive("divergence")
+            if outcome == "failed":
+                return _close(con, run, node, "failed")
+            if outcome != "done":
+                return outcome
+            check()
+            settle_done_tasks(con, run_id=run["id"])
+            card = _divergence_card(con, run, node)
+            if not _divergence_reviewed(con, card, version):
+                await asyncio.sleep(poll_seconds)      # the continuation has not taken the card yet
+                continue
+            request = _divergence_request(con, card, version)
+            if request["round"] > 1:
+                # As with the red team: a later round's file is named in the message that continued her.
+                review = Path(card["output_dir"], runs.versioned("divergence.md", request["round"]))
+                if not review.is_file() or review.stat().st_size == 0:
+                    return fail(card, f"Divergence card {card['id']} did not deliver {review.name} for version {version}.")
+            unusable = _receive_divergence(con, run, node, card, version)
+            if unusable:
+                return fail(card, unusable)
+            if _gaps(con, run, node, version):
+                set_node(status="filling_gaps")
+                continue
+            set_node(status="deciding")
+
+        elif status == "filling_gaps":
+            version = len(graph.syntheses(con, run, node))
+            card = _divergence_card(con, run, node)
+            if card is None or card["status"] != "done" or not _divergence_reviewed(con, card, version):
+                raise RuntimeError(f"Node {nid} has no completed divergence review to answer.")
+            gaps = _gaps(con, run, node, version)
+            revisions_left = runs.limits(run)["max_revisions"] - _revisions(con, run, node, before=version, loop="gaps")
+            await _progress(progress, "review_returned",
+                            f"The divergence review of {_label(node)} is back with its Last Order: "
+                            f"{len(gaps)} gap(s) to fill or answer.", run)
+            dispositions = await asyncio.to_thread(planner.fill_gaps, con, run, cfg, worker, node, card, gaps,
+                                                   version=version, round=_divergence_request(con, card, version)["round"],
+                                                   revisions_left=revisions_left)
+            with runs.owned_txn(con, owner_run, owner_node):
+                for item in dispositions:
+                    runs.dispose(con, item["issue_id"], item["disposition"], covered_by=item["covered_by"] or None,
+                                 reason=item["reason"])
+            counts = {}
+            for item in dispositions:
+                counts[item["disposition"]] = counts.get(item["disposition"], 0) + 1
+            await _progress(progress, "disposed", f"{_label(node)}: "
+                            + ", ".join(f"{name} {count}" for name, count in sorted(counts.items())) + ".", run,
+                            dispositions=counts)
+            set_node(status="synthesizing" if counts.get("revise") else "deciding")
 
         elif status == "deciding":
             review = _divergence_card(con, run, node)

@@ -118,3 +118,33 @@ async def test_an_aborted_turn_and_another_session_do_not_declare(card):
     part.session.sessionManager.sessionFile = str(out.parents[2] / "someone-else.jsonl")
     await _end_turn(part, "a reader pane's turn")
     assert len(_submissions(con, tid)) == 1
+
+
+async def _note(part, **params):
+    tool = next(t for t in part.tools if t.name == "misaka_card_note")
+    return await tool.execute("fixture", {"text": "note", **params}, None, None, None)
+
+
+async def test_findings_recorded_after_the_completion_are_declared_with_the_card(card):
+    """2026-10-01 (B110): card A finished, then answered card B's question with better-dated
+    evidence; misaka_card_note refused ("Card ownership changed..."), and the evidence stayed only
+    in her message to B -- the red team and the report never saw it."""
+    con, tid, out, part = card
+    await _complete(con, tid, out, part)
+    finding = {"text": "Wukong Bike stopped on 13 June 2017", "claim_type": "fact", "source_file": "report.md"}
+
+    result = await _note(part, findings=[finding])
+
+    assert "recorded 1 finding(s)" in result["content"][0]["text"]
+    await _end_turn(part, "answered card B")
+    rows = _submissions(con, tid)
+    assert len(rows) == 2 and [f["text"] for f in rows[-1]["findings"]] == [finding["text"]]
+    assert tasks.latest_payload(con, tid, "redeclared", generation=1)
+
+
+async def test_a_session_that_no_longer_holds_the_card_still_cannot_record_evidence(card):
+    con, tid, out, part = card
+    await _complete(con, tid, out, part)
+    con.execute("UPDATE tasks SET generation=2 WHERE id=?", (tid,))    # a newer attempt owns the card
+    with pytest.raises(ValueError, match="ownership changed"):
+        await _note(part, findings=[{"text": "late", "claim_type": "fact"}])

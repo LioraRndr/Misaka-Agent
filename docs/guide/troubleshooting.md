@@ -140,14 +140,18 @@ The conversation no longer fits the model even after compaction. Start a new one
 ## Messages between agents
 
 **A message to a Sister seems lost.**
-Messages wait until their recipient reads them. One sent to a Sister by name waits for her
-contact session; to deliver it now:
+Messages wait until their recipient reads them. One sent to a Sister by name, outside a research
+run and with no session of hers open in the sender's space, waits for her contact session; to
+deliver it now:
 
 ```sh
 misaka dm 10032
 ```
 
-One sent to a card or a session waits for that card or session.
+Her answer goes back to the window that wrote. One sent to a card that has not started waits for
+it to start; one sent to a running card or a live session arrives at its next tool boundary, which
+can take a while if it is in the middle of a long step. A finished card is woken by the message,
+so its answer comes after a new turn of hers.
 
 **`Unknown recipient ...`, or `... is N live sessions in this space`**
 Address a Sister by her number (`10032`). If several of her sessions are open, name one by its

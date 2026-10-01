@@ -413,13 +413,13 @@ def workspace_for(task):
     return canonical_workspace(task["workspace"])
 
 
-def _card_dispatchable(con, task_id):
+def _card_dispatchable(con, task_id, *, require_parents=True):
     """One card's file-side gate, checked per claim; the project-wide pass is per tick."""
     row = con.execute("SELECT workspace FROM tasks WHERE id=?", (task_id,)).fetchone()
     if row is None:
         return False
     from misaka.core.platform import cards
-    return cards.dispatchable(con, row["workspace"], task_id)
+    return cards.dispatchable(con, row["workspace"], task_id, require_parents=require_parents)
 
 
 @_serialized
@@ -1709,10 +1709,18 @@ def claim_resume(
     expected_generation=None,
     host_cap=None,
     assignee_cap=None,
+    consult=False,
 ) -> bool:
-    """Atomically reopen a finished card as a new generation and claim it for continuation."""
+    """Atomically reopen a finished card as a new generation and claim it for continuation.
+
+    By default this is rework: the cards built on the old answer go back to todo, and the
+    card needs its parents done as any start does. ``consult`` is a card woken only to answer
+    a message: nothing built on her is sent back (2026-10-01: Last Order's note to a finished
+    card sent its finished dependent back to redo its whole job), and a parent being consulted
+    at that moment does not keep her from answering (2026-10-01: card A, woken by card B's
+    question, could not wake B to give the answer, since B's parent A was running)."""
     now = int(time.time())
-    if not _card_dispatchable(con, task_id):
+    if not _card_dispatchable(con, task_id, require_parents=not consult):
         return False
     generation_clause = (
         " AND generation=?" if expected_generation is not None else ""
@@ -1745,7 +1753,8 @@ def claim_resume(
         ).fetchone()
         if row is None:
             return False
-        _invalidate_descendants(con, task_id)     # work built on the old answer goes back to todo
+        if not consult:
+            _invalidate_descendants(con, task_id)     # work built on the old answer goes back to todo
         _start_run(con, task_id, int(row["generation"]), "worker", lock, pid, worker_identity)
         # Publish the new generation under the card lock before its worker can run.
         # Submission's Git tail holds that lock without a SQLite transaction, so an

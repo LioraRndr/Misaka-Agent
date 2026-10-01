@@ -353,3 +353,22 @@ async def test_lcm_child_inherits_resumed_project_not_launcher(isolated, endpoin
         assert marker['data']['workspace'] == str(project.resolve())
     finally:
         await manager.close()
+
+
+async def test_message_to_unstarted_child_returns_at_once(isolated, endpoint):
+    # A child still queued for a slot has nothing to consume steering with; the
+    # sender used to wait on it until the child started and reached a tool round.
+    manager, session = host(isolated)
+    try:
+        task = await create(manager, session)
+        assert task.status == "pending" and task.process is None
+        result = await asyncio.wait_for(
+            manager.send_message(task.id, "LATE_MARKER", context=session), 3)
+        assert result["success"]
+        async with asyncio.timeout(20):
+            await manager._drive(task, "FIRST_MARKER", notify=False)
+        assert task.status == "completed", (task.error, task.stderr)
+        assert any("LATE_MARKER" in json.dumps(r["messages"]) for r in endpoint)
+        assert not task.pending_messages
+    finally:
+        await manager.close()

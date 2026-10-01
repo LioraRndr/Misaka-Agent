@@ -273,11 +273,14 @@ async def test_the_ally_sends_as_itself_from_its_card_and_space(make, monkeypatc
 async def test_a_red_team_card_given_to_an_ally_records_its_issues_through_the_bridge(make):
     ally = make(kind="red_team")
     issue = {"kind": "logic", "question": "Does it follow?", "rationale": "A gap.", "priority": 1, "material": True}
+    write, complete, say = ally.finish()
     ally.play([{"call": ["misaka_research_view", {"view": "run"}]},
-               {"call": ["misaka_card_note", {"text": "one gap", "issues": [issue]}]}, *ally.finish()])
+               {"call": ["misaka_card_note", {"text": "one gap", "issues": [issue]}]},
+               write, complete, complete, say])      # a review is checked against its record first (B117)
     await ally.claim().run()
     assert ally.prompts()[0].startswith("[Research card]")      # ACP has no system prompt
-    assert not any(call["error"] for call in ally.logged("tool"))
+    assert sum(bool(call["error"]) for call in ally.logged("tool")) == 1   # the first completion
+    assert json.loads(tasks.latest_payload(ally.con, ally.tid, "review_record_checked")) == {"items": 1}
     assert ally.row["status"] == "done"
     assert ally.payload("submitted")["issues"][0]["question"] == "Does it follow?"
 

@@ -232,7 +232,7 @@ RESEARCH_TABLES = (
 # ``option_id`` of an option waiting to be opened) or ``decline``.
 CRITIQUE_DISPOSITIONS = ("revise", "correct", "rebut", "concede", "covered", "park", "branch")
 # What becomes of a divergence proposal at the node's decision. A gap is not a proposal: the
-# divergence review's gaps join the node's own review, to be filled before it forks.
+# divergence review's gaps are filled or answered in its own rounds, before the node forks.
 PROPOSAL_DISPOSITIONS = ("branch", "covered", "decline")
 RELATION_KINDS = ("converge", "diverge", "resonates", "appropriates", "displaces")
 
@@ -1019,14 +1019,18 @@ def set_fork_entry(con, node_id, entry):
 
 def add_issue(con, run_id, *, node, task_id, round, origin, kind, question, rationale, priority=0):
     """One issue a review card raised: a red-team issue (``origin='critique'``) or a divergence
-    proposal (``origin='divergence'``). Only an exact repeat inside the same card, case and
-    whitespace aside, is the same issue: the same question from another card or another node is
-    its own, answered by its own Last Order. Semantic judgement is Last Order's, never a match here."""
+    proposal (``origin='divergence'``). Only an exact repeat inside the same card's same round,
+    case and whitespace aside, is the same issue: the same question from another card or another
+    node is its own, answered by its own Last Order, and one a reviewer raises again in a later
+    round is answered again -- matched against the earlier round, it was folded into an issue
+    already answered and the round looked clean (2026-10-01). Semantic judgement is Last Order's,
+    never a match here."""
     question = str(question or "").strip()
     if not question:
         return None
     normalized = " ".join(question.casefold().split())
-    for row in con.execute("SELECT id,question FROM research_issues WHERE task_id=?", (task_id,)):
+    for row in con.execute("SELECT id,question FROM research_issues WHERE task_id=? AND round=?",
+                           (task_id, int(round))):
         if " ".join(row["question"].casefold().split()) == normalized:
             return row["id"]
     iid = "i_" + secrets.token_hex(5)
@@ -1385,6 +1389,11 @@ def start_key(round):
 def dispose_key(round):
     """The action key of Last Order's dispositions for review round ``round``."""
     return f"dispose:{int(round)}"
+
+
+def gaps_key(version):
+    """The action key of Last Order's answer to the divergence review of version ``version``."""
+    return f"gaps:{int(version)}"
 
 
 def dissolve_key(version):

@@ -105,11 +105,18 @@ local models and thinking levels.
 
 Agents message each other with the `SendMessage` tool, one recipient per message:
 
-- **a name** (`last-order`, `10036`) reaches that role's session in the sender's panel space, or
-  her contact session when she has none open there. If several are open, the sender is shown
-  them and picks one;
-- **a card ID** (`t_3cfb45`) reaches the session working that card, while it runs;
-- **a session ID** reaches that live session.
+- **a name** (`last-order`, `10036`) inside a research run means that Sister's card on the
+  sender's node (else in the run). Otherwise it reaches that role's session in the sender's panel
+  space, or her contact session when she has none open there. If several are open, the sender is
+  shown them and picks one;
+- **a card ID** (`t_3cfb45`) reaches the session working that card. A card that has not started
+  gets the message when it does. A finished card gets it in her session if her window is still
+  open; if not, she is woken in her own conversation with the message as her next turn, answers,
+  and completes again. Waking her does not send the cards built on her work back to be redone;
+- **a session ID** reaches that live session; a card's closed session wakes its card.
+
+A contact session's answer goes back to the window that wrote to it. Last Order can wait for a
+woken Sister's answer with `misaka_sister_output` (`block: true`) before she goes on.
 
 A Sister who needs a decision she can't make herself asks Last Order this way, and her card waits
 for the answer. Last Order brings the question to you when it is yours to decide.

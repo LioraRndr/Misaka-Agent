@@ -113,16 +113,66 @@ def test_your_own_card_and_session_are_refused(world):
         _resolve(me, sender_session=me)
 
 
-def test_a_card_that_is_not_running_or_has_no_live_session_is_refused(world):
-    stopped = cards.create(world.board, world.workspace, "T stopped", BODY, "10032")
-    with pytest.raises(ValueError, match="no live session"):
-        _resolve(stopped)
-    running = _running(world)                      # running on the board, nobody live
-    with pytest.raises(ValueError, match="no live session"):
-        _resolve(running)
-    _live(world, _sid(), role="10032", task_id=running, alive=False)
-    with pytest.raises(ValueError, match="no live session"):
-        _resolve(running)
+def _finished(world, assignee="10032", generation=2, title="T finished"):
+    task_id = cards.create(world.board, world.workspace, title, BODY, assignee)
+    world.board.execute("UPDATE tasks SET status='done', generation=? WHERE id=?", (generation, task_id))
+    world.board.commit()
+    return task_id
+
+
+def test_a_card_that_has_not_started_gets_its_mail_pinned_for_its_first_attempt(world):
+    """2026-10-01: C1 wrote to C2 while C2 waited on C1; the note has to wait for C2, not go to a
+    contact session outside the run (B16 is how the daemon mails a first attempt)."""
+    unstarted = cards.create(world.board, world.workspace, "T unstarted", BODY, "10032")
+    target = _resolve(unstarted, sender="10036")
+    assert target["not_started"] and target["to_task"] == unstarted and not target.get("wake_card")
+
+
+def test_a_running_card_whose_session_is_still_starting_gets_its_mail_pinned(world):
+    running = _running(world, generation=4)        # claimed on the board, nobody live yet
+    target = _resolve(running)
+    assert target["to_task"] == running and target["generation"] == 4 and target["starting"]
+
+
+def test_a_finished_card_is_woken_whoever_writes(world):
+    """2026-10-01: Last Order went back to a Sister after the red team's verdict, her window was
+    closed, and the message had nowhere to go. CCB resumes a stopped agent with the message."""
+    done = _finished(world)
+    target = _resolve(done, sender="last-order")
+    assert target["wake_card"] and target["to_task"] == done and target["generation"] == 2
+    assert _resolve(done, sender="10036", sender_task="t_000000")["wake_card"]
+    _live(world, _sid(), role="10032", task_id=done, alive=False)
+    assert _resolve(done, sender="last-order")["wake_card"]
+
+
+def test_a_closed_card_session_wakes_its_card(world):
+    done = _finished(world)
+    closed = _live(world, _sid(), role="10032", task_id=done, alive=False)
+    target = _resolve(closed, sender="last-order", sender_session=_sid())
+    assert target["wake_card"] and target["to_task"] == done
+
+
+async def test_a_last_order_message_to_a_closed_card_continues_her_session(world, monkeypatch):
+    from misaka.ui.panel import client as net
+    calls = []
+    monkeypatch.setattr(net, "request", lambda method, params=None, **kw: calls.append((method, params))
+                        or {"pane_id": "p7"})
+    monkeypatch.setattr(net, "ensure", lambda *a, **kw: None)
+    monkeypatch.setenv("MISAKA_NET_PANE", "p1")
+    done = _finished(world, generation=3)
+    lo = _live(world, _sid(), role="last-order", space=SPACE_T1)
+    out = await _part(lo, sender="last-order")._send(
+        "fixture", {"to": done, "message": "dig into the 1803 budget", "summary": "more"},
+        None, None, SimpleNamespace())
+    assert calls == [("pane.continue_card", {"task_id": done,
+                                             "say": "[Message from last-order · session " + lo + ". Answer with SendMessage; then complete the card again with misaka_card_complete -- your deliverable stands unless you change it.]\ndig into the 1803 budget",
+                                             "expected_generation": 3, "consult": True,
+                                             "place": {"grid": "p1"}})]
+    assert out["details"]["woken"] and out["details"]["pane_id"] == "p7"
+    assert "woken in her own session" in out["content"][0]["text"]
+    # B111: she can hear the answer inside the phase turn that has to end in its command.
+    assert f"misaka_sister_output (task_id={done}, block=true)" in out["content"][0]["text"]
+    assert messages.pending(world.mail, "10032", task_id=done) == []   # nothing queued for nobody
 
 
 def test_a_session_that_is_gone_or_reads_no_mail_is_refused(world):
@@ -508,3 +558,161 @@ def test_the_pump_asks_as_contact_only_in_a_contact_session(world):
         got[name] = "\n".join(message["content"] for message in delivered)
     assert "pinned" in got["window"] and "loose" not in got["window"]
     assert "loose" in got["contact"] and "pinned" not in got["contact"]
+
+
+def test_a_contact_session_answers_the_window_that_wrote_to_it(world):
+    """2026-10-01: Last Order's window greeted 10032; her contact session answered `last-order`,
+    which woke the Last Order contact session instead, and the window never heard back."""
+    window = _live(world, _sid(), role="last-order", space=SPACE_T1)
+    messages.send(world.mail, "10032", "hello", summary="hi", sender="last-order", sender_session=window)
+    target = _resolve("last-order", sender="10032", contact=True)
+    assert target["to_session"] == window
+    # Not a contact session: the name keeps its meaning (no neighbour, so the contact session).
+    assert _resolve("last-order", sender="10032")["to_session"] is None
+
+
+def test_a_contact_session_whose_writer_is_gone_wakes_the_contact_session(world):
+    gone = _live(world, _sid(), role="last-order", space=SPACE_T1, alive=False)
+    messages.send(world.mail, "10032", "hello", summary="hi", sender="last-order", sender_session=gone)
+    target = _resolve("last-order", sender="10032", contact=True)
+    assert target["to_session"] is None and target["to_task"] is None
+
+
+def _replies(world, window):
+    return [row["body"] for row in messages.pending(world.mail, "last-order", session_id=window)]
+
+
+def test_a_contact_turn_answer_goes_back_to_the_window_that_wrote(world):
+    """2026-10-01: 10032's contact session answered a greeting in plain text, no SendMessage;
+    Hermes hands that answer back to the sender, MISAKA dropped it and the window waited."""
+    window = _live(world, _sid(), role="last-order", space=SPACE_T1)
+    rows = [{"sender_session": window}]
+    messages.return_reply(world.mail, "10032", "standing by", rows, since=int(time.time()))
+    assert _replies(world, window) == ["standing by"]
+
+
+def test_a_contact_turn_that_already_answered_is_not_repeated(world):
+    window = _live(world, _sid(), role="last-order", space=SPACE_T1)
+    since = int(time.time())
+    messages.send(world.mail, "last-order", "her own reply", summary="r", sender="10032", to_session=window)
+    messages.return_reply(world.mail, "10032", "standing by", [{"sender_session": window}], since=since)
+    assert _replies(world, window) == ["her own reply"]
+
+
+def test_a_contact_turn_answers_no_contact_session_and_no_closed_window(world):
+    contact = _live(world, _sid(), role="last-order", kind="dm")
+    gone = _live(world, _sid(), role="last-order", space=SPACE_T1, alive=False)
+    rows = [{"sender_session": contact}, {"sender_session": gone}, {"sender_session": None}]
+    messages.return_reply(world.mail, "10032", "standing by", rows, since=int(time.time()))
+    assert world.mail.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
+
+
+def test_the_contact_delivery_hands_her_answer_back(world, monkeypatch):
+    """The real `misaka dm` wake-up path, the model turn aside."""
+    from misaka.cli import dm
+    from misaka.core.platform import session as platform_session
+
+    async def turn(flags, text, cwd, **kw):
+        assert "hello there" in text
+        return {"text": "10032 standing by", "error": None, "timed_out": False, "budget_usage": None}
+
+    monkeypatch.setattr(platform_session, "run_session", turn)
+    window = _live(world, _sid(), role="last-order", space=SPACE_T1)
+    mid = messages.send(world.mail, "10032", "hello there", summary="hi", sender="last-order",
+                        sender_session=window)
+    assert dm.deliver("10032", sender="last-order", wait_message=mid) == 0
+    assert _replies(world, window) == ["10032 standing by"]
+
+
+def _run(world, *, origin_session=None):
+    from misaka.core.research import runs
+    runs.init(world.board)
+    run = runs.create(world.board, workspace=world.workspace, question="why is the sky blue", origin_session=origin_session)
+    return run["id"]
+
+
+def _link(world, run_id, task_id, branch="b_root"):
+    world.board.execute(
+        "INSERT INTO research_run_tasks (task_id, run_id, branch_id, kind, created_at) VALUES (?,?,?,?,?)",
+        (task_id, run_id, branch, "research", int(time.time())))
+    world.board.commit()
+
+
+def test_a_name_inside_a_research_run_means_that_role_s_card_in_the_run(world):
+    """2026-10-01: C1 wrote `10036` to reach C2; it went to 10036's contact session, which could
+    not see the run, did C2's job beside her, and answered C1 in her name."""
+    run = _run(world)
+    c1 = _finished(world, assignee="10037", title="T C1")
+    c2 = cards.create(world.board, world.workspace, "T C2", BODY, "10036")
+    _link(world, run, c1)
+    _link(world, run, c2)
+    target = _resolve("10036", sender="10037", sender_task=c1)
+    assert target["to_task"] == c2 and target["not_started"]
+    back = _resolve("10037", sender="10036", sender_task=c2)
+    assert back["to_task"] == c1 and back["wake_card"]
+
+
+def test_the_run_s_last_order_reaches_a_card_by_its_sister_s_name(world):
+    lo = _sid()
+    run = _run(world, origin_session=lo)
+    c1 = _finished(world, assignee="10037", title="T C1")
+    _link(world, run, c1)
+    assert _resolve("10037", sender="last-order", sender_session=lo)["to_task"] == c1
+
+
+def test_a_name_with_two_cards_in_the_run_is_refused_with_their_ids(world):
+    run = _run(world)
+    me = _running(world, assignee="10036", title="T me")
+    first = _finished(world, assignee="10037", title="T first")
+    second = _finished(world, assignee="10037", title="T second")
+    for card in (me, first, second):
+        _link(world, run, card)
+    with pytest.raises(ValueError) as refusal:
+        _resolve("10037", sender="10036", sender_task=me)
+    assert first in str(refusal.value) and second in str(refusal.value)
+
+
+def test_a_name_outside_any_run_keeps_the_contact_session(world):
+    assert _resolve("10037", sender="10036", sender_task="t_000000")["label"] == "the 10037 contact session"
+
+
+def test_a_research_card_is_told_which_siblings_wait_for_it():
+    """2026-10-01: C1's contract called C2 'in parallel with yours' while C2 waited for C1."""
+    from misaka.core.research import planner
+    spec = {"local_id": "C1", "title": "data", "question": "q?", "rationale": "r", "deliverable": "d.md",
+            "assignee": "10037"}
+    after = {"local_id": "C2", "title": "model", "assignee": "10036", "dependencies": ["C1"]}
+    beside = {"local_id": "C3", "title": "review", "assignee": "10038"}
+    body = planner.task_body(spec, siblings=[spec, after, beside])
+    assert "→ Sister 10036 (starts after yours is done)" in body
+    assert "→ Sister 10038 (in parallel with yours)" in body
+    body = planner.task_body({**after, "question": "q?", "rationale": "r", "deliverable": "d.md"},
+                             siblings=[spec, after])
+    assert "→ Sister 10037 (yours starts after it is done)" in body
+
+
+def test_a_name_means_the_card_in_the_sender_s_own_node_first(world):
+    """A research graph puts the same Sister on several nodes, joins included: a name sent from one
+    node means her card there, and only a Sister with no card there is looked for run-wide."""
+    run = _run(world)
+    here = _running(world, assignee="10036", title="T join card")
+    mine_here = _finished(world, assignee="10037", title="T 10037 in the join")
+    elsewhere = [_finished(world, assignee="10037", title=f"T 10037 in parent {n}") for n in (1, 2)]
+    _link(world, run, here, branch="b_join")
+    _link(world, run, mine_here, branch="b_join")
+    for card, branch in zip(elsewhere, ("b_parent1", "b_parent2"), strict=True):
+        _link(world, run, card, branch=branch)
+    assert _resolve("10037", sender="10036", sender_task=here)["to_task"] == mine_here
+    only_parents = _finished(world, assignee="10038", title="T 10038 in a parent")
+    _link(world, run, only_parents, branch="b_parent1")
+    assert _resolve("10038", sender="10036", sender_task=here)["to_task"] == only_parents
+
+
+def test_a_finished_card_with_its_window_open_is_reached_in_that_session(world):
+    """No new attempt for a card whose session still runs: the message goes to the session, as
+    one sent to its id would (2026-10-01: card A's answer to card B was refused by a wake that
+    could not claim B; the same answer sent to B's session id arrived in 3 s)."""
+    done = _finished(world)
+    window = _live(world, _sid(), role="10032", task_id=done)
+    target = _resolve(done, sender="10037", sender_task="t_000000")
+    assert target["to_session"] == window and not target.get("wake_card")

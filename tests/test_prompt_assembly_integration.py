@@ -548,3 +548,11 @@ def test_research_planning_and_report_do_not_set_thinking(tmp_path, monkeypatch)
     assert worker.run_llm_json.call_count == 2
     for call in worker.run_llm_json.call_args_list:
         assert "thinking" not in call.kwargs
+
+
+@pytest.mark.parametrize("research", [False, True])
+async def test_last_order_is_warned_off_hand_written_card_status_in_every_mode(prompt_home, research):
+    """2026-10-01: the warning rode on misaka_card_requeue, which a research Last Order lacks,
+    though she still has bash."""
+    async with assembled(prompt_home, "last_order", "foreground", research=research) as session:
+        assert (await final_prompt(session)).count("board's tables by hand") == 1

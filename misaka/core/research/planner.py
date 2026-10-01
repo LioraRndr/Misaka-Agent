@@ -83,8 +83,9 @@ Rules:
   clarifying_questions is only for a run nobody is talking to. Uncertainty that can be researched belongs in a research task.
 - Tasks must be substantive research assignments written for this question, not mechanical templates.
 - The red team holds two jobs on this node, and you choose her for both; only you decide who that is. She critiques
-  every version of the conclusion, and after her first review she runs the divergence review in a fresh session: the
-  frames, readings, sources, actors and possibilities the conclusion did not take, and the gaps it left. A
+  every version of the conclusion until her review finds nothing material or the revisions are spent, and then runs
+  the divergence review in a fresh session: the frames, readings, sources, actors and possibilities the conclusion
+  did not take, and the gaps it left -- reviewing again every version that fills a gap. A
   critic who only checks the evidence is half of that; `red_team.reason` says why her profile fits both, and
   `plan_markdown` names her with both jobs.
 """
@@ -176,6 +177,18 @@ review did not touch is carried over from the previous conclusion as it stands, 
 rather than rewriting from memory; shortening or dropping any of it is a change and goes in "Revisions". Rebuttals,
 concessions, covered and parked issues stand as you recorded them; do not reverse them silently. Write the complete
 revised conclusion, not a list of edits. The red team reviews this version next.
+- Previous conclusion: `{previous}`
+- The review: {critiques}
+"""
+
+SYNTHESIS_GAP_REVISION = """
+# Revision {version}: fill the gaps the divergence review found
+For the divergence review of version {review} you recorded the dispositions below. Rework the conclusion for every
+`revise`: fill each such gap with what the research found, keep what still stands, and end with a short "Revisions"
+section saying what changed and why. What no gap touched is carried over from the previous conclusion as it stands, at
+full length -- read that file rather than rewriting from memory; shortening or dropping any of it is a change and goes
+in "Revisions". Concessions, rebuttals, covered and parked gaps stand as you recorded them. Write the complete revised
+conclusion, not a list of edits. The divergence review reviews this version next.
 - Previous conclusion: `{previous}`
 - The review: {critiques}
 """
@@ -342,13 +355,6 @@ introduced or dropped: compare it with the previous version, the parts no issue 
 you still reject is raised again, with why the reply does not answer it.
 """
 
-RED_TEAM_GAPS = """
-## gaps the divergence review found
-The divergence review of version 1 named these gaps of the conclusion; they were put to Last Order with your issues
-and answered like them. Check this version against each, and raise again any it still leaves unfilled:
-{gaps}
-"""
-
 DISPOSE_CONTRACT = """# Dispose of the red team's review: every material issue, exactly one disposition
 Read the whole review and the recorded issues below, then call `misaka_research_dispose` once with one disposition per
 issue:
@@ -364,7 +370,11 @@ issue:
   decision after the divergence review.{branch}
 A correction is revise, never branch. A principled disagreement is rebut or concede, never revise: the review loop runs
 again only while something is revised. Nothing here is handed to the nodes opened from this one: what this node does
-not fill it concedes or parks, on the record. End in plain text after the tool accepts.
+not fill it concedes or parks, on the record.
+An issue about material a card delivered can be put to the Sister who delivered it before you decide: `SendMessage`
+her card id (a finished card is woken in her own session), then wait for her with
+`misaka_sister_output(task_id, block=true)` and dispose in this same turn; her reply arrives in this conversation.
+End in plain text after the tool accepts.
 """
 
 DISPOSE_FINAL = """
@@ -385,8 +395,9 @@ and gave something up. Bring to light, and say of each proposal which it is:
   that line cannot go.
 - the gaps it left -- what it neglected, did not know or did not ask, which any line answering this question would
   have to fill. A gap goes back to this node, which fills it before anything is opened from it; mark it `gap: true`.
-You are not reviewing this conclusion for errors; the red team does that separately. Deliver `divergence.md` for the
+You are not reviewing this conclusion for errors; the red team has done that. Deliver `{deliverable}` for the
 node Last Order.
+{rereview}
 
 ## presuppositions
 Your work here is excavation, not verdict. The conclusion -- and the question and plan behind it -- stands on
@@ -427,7 +438,7 @@ find and none to fill a count; an error in the conclusion is the red team's, not
 dissolves is a legitimate proposal.
 
 ## acceptance criteria
-- `divergence.md` exists: each proposal with whether it is a possibility not taken or a gap, its premise, what it could
+- `{deliverable}` exists: each proposal with whether it is a possibility not taken or a gap, its premise, what it could
   change in the answer, and what research it would take.
 - Call `misaka_card_note` with the complete `alternatives` list (kind, proposal, premise, rationale, gap, covered_by).
   Use alternatives=[] explicitly if there are none.
@@ -435,9 +446,37 @@ dissolves is a legitimate proposal.
 
 """
 
+DIVERGENCE_REREVIEW = """
+## re-review (round {round})
+You reviewed an earlier version of this conclusion in this conversation; your earlier reviews are on file: {reviews}.
+Last Order revised it to fill gaps you found. The previous version: `{previous}`. What she did with every gap so far:
+{dispositions}
+Check whether each gap she revised for is now filled, and raise again any that is not, with what is still missing;
+raise what the revision itself left open. Do not raise again a gap she conceded, rebutted, marked covered or parked
+unless this version changes it. The possibilities not taken you proposed are on record for the node's decision: do not
+propose them again; propose only possibilities this version newly reveals. Record this round's list again (gaps and
+new possibilities only; alternatives=[] when there are none): an earlier round's list does not carry over.
+"""
+
+GAPS_CONTRACT = """# Fill or answer the gaps the divergence review found: every gap, exactly one disposition
+Read the whole review and the recorded gaps below, then call `misaka_research_dispose` once with one disposition per
+gap. A gap is this node's own: it is filled here or answered here, never handed to the nodes opened from this one.
+- revise: this node fills it -- with research: while a follow-up round remains, a card, not a paragraph; else by
+  rewriting the conclusion. {revise} The divergence review reviews the revised version again.
+- rebut: it is not a gap of this question; the reviewer reads your reason when she reviews again.
+- concede: the conclusion stands without it and pays this cost; the final report lists it with the costs the answer
+  accepts.
+- covered: another node of this run owns it (covered_by = its id; see the graph). Say how that node's work answers it.
+- park: it stays open for the final adjudication, with why.
+A gap is never a fork. The review's possibilities not taken are not yours to answer here: they come to the node's
+decision once no gap is left to fill. A gap about material a card delivered can be put to the Sister who delivered it
+before you decide: `SendMessage` her card id (a finished card is woken in her own session), then wait for her with
+`misaka_sister_output(task_id, block=true)` and dispose in this same turn. End in plain text after the tool accepts.
+"""
+
 DECIDE_CONTRACT = """# Decide the forks this node reveals
 Below are the divergence review's proposals of possibilities your line did not take and the red-team issues you
-disposed as `branch` (its gaps went through your review with the red team's issues, and are settled). Read them
+disposed as `branch` (its gaps were filled or answered in the divergence rounds, and are settled). Read them
 against the choices your conclusion made -- what each gained, gave up and traded -- before you record anything: a
 possibility your line did not take -- one it gave up or one it never chose -- cannot stand together with it because it
 rests on another presupposition or takes the answer where your line cannot go.
@@ -1005,7 +1044,8 @@ def synthesize(con, run, cfg, worker, node, task_rows, *, followup=None, round=1
     else:
         rounds = ""
     if revision is not None:
-        rounds = SYNTHESIS_REVISION.format(
+        template = SYNTHESIS_GAP_REVISION if revision.get("reviewer") == "divergence" else SYNTHESIS_REVISION
+        rounds = template.format(
             version=revision["version"], review=revision["review"], previous=revision["previous"],
             critiques=", ".join(f"`{path}`" for path in revision["critiques"]) or "(none)") \
             + prompt_guard.untrusted("dispositions", revision["dispositions"]) + "\n" + rounds
@@ -1036,7 +1076,7 @@ def synthesize(con, run, cfg, worker, node, task_rows, *, followup=None, round=1
 
 
 def red_team_body(node, *, synthesis_path, plan_path, graph_path, evidence="", deliberation_path=None, own_cards=(),
-                  rereview=None, deliverable="critique.md", gaps=()):
+                  rereview=None, deliverable="critique.md"):
     own = ("- Cards on this node you researched yourself, in an earlier session of yours (this review is not "
            "third-party to them; hold them to the same standard): "
            + ", ".join(f"[{row['id']}] {row['title']}" for row in own_cards) + "\n") if own_cards else ""
@@ -1051,18 +1091,21 @@ def red_team_body(node, *, synthesis_path, plan_path, graph_path, evidence="", d
             round=rereview["round"], previous=rereview["previous"],
             critiques=", ".join(f"`{path}`" for path in rereview["critiques"]) or "(none)",
             dispositions=rereview["dispositions"])
-        if gaps:
-            again += RED_TEAM_GAPS.format(gaps="\n".join(
-                f"- {g['id']}: {g['question']} -- {' '.join(g['rationale'].split())}" for g in gaps))
     return RED_TEAM_CONTRACT.format(
         question=node["question"], synthesis_path=synthesis_path, plan_path=plan_path, graph_path=graph_path,
         deliberation=deliberation, own_cards=own, rereview=again, deliverable=deliverable,
         evidence=f"- Evidence ledger:\n{evidence}\n" if evidence else "")
 
 
-def divergence_body(node, *, synthesis_path, plan_path, graph_path, paths_path):
+def divergence_body(node, *, synthesis_path, plan_path, graph_path, paths_path, deliverable="divergence.md",
+                    rereview=None):
+    again = DIVERGENCE_REREVIEW.format(
+        round=rereview["round"], previous=rereview["previous"],
+        reviews=", ".join(f"`{path}`" for path in rereview["reviews"]) or "(none)",
+        dispositions=rereview["dispositions"]) if rereview is not None else ""
     return DIVERGENCE_CONTRACT.format(question=node["question"], synthesis_path=synthesis_path,
-                                      plan_path=plan_path, graph_path=graph_path, paths_path=paths_path)
+                                      plan_path=plan_path, graph_path=graph_path, paths_path=paths_path,
+                                      deliverable=deliverable, rereview=again)
 
 
 def fork_session(source, target_dir):
@@ -1094,21 +1137,22 @@ def session_leaf(session_file):
     return next((entry.get("id") for entry in reversed(branch) if entry.get("type") != "label"), None)
 
 
-def review_context(con, run, red, issues, *, round, divergence=None):
-    """One round's frozen review: the red-team card reviews every version, each in its own file. In
-    round 1 the divergence review's gaps come with it (``divergence`` is that card)."""
-    review = task_sources(con, run, [red] + ([divergence] if divergence else []))
-    name = runs.versioned("critique.md", round)
+def review_context(con, run, red, issues, *, round, kind="critique"):
+    """One round's frozen review: a review card (the red team's, or the divergence review's when
+    ``kind`` is ``divergence``) reviews every version, each round in its own file."""
+    review = task_sources(con, run, [red])
+    name = runs.versioned(f"{kind}.md", round)
     review[0]["review_text"] = [
         {"path": runs.artifact_path(item), "content": runs.artifact_text(item)}
-        for item in runs.artifacts(con, run["id"], kind="critique", task_id=red["id"])
+        for item in runs.artifacts(con, run["id"], kind=kind, task_id=red["id"])
         if Path(item["path"]).name == name
     ]
-    return ("\n# Red-team review\n" + prompt_guard.untrusted("red-team-results", _catalog_text(review))
+    heading = "Red-team review" if kind == "critique" else "Divergence review"
+    return (f"\n# {heading}\n" + prompt_guard.untrusted("red-team-results", _catalog_text(review))
             + "\n# Recorded material issues\n" + prompt_guard.untrusted("issues", _catalog_text([dict(i) for i in issues])))
 
 
-def dispose(con, run, cfg, worker, node, red, issues, *, round, revisions_left, divergence=None):
+def dispose(con, run, cfg, worker, node, red, issues, *, round, revisions_left):
     """Last Order's dispositions for one review round: every material issue exactly once."""
     from misaka.core.research import graph
     key = runs.dispose_key(round)
@@ -1143,10 +1187,51 @@ def dispose(con, run, cfg, worker, node, red, issues, *, round, revisions_left, 
     prompt = (DISPOSE_CONTRACT.format(revise=revise, branch="" if forks else " Not available: this node is at max_depth.")
               + (DISPOSE_FINAL if revisions_left <= 0 else "")
               + f"\n# Round {round} of review\nThe graph: `{graph.graph_path(run)}`\n"
-              + review_context(con, run, red, issues, round=round, divergence=divergence) + navigation(run["id"]))
+              + review_context(con, run, red, issues, round=round) + navigation(run["id"]))
     action, _raw = _command(
         con, run, cfg, worker, node, prompt, key=key, name="misaka_research_dispose",
         description="Last Order: dispose of every material issue of this red-team review",
+        model=commands.Dispositions, validate=validate, session_dir=_lo_session(run, node),
+    )
+    return action["payload"]["dispositions"]
+
+
+def fill_gaps(con, run, cfg, worker, node, card, gaps, *, version, round, revisions_left):
+    """Last Order's answer to divergence round ``round``: every gap it found in version ``version``,
+    exactly once -- filled by a revision while the node has gap revisions left, else answered."""
+    from misaka.core.research import graph
+    key = runs.gaps_key(version)
+    accepted = runs.action(con, run["id"], node["id"], key)
+    if accepted:
+        return accepted["payload"]["dispositions"]
+    expected = {item["id"] for item in gaps}
+    known = {row["id"] for row in runs.nodes(con, run["id"])}
+
+    def validate(value):
+        ids = [item["issue_id"] for item in value["dispositions"]]
+        if len(ids) != len(set(ids)) or set(ids) != expected:
+            raise ValueError("Give every gap of this divergence review exactly one disposition; "
+                             "use only this review's gap ids.")
+        for item in value["dispositions"]:
+            if item["disposition"] in ("branch", "correct"):
+                raise ValueError(f"A gap is filled or answered: revise, rebut, concede, covered or park "
+                                 f"(issue {item['issue_id']}).")
+            if item["disposition"] == "revise" and revisions_left <= 0:
+                raise ValueError("No gap revision is left on this node: rebut, concede, park, or mark the gap covered.")
+            if item["disposition"] == "covered" and (item["covered_by"] not in known or item["covered_by"] == node["id"]):
+                raise ValueError(f"covered needs the id of another node of this run as covered_by (issue {item['issue_id']}).")
+            if item["disposition"] != "covered" and item["covered_by"]:
+                raise ValueError(f"Only covered takes covered_by (issue {item['issue_id']}).")
+        return value
+
+    revise = (f"{revisions_left} gap revision(s) left on this node." if revisions_left > 0 else
+              "No gap revision is left on this node: answer every gap another way.")
+    prompt = (GAPS_CONTRACT.format(revise=revise)
+              + f"\n# Divergence review of version {version}\nThe graph: `{graph.graph_path(run)}`\n"
+              + review_context(con, run, card, gaps, round=round, kind="divergence") + navigation(run["id"]))
+    action, _raw = _command(
+        con, run, cfg, worker, node, prompt, key=key, name="misaka_research_dispose",
+        description="Last Order: fill or answer every gap of this divergence review",
         model=commands.Dispositions, validate=validate, session_dir=_lo_session(run, node),
     )
     return action["payload"]["dispositions"]
@@ -1322,10 +1407,20 @@ when evidence warrants it and explain why. No separate planning submission, file
                     "before doing anything they already did:\n"
                     + "\n".join(f"- [{row['id']}] {row['title']} → `{row['output_dir']}`" for row in previous) + "\n")
     if others:
-        company += ("\n## sibling cards\nOther cards on the same node, in parallel with yours "
-                   "(reach their Sisters with `SendMessage`):\n"
-                   + "\n".join(f"- {spec.get('local_id')} · {spec.get('title')} → Sister {spec.get('assignee')}"
-                               for spec in others) + "\n")
+        waits_for = set(task.get("dependencies") or [])
+
+        def timing(spec):
+            if spec.get("local_id") in waits_for:
+                return "yours starts after it is done"
+            if task.get("local_id") in (spec.get("dependencies") or []):
+                return "starts after yours is done"
+            return "in parallel with yours"
+
+        company += ("\n## sibling cards\nOther cards on the same node. To reach one's Sister, `SendMessage` "
+                    "her card id, which `misaka_research_view(view=\"workspace\")` lists: a card that has not "
+                    "started gets the message when it does, and a finished one is woken by it.\n"
+                   + "\n".join(f"- {spec.get('local_id')} · {spec.get('title')} → Sister {spec.get('assignee')} "
+                               f"({timing(spec)})" for spec in others) + "\n")
     return f"""## research question
 {task['question']}
 

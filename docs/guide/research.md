@@ -30,7 +30,7 @@ talk the options over with Last Order first.
 | LO parallelism | 4, 1, 8 | how many nodes run at the same time |
 | Sister cards per LO | 4, 1, 8 | how many Sister cards one node runs at the same time |
 | Follow-ups | 2, 0, 4 | how many extra rounds of cards a node may send out after the first |
-| Revisions | 2, 0, 4 | how many times a node may rework its conclusion after the red team |
+| Revisions | 2, 0, 4 | how many times a node may rework its conclusion in each review loop: after the red team, and again after the divergence review |
 | Nodes | 30, 12, 80 | how many nodes the whole run may hold, your question included |
 | Plan approval | Require approval, Automatic | whether plans wait for you ([below](#approving-plans)) |
 | Compaction | your setting, 0.5, 0.85 | how full a conversation gets before older turns are summarised |
@@ -97,14 +97,20 @@ flowchart TD
     P["Plan"] --> C["Sisters work their cards"]
     C --> S["Last Order writes the conclusion"]
     S --> R["Red team reviews it"]
-    R -->|"first review"| D["Divergence review: the possibilities<br/>not taken, and the gaps"]
-    D --> A["Last Order answers every issue and gap"]
-    R -->|"later reviews"| A
+    R -->|"objections"| A["Last Order answers every objection"]
     A -->|"something to revise"| S
-    A -->|"settled"| X["Decision: which possibilities<br/>open as new nodes"]
+    R -->|"nothing material"| D["Divergence review: the possibilities<br/>not taken, and the gaps"]
+    A -->|"settled, or no revision left"| D
+    D -->|"gaps"| G["Last Order fills or answers every gap"]
+    G -->|"a gap to fill"| V["Last Order revises the conclusion"]
+    V --> D
+    D -->|"no gap left"| X["Decision: which possibilities<br/>open as new nodes"]
+    G -->|"settled, or no revision left"| X
 ```
 
-A node at the depth limit ends after the review loop.
+The red team's loop comes first; only when it is over does the divergence review begin, and its
+own loop runs until no gap is left. A node at the depth limit ends after the red team's loop: with
+nothing to fork, it has no divergence review.
 
 ### 1. The plan
 
@@ -181,28 +187,13 @@ Order's own reasoning on the node, and writes a critique (`critique.md`). She:
 - reads what the conclusion and the reasoning leave unsaid, where the silence carries the
   argument.
 
-She records each objection separately and marks the serious ones. A question another node
-already owns, she names by that node.
+She records each objection separately and marks the serious ones; only what she records is acted
+on, so before she submits the review she is shown her record and checks her file against it. A
+question another node already owns, she names by that node.
 
-### 5. The divergence review
+### 5. Answering the review
 
-After her first review, the same Sister opens a fresh session and reads the conclusion again for
-the choices it made. She brings out two kinds of thing (`divergence.md`):
-
-- **possibilities not taken**: other hypotheses, methods, frameworks, readings, sources and
-  voices, other ways of dividing the question, or a critique of the question itself. They include
-  what the conclusion gave up and what it never considered, and each rests on a premise different
-  from the conclusion's;
-- **gaps**: what the conclusion neglected and any answer needs.
-
-For each choice she digs out the presuppositions behind it and what it gained and gave up, and
-leaves it to research whether they hold. She starts from the run's **paths list** (below) and
-skips what is already on it.
-
-### 6. Answering the review
-
-Last Order answers every serious objection, and every gap from the divergence review, one answer
-each:
+Last Order answers every serious objection of the red team, one answer each:
 
 | Answer | Meaning |
 |---|---|
@@ -214,7 +205,9 @@ each:
 | **branch** | it reveals a real alternative (the framework breaks down, or a critique aims at the question itself). It goes to the decision. |
 
 A node settles its own objections and gaps: what it cannot fill, it concedes or parks on the
-record.
+record. Before she answers an objection about material a card delivered, Last Order can put it to
+that card's Sister: a finished card is woken in her own session, and Last Order waits for her
+answer before deciding.
 
 While something is revised and revisions remain, Last Order writes the next version
 (`synthesis-2.md`, …) and the same red-team Sister reviews it in her own conversation, with Last
@@ -223,6 +216,28 @@ it set out to fix, whether each rebuttal holds, and what the revision changed. T
 nothing more is revised or the revisions run out. After that, plain errors the last review names,
 such as a wrong date or figure, are **corrected** in a `## Corrections` section at the end of the
 conclusion.
+
+### 6. The divergence review
+
+When the red team's loop is over, the same Sister opens a fresh session and reads the conclusion
+again for the choices it made. She brings out two kinds of thing (`divergence.md`):
+
+- **possibilities not taken**: other hypotheses, methods, frameworks, readings, sources and
+  voices, other ways of dividing the question, or a critique of the question itself. They include
+  what the conclusion gave up and what it never considered, and each rests on a premise different
+  from the conclusion's;
+- **gaps**: what the conclusion neglected and any answer needs.
+
+For each choice she digs out the presuppositions behind it and what it gained and gave up, and
+leaves it to research whether they hold. She starts from the run's **paths list** (below) and
+skips what is already on it. Like the red team, she records each proposal, and only the record is
+acted on: before she submits, she is shown it and checks her file against it.
+
+The gaps are the node's own. Last Order fills or answers each one; every version she revises to
+fill a gap, the same Sister reviews again in her own conversation (`divergence-2.md`, …), until a
+review finds no gap left or the gap revisions run out (the same limit as the red team's). A gap
+gets the answers above except *branch*: a gap is never a fork. Only then do the possibilities not
+taken go to the node's decision.
 
 ### 7. The decision
 

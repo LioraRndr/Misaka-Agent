@@ -700,6 +700,24 @@ def test_only_a_window_with_a_person_in_it_is_exempt(tmp_path, kind, refused):
         assert "unattended" in decision["reason"]
 
 
+def test_the_refusal_names_the_bare_variable_it_refuses(tmp_path):
+    """2026-10-01: `EI=<path>; ls "$EI"` was refused, but the message named only $(...), backticks
+    and ${...} -- two Sisters rewrote ${X} as $X and were refused again, five times in one run."""
+    from misaka.core.skills.wiring.skills import SkillsPart
+
+    live = tmp_path / "skills"
+    live.mkdir()
+    part = SkillsPart(None, str(tmp_path / "profile"), cwd=str(tmp_path), kind="card")
+    part._live_roots = {str(live)}
+    part._refresh_roots = lambda: None
+    decision = asyncio.run(part.tool_call(
+        {"toolName": "bash", "input": {"command": 'EI=/data/scripts\nls "$EI"'}}, None))
+    assert decision["block"] and "$NAME" in decision["reason"] and "set earlier in the same command" in decision["reason"]
+    # A dollar sign inside single quotes stays literal, as the message says.
+    assert asyncio.run(part.tool_call(
+        {"toolName": "bash", "input": {"command": "awk '{print $1}' data.csv"}}, None)) is None
+
+
 @pytest.mark.parametrize("bridge", ["proxy", "pi-messages"])
 def test_native_argument_error_is_persisted_but_not_sent_on_wire(bridge):
     from misaka.agent import proxy

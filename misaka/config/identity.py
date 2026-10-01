@@ -37,6 +37,11 @@ COORDINATOR_RECEIPTS = (
     "plan approval. Do not repeatedly poll running tasks; use completion notifications or the available wait mechanism."
 )
 
+COORDINATOR_BOARD_STATUS = (
+    "Never write a card's status into the board's tables by hand: the card file is the contract, so a "
+    "hand-written status is quietly put back."
+)
+
 COMMON_CHARTER = """# Shared working agreement
 
 - Work within the user's question, approved scope and configured limits. Surface important gaps rather than silently expanding the task.

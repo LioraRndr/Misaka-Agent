@@ -32,7 +32,7 @@ lists them all.
 | `--parallel N` | nodes running at once (default 4) |
 | `--sister-parallel N` | Sister cards per node at once (default 4) |
 | `--followups N` | extra rounds a node may send its Sisters out (default 2) |
-| `--revisions N` | times a node may revise its conclusion after review (default 2) |
+| `--revisions N` | times a node may revise its conclusion in each review loop, the red team's and the divergence review's (default 2) |
 | `--max-nodes N` | nodes in the whole run (default 30) |
 
 ### The team

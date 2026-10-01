@@ -3,8 +3,9 @@
 Each role has one permanent "Bot Chat" contact session. Sending a message
 submits it to the recipient's session with a ``Message from 🤖 <name> (@<name>): ``
 prefix and runs one turn, so the recipient handles it immediately. Replies go
-back through the same channel (the recipient sends its own DM); the protocol
-forbids waiting in place for an answer.
+back through the same channel (the recipient sends its own DM), and as in Hermes the
+turn's own answer goes back to a live window that wrote (Hermes: the delivery's completion
+notification); the protocol forbids waiting in place for an answer.
 
 Differences from Hermes are structural, not semantic:
 - Sessions are located by directory, not title: ``~/.misaka/sessions/<role>/dm/``
@@ -53,6 +54,8 @@ content as a message from a peer and decide how to act on it based on your role.
 - To reply or start a conversation, use the SendMessage tool
   (to=<role>, message=<text>, summary=<short preview>).
   Never write the `Message from` prefix yourself; the delivery layer adds it.
+- Your answer in this turn also goes back to a window that wrote to you, so a pure
+  acknowledgement needs no SendMessage; never ping-pong acknowledgements.
 - Delivery is asynchronous. Finish this turn's work without waiting for a reply;
   any reply is delivered into this session: during a turn at your next tool
   boundary, otherwise on your next wake.
@@ -244,11 +247,14 @@ def _deliver_once(to, message=None, sender=None, model=None, timeout=600,
                     flags.append("-c")
             except OSError:
                 pass
+            started = int(time.time())
             r = run_coro(run_session(flags, text, user_home, timeout=timeout,
                                      assembly=session_assembly, env=env))
             if not r["error"] and not r["timed_out"]:
                 messages.ack(con, [row["id"] for row in mine], token=token)
                 leased.clear()
+                if r["text"]:
+                    messages.return_reply(con, to, r["text"], mine, since=started)
             spent = int(r.get("budget_usage") or 0)
             if spent:
                 from misaka.core.platform import budget

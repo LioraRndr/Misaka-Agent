@@ -148,6 +148,116 @@ def _session_target(record):
             "after_turn": _after_turn(record), "label": f"session {record['id']} ({record.get('role')})"}
 
 
+def _last_writer(role, *, inbox):
+    """The live session of ``role`` that most recently wrote to ``inbox``'s contact session."""
+    from misaka.core import session_catalog
+
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT sender_session FROM messages WHERE to_addr=? AND to_task IS NULL AND to_session IS NULL "
+            "AND sender=? AND sender_session IS NOT NULL ORDER BY id DESC LIMIT 20", (inbox, role)).fetchall()
+    finally:
+        con.close()
+    for session_id in dict.fromkeys(row[0] for row in rows):
+        record = session_catalog.live_session(session_id)
+        if record is not None and record.get("inbox"):
+            return record
+    return None
+
+
+def return_reply(con, role, text, rows, *, since):
+    """Hermes' Bot Mode hands the recipient's turn back to the sender as the reply (the delivery
+    process's completion notification wakes the sender with it). A contact turn's answer goes
+    back the same way: to each live window that wrote one of ``rows``, unless she already wrote
+    to it during the turn. Another contact session is never answered this way, or two of them
+    would answer each other forever."""
+    from misaka.core import session_catalog
+
+    for session_id in dict.fromkeys(row["sender_session"] for row in rows if row["sender_session"]):
+        record = session_catalog.live_session(session_id)
+        if record is None or not record.get("inbox") or record.get("kind") == "dm":
+            continue
+        if con.execute("SELECT 1 FROM messages WHERE sender=? AND created_at>=? "
+                       "AND (to_session=? OR (to_task IS NOT NULL AND to_task=?))",
+                       (role, since, session_id, record.get("task_id"))).fetchone():
+            continue
+        send(con, record["inbox"], text, summary=text[:80], sender=role, to_session=session_id)
+
+
+def _sessionless_card_target(card):
+    """A card with no session to read mail. Not started yet, the row is pinned to its attempt and
+    handed over at its first tool boundary (B16, how the daemon mails a first attempt). Finished,
+    she is woken in her own session: CCB's SendMessage resumes a stopped agent from its transcript
+    with the message (resumeAgentBackground), Hermes' Bot Mode runs the turn in the recipient's own
+    session, and here that is the card's ``pane.continue_card``, what misaka_sister_message makes."""
+    from misaka.core.network.sister_runtime import TERMINAL_BOARD_STATUSES
+
+    if card["status"] == "review":
+        raise ValueError(f"Card {card['id']} is under review; wait for the review before messaging its Sister.")
+    if card["status"] not in TERMINAL_BOARD_STATUSES:
+        return {**_card_target(card, None), "not_started": True}
+    return {"to_addr": card["assignee"], "to_task": card["id"], "to_session": None,
+            "generation": int(card["generation"]), "after_turn": False, "wake_card": True,
+            "workspace": card["workspace"],
+            "label": f"card {card['id']} ({card['assignee']}: {card['title']})"}
+
+
+def _run_cards(role, *, sender_task, sender_session):
+    """The cards ``role`` holds where the sender works, the sender's own aside: her node's when it
+    has any, else the whole run's -- a research graph puts the same Sister on several nodes, joins
+    included. A name sent from inside a run means one of them: that role's contact session is
+    outside the run, cannot see it, and once did a card's whole job beside the card (2026-10-01)."""
+    from misaka.core.platform import tasks
+
+    if not (sender_task or sender_session):
+        return []
+    board = tasks.connect(_board_path())
+    try:
+        run = branch = None
+        if sender_task:
+            row = board.execute("SELECT run_id, branch_id FROM research_run_tasks WHERE task_id=?",
+                                (sender_task,)).fetchone()
+            if row:
+                run, branch = row["run_id"], row["branch_id"]
+        if run is None and sender_session:
+            tail = f"%{sender_session}.jsonl"   # stored session files end in their session id
+            row = board.execute("SELECT run_id, id FROM research_branches WHERE session_file LIKE ?",
+                                (tail,)).fetchone()
+            if row:
+                run, branch = row["run_id"], row["id"]
+            else:
+                row = board.execute("SELECT id FROM research_runs WHERE origin_session=? OR root_session LIKE ?",
+                                    (sender_session, tail)).fetchone()
+                run = row["id"] if row else None
+        if run is None:
+            return []
+        query = ("SELECT t.id, t.status, t.title FROM research_run_tasks l JOIN tasks t ON t.id=l.task_id "
+                 "WHERE l.run_id=? AND t.assignee=? AND t.id IS NOT ?")
+        rows = board.execute(query + " AND l.branch_id=? ORDER BY t.created_at",
+                             (run, role, sender_task, branch)).fetchall() if branch else []
+        return rows or board.execute(query + " ORDER BY t.created_at", (run, role, sender_task)).fetchall()
+    except sqlite3.OperationalError:     # a board research has never touched has no such tables
+        return []
+    finally:
+        board.close()
+
+
+def wake_card(target, message):
+    """Continue a closed card with ``message`` as her next turn, in her own session. Blocking."""
+    from misaka.ui.panel import client as net
+
+    pane = os.environ.get("MISAKA_NET_PANE")
+    if not pane:
+        net.ensure()
+    # Consulted, not reworked: the cards built on her answer are not sent back to todo.
+    request = {"task_id": target["to_task"], "say": message,
+               "expected_generation": target["generation"], "consult": True}
+    if pane:
+        request["place"] = {"grid": pane}
+    return net.request("pane.continue_card", request)
+
+
 def _after_turn(record):
     """Whether this reader takes mail only between turns: an ally, driven over ACP, which has
     no way to put text into a running turn."""
@@ -162,7 +272,8 @@ def _reader_target(record, board):
     return _card_target(card, record) if card is not None else _session_target(record)
 
 
-def resolve_address(addr, *, sender, space=None, sender_task=None, sender_session=None):
+def resolve_address(addr, *, sender, space=None, sender_task=None, sender_session=None,
+                    contact=False):
     """Turn what the model typed into the one recipient of the row.
 
     Returns ``{"to_addr", "to_task", "to_session", "generation", "label"}``; a target with
@@ -185,17 +296,27 @@ def resolve_address(addr, *, sender, space=None, sender_task=None, sender_sessio
         if card is None:
             raise ValueError(f"Unknown card '{addr}'.")
         record = session_catalog.live_card_session(addr)
-        if card["status"] != "running" or record is None:
-            raise ValueError(
-                f"Card {addr} is {card['status']} and has no live session to read a message; "
-                "a card is addressed only while it runs."
-            )
-        return _card_target(card, record)
+        if card["status"] == "running":
+            # Without a live session yet she is still starting: the row is pinned to this
+            # attempt, and her inbox hands it over at her first tool boundary (B16).
+            return {**_card_target(card, record), "starting": record is None}
+        if record is not None and card["status"] != "review":
+            # Finished, her window still open: that session reads it, as a message to its id
+            # would, and no new attempt is opened (what her answer changes is declared again
+            # when the turn ends -- B55, B110).
+            return _session_target(record)
+        return _sessionless_card_target(card)
     if SESSION_ID.match(addr):
         if addr == sender_session:
             raise ValueError("That is this session; a message to yourself goes nowhere.")
         record = session_catalog.live_session(addr)
         if record is None:
+            saved = session_catalog.find_session(addr)
+            if saved and saved.get("task_id"):
+                # A card's closed session: wake the card, in her own conversation.
+                return resolve_address(saved["task_id"], sender=sender, space=space,
+                                       sender_task=sender_task, sender_session=sender_session,
+                                       contact=contact)
             raise ValueError(f"Session {addr} is not live; a session is addressed only while it runs.")
         if not record.get("inbox"):
             raise ValueError(f"Session {addr} ({record.get('role')}) reads no mail.")
@@ -224,6 +345,26 @@ def resolve_address(addr, *, sender, space=None, sender_task=None, sender_sessio
             + "; ".join(target["label"] for target in targets)
             + ". Send to one of them by its card id or session id."
         )
+    run_cards = _run_cards(addr, sender_task=sender_task, sender_session=sender_session)
+    if len(run_cards) == 1:
+        return resolve_address(run_cards[0]["id"], sender=sender, space=space, sender_task=sender_task,
+                               sender_session=sender_session, contact=contact)
+    if run_cards:
+        raise ValueError(
+            f"'{addr}' has {len(run_cards)} cards in this research run: "
+            + "; ".join(f"{card['id']} ({card['status']}: {card['title']})" for card in run_cards)
+            + ". Send to one of them by its card id."
+        )
+    writer = _last_writer(addr, inbox=sender) if contact else None
+    if writer is not None:
+        # Hermes' Bot Mode returns the reply to whoever wrote. A contact session has no space, so
+        # the name alone would wake that role's contact session, which never wrote, and the
+        # window that did would wait for an answer that never comes (2026-10-01).
+        board = tasks.connect(_board_path())
+        try:
+            return _reader_target(writer, board)
+        finally:
+            board.close()
     if addr == sender:
         raise ValueError(
             f"'{addr}' is your own role, and nobody else of it is in this space. "
@@ -288,16 +429,35 @@ def post(target, body, *, summary, sender, sender_task=None, sender_session=None
 
 
 def send_as(sender, addr, message, summary, *, request_input=False, card_task=None,
-            sender_session=None, space=None):
+            sender_session=None, space=None, contact=False):
     """SendMessage, whoever sends it: a misaka session's tool or an ally's MCP bridge.
 
     Resolves the one recipient, queues the row (parking this card first for a help request) and
     returns the tool result. Blocking: sqlite and, for a contact session, a process start."""
     target = resolve_address(addr, sender=sender, space=space, sender_task=card_task,
-                             sender_session=sender_session)
+                             sender_session=sender_session, contact=contact)
     if request_input and target["to_addr"] != "last-order":
         raise ValueError("request_input=true must go to a Last Order: last-order, or a Last Order's session id.")
     body = f"[card {card_task}]\n{message}" if card_task and not request_input else message
+    if target.get("wake_card"):
+        who = "".join((sender, f" · card {card_task}" if card_task else "",
+                       f" · session {sender_session}" if sender_session else ""))
+        out = wake_card(target, f"[Message from {who}. Answer with SendMessage; then complete the card "
+                                f"again with misaka_card_complete -- your deliverable stands unless you "
+                                f"change it.]\n{message}")
+        from misaka.core.platform import cards
+        try:
+            cards.append_log(target["workspace"], target["to_task"], sender, f"[message] {message}")
+        except OSError:
+            pass
+        return {"content": [{"type": "text", "text": (
+            f"{target['label']} had no live session, so she was woken in her own session with your "
+            f"message as her next turn (pane {out['pane_id']}). A reply comes back as a message"
+            + ("; to hear it before you go on, wait for her with misaka_sister_output "
+               f"(task_id={target['to_task']}, block=true)." if sender == "last-order"
+               else "; continue working without waiting for it."))}],
+            "details": {"to": target["to_addr"], "to_task": target["to_task"], "to_session": None,
+                        "pane_id": out["pane_id"], "woken": True}}
     if request_input:
         mid = request_help(target, body, message, summary, sender=sender, card_task=card_task,
                            sender_session=sender_session)
@@ -307,6 +467,10 @@ def send_as(sender, addr, message, summary, *, request_input=False, card_task=No
     contact = not (target["to_task"] or target["to_session"])
     if contact:
         where = "it is being woken to read it"
+    elif target.get("not_started"):
+        where = "her card has not started; it is handed to her at her first tool boundary once it runs"
+    elif target.get("starting"):
+        where = "her session is still starting and reads it at its first tool boundary"
     elif target.get("after_turn"):
         where = "it takes messages between turns: at once if it is idle, otherwise when its current turn ends"
     else:
@@ -541,7 +705,10 @@ class SendMessageParams(BaseModel):
 
     to: str = Field(description=(
         "A card id (t_xxxxxx) reaches the session running that card; a session id reaches that one "
-        "conversation; both must be live. A name (last-order, or a Sister id such as 10032) reaches "
+        "conversation. A finished card, or its closed session, is woken in her own session with this "
+        "message as her next turn; a card that has not started gets it when it does. Inside a research "
+        "run a name means that role's card in the run; otherwise a name (last-order, or a Sister id such "
+        "as 10032) reaches "
         "the one session of that role in your space, or her contact session when none is there; "
         "with several there the message is refused and they are listed by id."))
     message: str = Field(description="Plain text message content")
@@ -628,7 +795,8 @@ class MessagesPart:
             record = session_catalog.find_session(own_session) if own_session else None
             return send_as(self.sender, addr, args.message, args.summary,
                            request_input=args.request_input, card_task=self.card_task,
-                           sender_session=own_session, space=(record or {}).get("space"))
+                           sender_session=own_session, space=(record or {}).get("space"),
+                           contact=self.contact)
 
         return await asyncio.to_thread(send)
 

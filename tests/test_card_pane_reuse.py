@@ -419,3 +419,57 @@ async def test_last_order_closes_what_finished_cards_left_in_her_tab_and_nothing
     assert [params["id"] for method, params in calls if method == "pane.close"] == ["p1", "p3"]
     await close.execute("c", {"pane_ids": ["p4"], "confirmed": True}, None, None, ctx)
     assert [params["id"] for method, params in calls if method == "pane.close"] == ["p1", "p3", "p4"]
+
+
+async def test_a_card_woken_to_answer_a_message_leaves_the_cards_built_on_it_alone(panel, home):
+    """2026-10-01: Last Order's note woke finished card A; the continuation reopened A, which sent
+    finished card B (built on A) back to todo to redo its whole job. A consultation is not rework."""
+    a, _ = _card(panel, home, title="T1 timeline")
+    b, _ = _card(panel, home, title="T2 attribution", status="todo")
+    con = panel._board()
+    tasks.link_dependencies(con, [a], b)        # edges are drawn before a card finishes
+    con.execute("UPDATE tasks SET status='done' WHERE id=?", (b,))
+    tasks._mirror_status(con, b)
+    con.commit()
+    before = tasks.get(con, b)
+
+    await panel.continue_card(a, "a question about your timeline", consult=True)
+
+    after = tasks.get(con, b)
+    assert after["status"] == "done" and after["generation"] == before["generation"]
+    assert tasks.get(con, a)["status"] == "running"
+
+
+async def test_continuing_a_card_as_rework_still_sends_its_dependents_back(panel, home):
+    a, _ = _card(panel, home, title="T1 timeline")
+    b, _ = _card(panel, home, title="T2 attribution", status="todo")
+    con = panel._board()
+    tasks.link_dependencies(con, [a], b)        # edges are drawn before a card finishes
+    con.execute("UPDATE tasks SET status='done' WHERE id=?", (b,))
+    tasks._mirror_status(con, b)
+    con.commit()
+
+    await panel.continue_card(a, "redo the timeline")
+
+    assert tasks.get(con, b)["status"] == "todo"
+
+
+async def test_a_card_answers_a_message_while_its_parent_is_running(panel, home):
+    """2026-10-01: card B asked finished card A a question; A, woken, could not wake B to give the
+    answer -- B's parent A was running, so B failed the "parents done" gate every start needs.
+    A consultation starts no work built on the parent; rework still waits for it."""
+    a, _ = _card(panel, home, title="T1 data")
+    b, _ = _card(panel, home, title="T2 breakpoints", status="todo")
+    con = panel._board()
+    tasks.link_dependencies(con, [a], b)
+    con.execute("UPDATE tasks SET status='done' WHERE id=?", (b,))
+    tasks._mirror_status(con, b)
+    con.execute("UPDATE tasks SET status='running' WHERE id=?", (a,))     # A answering B, woken
+    tasks._mirror_status(con, a)
+    con.commit()
+
+    with pytest.raises(ValueError, match="could not be claimed"):
+        await panel.continue_card(b, "redo the breakpoints")              # rework: A must be done
+
+    await panel.continue_card(b, "A's answer to your question", consult=True)
+    assert tasks.get(con, b)["status"] == "running"

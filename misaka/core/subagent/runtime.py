@@ -3278,14 +3278,18 @@ class SubagentManager:
                                 task.process is not None,
                             )
                         )
+                        if task.process is None or not accepted:
+                            # Not started yet (queued for a slot, or still booting):
+                            # the message is steered in when the child accepts its
+                            # prompt.  Nothing can consume it before then, so the
+                            # sender does not wait (CCB queuePendingMessage).
+                            task.pending_messages.append(
+                                {"message": message, "requestId": ""}
+                            )
+                            await task.persist()
+                            return None
                         waiters = getattr(task, "steer_waiters", None)
                         if waiters is None:
-                            if task.process is None or not accepted:
-                                task.pending_messages.append(
-                                    {"message": message, "requestId": ""}
-                                )
-                                await task.persist()
-                                return None
                             await task.send("steer", message)
                             return None
                         request_id = secrets.token_hex(8)
@@ -3294,8 +3298,6 @@ class SubagentManager:
                         pending = {"message": message, "requestId": request_id}
                         task.pending_messages.append(pending)
                         await task.persist()
-                        if task.process is None or not accepted:
-                            return waiter
                         try:
                             await task.send("steer", message, requestId=request_id)
                         except Exception:

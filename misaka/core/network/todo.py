@@ -160,6 +160,20 @@ def _turn_failure(event):
 PROGRESS_SECONDS = 60     # how often a busy Sister stamps progress on its card
 
 
+def _review_record(submission):
+    """What a review card recorded, as a list for its author to check, with its length; None for
+    a card that reviews nothing."""
+    if "alternatives" in submission:
+        items = [f"- [{'gap' if a.get('gap') else 'possibility not taken'}] {a.get('proposal', '')}"
+                 for a in submission["alternatives"]]
+    elif "issues" in submission:
+        items = [f"- [{'material' if i.get('material') else 'minor'}] {i.get('question', '')}"
+                 for i in submission["issues"]]
+    else:
+        return None
+    return ("\n".join(items) or "(nothing recorded)"), len(items)
+
+
 class TodoPart:
     """The ``misaka_todo`` tools and reminder nudges for one task card."""
 
@@ -311,13 +325,19 @@ class TodoPart:
                     raise ValueError("Card ownership changed before its alternatives were recorded.")
             if {"findings", "uncertain"} & p.model_fields_set:
                 generation, claim_lock = self._ownership()
+                # A finished card whose session works on -- a Sister's question, a note from Last
+                # Order -- records under the generation it finished, fenced by that generation:
+                # its claim went with the completion, and the turn's end declares the findings
+                # again with its outputs (``_redeclare_if_done``). Before, they stayed only in the
+                # message she sent (2026-10-01, B110).
+                finished = self._completed_row() is not None
                 if generation is None or not bdb.add_event(
                     c,
                     task_id,
                     "research_evidence",
                     evidence,
                     generation=generation,
-                    claim_lock=claim_lock,
+                    claim_lock=None if finished else claim_lock,
                 ):
                     raise ValueError("Card ownership changed before its research evidence was recorded.")
             cards.append_log(row["workspace"], task_id, sender, p.text)
@@ -344,7 +364,22 @@ class TodoPart:
                                  f"`{row['output_dir']}` yet. Write it, then call misaka_card_complete again.")
             # The same checks the submission will make, so a red-team card without its issue
             # list hears it now rather than at the end of the turn.
-            worker.build_submission(con(), row, p.summary.strip())
+            submission = worker.build_submission(con(), row, p.summary.strip())
+            # A review acts on what was recorded, never on the file: a divergence review that
+            # wrote five gaps and recorded one left four that nobody answered, and no later
+            # review found them (2026-10-01, B117). Once per attempt, before the review is
+            # submitted, its author checks her own file against her record.
+            recorded = _review_record(submission)
+            if recorded is not None and bdb.latest_payload(con(), task_id, "review_record_checked",
+                                                           generation=row["generation"]) is None:
+                bdb.add_event(con(), task_id, "review_record_checked", {"items": recorded[1]},
+                              generation=row["generation"], claim_lock=row["claim_lock"])
+                raise ValueError(
+                    "Before this review is submitted, check the file you wrote against what you recorded "
+                    "with misaka_card_note. Only the record is acted on; anything only in the file is lost:\n"
+                    + recorded[0] + "\nIf your file names anything this list does not have -- every gap "
+                    "included -- call misaka_card_note again with the complete list (it replaces this one). "
+                    "Then call misaka_card_complete again.")
             worker.declare_completion(con(), row, p.summary.strip())
             return _text("Completion recorded for this attempt. End the turn now with a short plain-text "
                          "summary; the card is submitted when the turn ends.")
@@ -450,8 +485,8 @@ class TodoPart:
         change stayed declared under the old digests. The run's settle then saw bytes that
         did not match the declaration and, until 2026-09-24, failed the whole run (18 changed
         paths on 6 cards). The declaration follows the work instead: the same submission the
-        completion built, rebuilt from the output folder, recorded as a newer ``submitted``
-        row for this generation, and indexed again. No model turn is spent on it."""
+        completion built, rebuilt from the output folder and the findings recorded since, as a
+        newer ``submitted`` row for this generation, and indexed again. No model turn is spent on it."""
         row = self._completed_row()
         if row is None:
             return False
@@ -472,8 +507,9 @@ class TodoPart:
                                 generation=generation)
             return False
         payload = prepared.payload
-        if (payload.get("artifact_digests") == last.get("artifact_digests")
-                and payload.get("artifacts") == last.get("artifacts")):
+        # Findings recorded after the completion change the declaration as much as a file does.
+        if all(payload.get(key) == last.get(key)
+               for key in ("artifact_digests", "artifacts", "findings", "uncertain")):
             return False
         with self._bdb.write_txn(con):
             self._bdb.add_event(con, self.task_id, "submitted", payload, generation=generation)

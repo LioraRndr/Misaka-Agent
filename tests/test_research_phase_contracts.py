@@ -320,7 +320,7 @@ async def test_review_records_survive_acceptance_and_reach_their_node(tmp_path, 
             assert dispatch.accept_state(con, row, prepared, generation=1, claim_lock="lock1")
             link = con.execute("SELECT run_id, branch_id FROM research_run_tasks WHERE task_id=?", (tid,)).fetchone()
             run, node = runs.get(con, link["run_id"]), runs.node(con, link["branch_id"])
-            receive = (workflow._receive_divergence(con, run, node, tasks.get(con, tid)) if kind == "divergence"
+            receive = (workflow._receive_divergence(con, run, node, tasks.get(con, tid), 1) if kind == "divergence"
                        else workflow._receive_critique(con, run, node, tasks.get(con, tid), 1))
             assert receive is None
             assert [r["question"] for r in con.execute("SELECT question FROM research_issues WHERE task_id=?", (tid,))] \
@@ -370,7 +370,7 @@ def test_the_divergence_review_excavates_presuppositions_and_leaves_the_verdict_
     assert "a consensus is a fact about the literature, not about the matter itself" in contract
     assert "those it gave up and those it never chose" in contract and "the gaps it left" in contract
     assert "that view is no reason to decline it" in flat(planner.DECIDE_CONTRACT)
-    assert "its gaps went through your review" in flat(planner.DECIDE_CONTRACT)
+    assert "its gaps were filled or answered in the divergence rounds" in flat(planner.DECIDE_CONTRACT)
     assert "gap: true" in contract and "fills it before anything is opened from it" in flat(contract)
     assert "gains, gives up and trades" in flat(planner.SYNTHESIS_CONTRACT)
     assert "Attend to what you do not know" in flat(RESEARCH_LO_ORCHESTRATION)
@@ -442,3 +442,27 @@ def test_a_dependency_is_only_for_output_a_card_needs():
     flat = " ".join(planner.ROOT_CONTRACT.split())
     assert "give one only when a card needs another's output as its input" in flat
     assert "belong in `plan_markdown`, so the cards start together" in flat
+
+
+async def test_a_review_is_checked_against_its_own_file_before_it_is_submitted(tmp_path, monkeypatch):
+    """2026-10-01 (B117): the divergence review wrote five gaps in divergence.md and recorded one;
+    only the record is acted on, so four gaps were never answered and no later review found them.
+    Once per attempt the reviewer is shown her record and asked to check her file against it."""
+    with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
+        tid, out, note = _running_card(tmp_path, con, monkeypatch, "divergence")
+        part = todo.TodoPart(tid, "10033")
+        part._con = con
+        complete = next(tool for tool in part.tools if tool.name == "misaka_card_complete")
+        Path(out, "review.md").write_text("# Gaps\nG1 ... `gap: true`\nG2 ... `gap: true`\n", encoding="utf-8")
+        gap = {**ALTERNATIVE, "proposal": "G1: who read the governed", "gap": True}
+        await note.execute("c", {"text": "proposals", "alternatives": [gap]}, None, None, None)
+
+        with pytest.raises(ValueError, match=r"(?s)check the file you wrote.*- \[gap\] G1: who read the governed"):
+            await complete.execute("c", {"summary": "done"}, None, None, None)
+        assert worker.declared_completion(con, tasks.get(con, tid)) is None
+        # She records the complete list, and completes.
+        await note.execute("c", {"text": "proposals", "alternatives": [
+            gap, {**gap, "proposal": "G2: what the clerks wrote"}]}, None, None, None)
+        await complete.execute("c", {"summary": "done"}, None, None, None)
+        assert worker.declared_completion(con, tasks.get(con, tid)) is not None
+        assert len(worker.build_submission(con, tasks.get(con, tid), "done")["alternatives"]) == 2

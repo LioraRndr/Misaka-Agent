@@ -7,6 +7,7 @@ open as nodes only when the root reconciles the level. The model turns are scrip
 the driver records is real."""
 import hashlib
 import json
+import re
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,7 +57,7 @@ def lab(tmp_path, monkeypatch):
         yield SimpleNamespace(con=con, run=run, root=root, tmp=tmp_path, monkeypatch=monkeypatch)
 
 
-def _script(lab, *, reviews, alternatives, dispositions, decide, cards_failed=None):
+def _script(lab, *, reviews, alternatives, dispositions, decide, cards_failed=None, gaps=None):
     """Scripted model turns: every card comes back done with its submission, and every phase
     command is validated and recorded exactly as the real tool would record it."""
     con = lab.con
@@ -77,20 +78,25 @@ def _script(lab, *, reviews, alternatives, dispositions, decide, cards_failed=No
                 rel = str(critique.relative_to(row["workspace"]))
                 payload["artifacts"] = [rel]
                 payload["artifact_digests"] = {rel: hashlib.sha256(critique.read_bytes()).hexdigest()}
-            if row["research_kind"] == "divergence":
-                payload["alternatives"] = alternatives
+            if row["research_kind"] == "divergence":       # one card: each round is an attempt
+                payload["alternatives"] = (alternatives[row["generation"]] if isinstance(alternatives, dict)
+                                           else alternatives)
             con.execute("UPDATE tasks SET status='done' WHERE id=?", (row["id"],))
             cards.set_fields(row["workspace"], row["id"], status="done", generation=row["generation"])   # the file is the contract
             tasks.add_event(con, row["id"], "submitted", payload, generation=row["generation"])
         return "done"
 
+    lab.material = []
+
     def synthesize(con_, run, cfg, worker, node, rows, *, revision=None, **_kwargs):
         syntheses.append(revision)
+        lab.material.append(sorted(row["id"] for row in rows))
         return f"Conclusion {len(syntheses)}\n"
 
     def command(con_, run, cfg, worker, node, prompt, *, key, model, validate, **_kwargs):
         lab.prompts[key] = prompt
         answer = (dispositions(con, key) if key.startswith("dispose:")
+                  else gaps(con, key) if key.startswith("gaps:")
                   else cards_failed(con, key) if key.startswith("cards_failed:") else decide(con))
         payload = validate(model.model_validate(answer).model_dump())
         runs.record_action(con, run, node, key, payload, session_file=run["root_session"], tool_call_id=key)
@@ -117,9 +123,9 @@ class _Runner:
         assert tasks.claim_resume(self.con, task_id, "resume-lock", 1, expected_generation=expected_generation)
         self.continued.append((task_id, expected_generation, say))
         row = tasks.get(self.con, task_id)
-        name = next(line.split("`")[1] for line in say.splitlines() if line.startswith("polish prose. Deliver"))
+        name = re.search(r"Deliver `([^`]+)`", say).group(1)        # the red team's and the divergence review's
         Path(row["output_dir"]).mkdir(parents=True, exist_ok=True)
-        Path(row["output_dir"], name).write_text(f"Critique of version {row['generation']}\n", encoding="utf-8")
+        Path(row["output_dir"], name).write_text(f"Review of version {row['generation']}\n", encoding="utf-8")
 
 
 async def _expand(lab, runner=None):
@@ -186,6 +192,220 @@ async def test_a_revision_is_reviewed_again_then_alternatives_become_a_decision(
     node_view = (lab.tmp / graph.node_view_path(root["id"])).read_text(encoding="utf-8")
     assert "attempt 2" in node_view and "Divergence review" in node_view and "synthesis-2.md" in node_view
     assert "Which cause leads?" in (lab.tmp / graph.graph_path(run)).read_text(encoding="utf-8")
+
+
+async def test_the_red_team_loop_runs_first_then_the_divergence_loop_until_no_gap_is_left(lab):
+    """2026-10-01 (user): conclusion -> red team -> revision -> red team again, until she finds nothing
+    or the revisions are spent; only then the divergence review -> its gaps filled -> review again,
+    until only possibilities not taken are left; then the node's decision."""
+    con, run, root = lab.con, lab.run, lab.root
+    order = []
+
+    def dispositions(con_, key):
+        order.append(key)
+        [issue] = runs.issues(con, run["id"], node_id=root["id"], round=int(key.split(":")[1]), origin="critique")
+        return {"dispositions": [{"issue_id": issue["id"], "disposition": "revise", "reason": "fix the dates"}]}
+
+    def gaps(con_, key):
+        order.append(key)
+        [gap] = runs.issues(con, run["id"], node_id=root["id"], round=int(key.split(":")[1]), origin="gap")
+        return {"dispositions": [{"issue_id": gap["id"], "disposition": "revise", "reason": "read the governed"}]}
+
+    def decide(con_):
+        order.append("decide")
+        [rival] = runs.issues(con, run["id"], node_id=root["id"], origin="divergence")
+        return {"decisions": [], "declined": [{"issue_id": rival["id"], "disposition": "decline", "reason": "later"}]}
+
+    rival = {"kind": "framework", "proposal": "Composite monarchy", "premise": "q", "rationale": "frame", "gap": False}
+    hole = {"kind": "source base", "proposal": "Nobody read the governed", "premise": "rulers only",
+            "rationale": "any answer needs them", "gap": True}
+    syntheses = _script(lab, reviews={1: [_issue("Dates?")], 2: []},
+                        alternatives={1: [rival, hole], 2: []},
+                        dispositions=dispositions, gaps=gaps, decide=decide)
+    runner = _Runner(con)
+    assert await _expand(lab, runner) == "closed"
+
+    # The red team's loop, then the divergence review's: one revision each, each reviewed again.
+    assert order == ["dispose:1", "gaps:2", "decide"]
+    assert [Path(row["path"]).name for row in graph.syntheses(con, run, root)] == \
+        ["synthesis.md", "synthesis-2.md", "synthesis-3.md"]
+    [red] = runs.tasks(con, run["id"], kind="red_team", node_id=root["id"])
+    [review] = runs.tasks(con, run["id"], kind="divergence", node_id=root["id"])
+    assert red["generation"] == 2 and review["generation"] == 2      # the red team never saw version 3
+    assert [(task_id, say.count("re-review (round 2)")) for task_id, _gen, say in runner.continued] == \
+        [(red["id"], 1), (review["id"], 1)]
+    assert "Deliver `divergence-2.md`" in runner.continued[1][2]
+    # The divergence review saw the version the red team left, and the gap revision was told so.
+    assert [r["version"] for r in workflow._divergence_requests(con, review)] == [2, 3]
+    assert syntheses[1]["reviewer"] == "red_team" and syntheses[2]["reviewer"] == "divergence"
+    assert "revise" in syntheses[2]["dispositions"]
+    assert [i["disposition"] for i in runs.issues(con, run["id"], node_id=root["id"], origin="gap")] == ["revise"]
+
+
+async def test_the_divergence_loop_stops_at_the_revision_limit(lab):
+    con, run, root = lab.con, lab.run, lab.root
+    order = []
+
+    def gaps(con_, key):
+        order.append(key)
+        version = int(key.split(":")[1])
+        [gap] = runs.issues(con, run["id"], node_id=root["id"], round=version, origin="gap")
+        # One gap revision is allowed (max_revisions = 1): the second round must answer another way.
+        return {"dispositions": [{"issue_id": gap["id"], "disposition": "revise" if version == 1 else "concede",
+                                  "reason": "r"}]}
+
+    hole = {"kind": "source base", "proposal": "Nobody read the governed", "premise": "rulers only",
+            "rationale": "needed", "gap": True}
+    _script(lab, reviews={1: []}, alternatives={1: [hole], 2: [hole]}, dispositions=None, gaps=gaps,
+            decide=lambda con_: (order.append("decide"), {"decisions": [], "declined": []})[1])
+    assert await _expand(lab, _Runner(con)) == "closed"
+    assert order == ["gaps:1", "gaps:2", "decide"]
+
+
+async def test_an_issue_the_red_team_raises_again_word_for_word_is_answered_again(lab):
+    """Matched against the earlier round, it folded into the issue already answered, and the round
+    looked clean: the loop ended on an objection nobody answered (2026-10-01)."""
+    con, run, root = lab.con, lab.run, lab.root
+    order = []
+
+    def dispositions(con_, key):
+        order.append(key)
+        [issue] = runs.issues(con, run["id"], node_id=root["id"], round=int(key.split(":")[1]), origin="critique")
+        return {"dispositions": [{"issue_id": issue["id"], "reason": "r",
+                                  "disposition": "revise" if key == "dispose:1" else "rebut"}]}
+
+    _script(lab, reviews={1: [_issue("Dates?")], 2: [_issue("Dates?")]}, alternatives=[], dispositions=dispositions,
+            decide=lambda con_: (order.append("decide"), {"decisions": [], "declined": []})[1])
+    assert await _expand(lab, _Runner(con)) == "closed"
+    assert order == ["dispose:1", "dispose:2", "decide"]
+
+
+async def test_a_conclusion_waits_for_a_card_woken_to_answer_a_message(lab):
+    """2026-10-01: Last Order woke card B to ask about her material, disposed without waiting, and
+    version 2 was written while B answered -- B was missing from its material map."""
+    con, run, root = lab.con, lab.run, lab.root
+
+    def dispositions(con_, key):
+        [card] = runs.tasks(con, run["id"], kind="research", node_id=root["id"])
+        # A SendMessage to the finished card: a consultation, its own new attempt.
+        assert tasks.claim_resume(con, card["id"], "consult", 1, expected_generation=card["generation"],
+                                  consult=True)
+        [issue] = runs.issues(con, run["id"], node_id=root["id"], round=int(key.split(":")[1]), origin="critique")
+        return {"dispositions": [{"issue_id": issue["id"], "disposition": "revise", "reason": "r"}]}
+
+    _script(lab, reviews={1: [_issue("Dates?")], 2: []}, alternatives=[], dispositions=dispositions,
+            decide=lambda con_: {"decisions": [], "declined": []})
+    assert await _expand(lab, _Runner(con)) == "closed"
+    [card] = runs.tasks(con, run["id"], kind="research", node_id=root["id"])
+    assert card["generation"] == 2 and card["status"] == "done"
+    assert lab.material == [[card["id"]], [card["id"]]]      # version 2 was written from the card too
+
+
+@pytest.mark.parametrize("crash_at", ["gaps", "synthesis-3", "decide"])
+async def test_a_node_resumed_inside_the_divergence_loop_picks_up_where_it_stopped(lab, crash_at):
+    """Resume and retry put a node back to planning and every phase fast-forwards through what it
+    already recorded: the divergence loop's states must too -- no second card, no second answer,
+    no version written twice."""
+    con, run, root = lab.con, lab.run, lab.root
+    order, crashed = [], []
+
+    def once(point):
+        if crash_at == point and not crashed:
+            crashed.append(point)
+            raise RuntimeError(f"provider fell over at {point}")
+
+    def dispositions(con_, key):
+        order.append(key)
+        [issue] = runs.issues(con, run["id"], node_id=root["id"], round=int(key.split(":")[1]), origin="critique")
+        return {"dispositions": [{"issue_id": issue["id"], "disposition": "revise", "reason": "r"}]}
+
+    def gaps(con_, key):
+        once("gaps")
+        order.append(key)
+        [gap] = runs.issues(con, run["id"], node_id=root["id"], round=int(key.split(":")[1]), origin="gap")
+        return {"dispositions": [{"issue_id": gap["id"], "disposition": "revise", "reason": "r"}]}
+
+    def decide(con_):
+        once("decide")
+        order.append("decide")
+        return {"decisions": [], "declined": [{"issue_id": i["id"], "disposition": "decline", "reason": "later"}
+                                              for i in runs.issues(con, run["id"], node_id=root["id"], origin="divergence")]}
+
+    hole = {"kind": "source base", "proposal": "Nobody read the governed", "premise": "p", "rationale": "r", "gap": True}
+    rival = {"kind": "framework", "proposal": "Composite monarchy", "premise": "q", "rationale": "r", "gap": False}
+    _script(lab, reviews={1: [_issue("Dates?")], 2: []}, alternatives={1: [rival, hole], 2: []},
+            dispositions=dispositions, gaps=gaps, decide=decide)
+    scripted = planner.synthesize
+
+    def synthesize(*args, **kwargs):
+        if kwargs.get("revision") and kwargs["revision"]["version"] == 3:
+            once("synthesis-3")
+        return scripted(*args, **kwargs)
+
+    lab.monkeypatch.setattr(planner, "synthesize", synthesize)
+    runner = _Runner(con)
+    with pytest.raises(RuntimeError, match="provider fell over"):
+        await _expand(lab, runner)
+    # What a retry does: the node goes back to planning, and every phase picks up what it recorded.
+    con.execute("UPDATE research_branches SET status='planning' WHERE id=?", (root["id"],))
+    lab.root = runs.node(con, root["id"])
+    assert await _expand(lab, runner) == "closed"
+
+    assert order == ["dispose:1", "gaps:2", "decide"]
+    assert [Path(r["path"]).name for r in graph.syntheses(con, run, root)] == \
+        ["synthesis.md", "synthesis-2.md", "synthesis-3.md"]
+    assert len(runs.tasks(con, run["id"], kind="red_team", node_id=root["id"])) == 1
+    [review] = runs.tasks(con, run["id"], kind="divergence", node_id=root["id"])
+    assert review["generation"] == 2 and [r["version"] for r in workflow._divergence_requests(con, review)] == [2, 3]
+    assert len(runs.issues(con, run["id"], node_id=root["id"], origin="gap")) == 1
+
+
+async def test_a_join_runs_both_review_loops_like_any_node(lab):
+    """A node two paths closed into: its own red-team loop, then its divergence loop until no gap is
+    left, then its own decision -- nothing of either parent's loops carries into it."""
+    con, run, root = lab.con, lab.run, lab.root
+    # A join sits one below its deepest parent: depth 2 here, so a limit of 3 leaves it room to fork
+    # (at the limit it would close after its red-team loop, with no divergence review).
+    con.execute("UPDATE research_runs SET limits_json=? WHERE id=?",
+                (json.dumps({**runs.limits(run), "max_depth": 3}), run["id"]))
+    lab.run = run = runs.get(con, run["id"])
+    a = runs.create_node(con, run["id"], question="Fiscal limits?", parents=[root["id"]])
+    b = runs.create_node(con, run["id"], question="Local coalitions?", parents=[root["id"]])
+    for parent in (a, b):
+        con.execute("UPDATE research_branches SET status='closed' WHERE id=?", (parent["id"],))
+    join = runs.create_node(con, run["id"], question="Both at once?", parents=[a["id"], b["id"]])
+    workflow._prepare_sessions(con, run)
+    runs.prepare_runner(con, "research_branches", join["id"])
+    join = runs.node(con, join["id"])
+    plan = dict(runs.action(con, run["id"], root["id"], "plan")["payload"])
+    plan["tasks"] = [{**plan["tasks"][0], "local_id": "both", "title": "Both causes"}]
+    runs.record_action(con, run, join, "plan", plan, session_file=join["session_file"], tool_call_id="plan-join")
+    lab.root = join
+    order = []
+
+    def dispositions(con_, key):
+        order.append(key)
+        [issue] = runs.issues(con, run["id"], node_id=join["id"], round=int(key.split(":")[1]), origin="critique")
+        return {"dispositions": [{"issue_id": issue["id"], "disposition": "revise", "reason": "r"}]}
+
+    def gaps(con_, key):
+        order.append(key)
+        [gap] = runs.issues(con, run["id"], node_id=join["id"], round=int(key.split(":")[1]), origin="gap")
+        return {"dispositions": [{"issue_id": gap["id"], "disposition": "revise", "reason": "r"}]}
+
+    hole = {"kind": "source base", "proposal": "Nobody read the governed", "premise": "p", "rationale": "r", "gap": True}
+    _script(lab, reviews={1: [_issue("Dates?")], 2: []}, alternatives={1: [hole], 2: []},
+            dispositions=dispositions, gaps=gaps,
+            decide=lambda con_: (order.append("decide"), {"decisions": [], "declined": []})[1])
+    assert await _expand(lab, _Runner(con)) == "closed"
+    assert order == ["dispose:1", "gaps:2", "decide"]
+    assert [Path(r["path"]).name for r in graph.syntheses(con, run, join)] == \
+        ["synthesis.md", "synthesis-2.md", "synthesis-3.md"]
+    assert join["depth"] == 2
+    assert sorted(row[0] for row in con.execute("SELECT parent_id FROM research_edges WHERE child_id=?",
+                                                 (join["id"],))) == sorted([a["id"], b["id"]])
+    for parent in (a, b):
+        assert not runs.issues(con, run["id"], node_id=parent["id"])        # nothing landed on a parent
 
 
 def _fail_once(lab, local_id):
@@ -332,9 +552,10 @@ async def test_a_join_is_a_fork_of_the_lowest_node_its_parents_share(lab):
 
 
 async def test_a_gap_is_filled_inside_the_node_that_left_it_and_never_handed_down(lab):
-    """2026-09-28 (user): a gap any answer needs is settled before the node forks -- with the red team's
-    issues, in the node's own review loop -- so no node opened from it inherits it, no sibling researches
-    it again and no red team finds it a second time. (Depth 2 researched 27 gaps about 68 times.)"""
+    """2026-09-28 (user): a gap any answer needs is settled before the node forks, so no node opened from
+    it inherits it, no sibling researches it again and no red team finds it a second time. (Depth 2
+    researched 27 gaps about 68 times.) 2026-10-01 (user): the gaps are answered in the divergence
+    review's own rounds, after the red team's loop -- not beside the red team's issues."""
     con, run, root = lab.con, lab.run, lab.root
     runs.add_decision(con, run["id"], node=root, round=1, origin="plan", index=0, question="Which method?",
                       stakes="s", options=[{"label": "decision points", "premise": "p", "own": True},
@@ -353,27 +574,34 @@ async def test_a_gap_is_filled_inside_the_node_that_left_it_and_never_handed_dow
         {"kind": "source base", "proposal": "Nobody read the governed", "premise": "only rulers speak",
          "rationale": "any answer needs the governed", "gap": True}]}, generation=1)
     assert workflow._receive_critique(con, run, root, tasks.get(con, red), 1) is None
-    assert workflow._receive_divergence(con, run, root, tasks.get(con, review)) is None
+    assert workflow._receive_divergence(con, run, root, tasks.get(con, review), 1) is None
     by_origin = {i["origin"]: i for i in runs.issues(con, run["id"], node_id=root["id"])}
     assert set(by_origin) == {"critique", "divergence", "gap"}
     gap, rival = by_origin["gap"], by_origin["divergence"]
-    # Round 1's dispositions answer the gap beside the critique's issue, in the same command.
+    # The red team's issue and the divergence review's gap are answered in turns of their own.
     calls = []
 
     def command(con_, run_, cfg, worker, node, prompt, *, key, model, validate, **_kwargs):
         calls.append(key)
-        assert "Nobody read the governed" in prompt and "Dates?" in prompt
-        payload = validate(model.model_validate({"dispositions": [
-            {"issue_id": by_origin["critique"]["id"], "disposition": "rebut", "reason": "no"},
-            {"issue_id": gap["id"], "disposition": "concede", "reason": "no such records survive"}]}).model_dump())
+        if key == "dispose:1":
+            assert "Dates?" in prompt and "Nobody read the governed" not in prompt
+            answer = [{"issue_id": by_origin["critique"]["id"], "disposition": "rebut", "reason": "no"}]
+        else:
+            assert "Nobody read the governed" in prompt and "Dates?" not in prompt
+            with pytest.raises(ValueError, match="filled or answered"):
+                validate(model.model_validate({"dispositions": [
+                    {"issue_id": gap["id"], "disposition": "branch", "reason": "?"}]}).model_dump())
+            answer = [{"issue_id": gap["id"], "disposition": "concede", "reason": "no such records survive"}]
+        payload = validate(model.model_validate({"dispositions": answer}).model_dump())
         runs.record_action(con, run, node, key, payload, session_file=run["root_session"], tool_call_id=key)
         return runs.action(con, run["id"], node["id"], key), ""
 
     lab.monkeypatch.setattr(planner, "_command", command)
-    dispositions = planner.dispose(con, run, {}, None, root, tasks.get(con, red),
-                                   [by_origin["critique"], gap], round=1, revisions_left=1,
-                                   divergence=tasks.get(con, review))
-    assert calls == ["dispose:1"] and len(dispositions) == 2
+    dispositions = [*planner.dispose(con, run, {}, None, root, tasks.get(con, red), [by_origin["critique"]],
+                                     round=1, revisions_left=1),
+                    *planner.fill_gaps(con, run, {}, None, root, tasks.get(con, review), [gap],
+                                       version=1, round=1, revisions_left=1)]
+    assert calls == ["dispose:1", "gaps:1"] and len(dispositions) == 2
     for item in dispositions:
         runs.dispose(con, item["issue_id"], item["disposition"], reason=item["reason"])
     # The decision sees the possibility only: the gap is settled, and no gaps list exists to hand it on.

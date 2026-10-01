@@ -11,7 +11,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from misaka.config import CFG, current_config, sisters
-from misaka.config.identity import COORDINATOR_APPROVAL, COORDINATOR_RECEIPTS
+from misaka.config.identity import (
+    COORDINATOR_APPROVAL,
+    COORDINATOR_BOARD_STATUS,
+    COORDINATOR_RECEIPTS,
+)
 from misaka.core.network import validate
 from misaka.core.network.sister_runtime import SisterRuntime
 from misaka.core.platform import budget, toolkit
@@ -509,8 +513,10 @@ def _install(harn, runtime):
         task_id: TaskId = Field(description="Sister task-card ID.")
         block: bool = Field(False, description=(
             "Leave false to inspect the task's current state and return immediately. "
-            "Set true only when the user asked to wait for the result: the call then "
-            "holds until the task reaches an accepted, failed, or stopped state."
+            "Set true only when the user asked to wait for the result, or when you asked its "
+            "Sister something you must hear before going on (a finished card woken by your "
+            "SendMessage answers and completes again): the call then holds until the task "
+            "reaches an accepted, failed, or stopped state."
         ))
         timeout: int = Field(30_000, ge=0, le=600_000, description=(
             "Maximum wait in milliseconds; applies only when block is true."
@@ -983,10 +989,9 @@ def _install(harn, runtime):
                     "reopens one itself. Research cards are not requeued here: their run is resumed by the "
                     "user with /research resume.",
         snippet="Requeue a stopped or failed card",
-        guidelines=[("Never write a card's status into the board's tables by hand: the card file is the "
-                     "contract, so a hand-written status is quietly put back. Requeue a stopped or failed "
-                     "card with misaka_card_requeue, and ask the user first. Requeueing only puts the card "
-                     "back in the queue; misaka_dispatch is what starts it.")],
+        guidelines=[COORDINATOR_BOARD_STATUS + " Requeue a stopped or failed card with misaka_card_requeue, and "
+                    "ask the user first. Requeueing only puts the card back in the queue; misaka_dispatch is what "
+                    "starts it."],
         parameters=CardRequeueParams)
     async def misaka_card_requeue(tool_call_id, params, signal, on_update, ctx):
         con = _con()

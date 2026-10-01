@@ -1,6 +1,7 @@
 """Small Research-only additions to the existing system-prompt assembly."""
 from misaka.config.identity import (
     COORDINATOR_APPROVAL,
+    COORDINATOR_BOARD_STATUS,
     COORDINATOR_RECEIPTS,
 )
 from misaka.core.system_prompt import CURRENT_TOOLS_GUIDELINE
@@ -49,7 +50,10 @@ def system_context(session, names, system_prompt, *, sister_id=None):
     default prompt they are all there already, and nothing is repeated.
     """
     if sister_id is None:
-        sections = [RESEARCH_LO_ORCHESTRATION, COORDINATOR_APPROVAL, COORDINATOR_RECEIPTS]
+        # The base's own rules whose tools Research leaves out; the board warning rides on
+        # misaka_card_requeue, but a research Last Order still has bash (2026-10-01).
+        sections = [RESEARCH_LO_ORCHESTRATION, COORDINATOR_APPROVAL, COORDINATOR_RECEIPTS,
+                    COORDINATOR_BOARD_STATUS]
     else:
         from misaka.core.research.planner import RESEARCH_SISTER_DISCIPLINE
         sections = [RESEARCH_SISTER_DISCIPLINE]
