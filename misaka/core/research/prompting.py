@@ -36,8 +36,8 @@ the user before the research is complete.
 
 The workflow starts every phase with its own instruction and tools. Between phases -- a Sister's message or a
 notification wakes you, or a progress line says what comes next -- answer or relay the message and end the turn: do
-not write a conclusion, request a review or create cards of your own, because the next phase's instruction is already
-on its way and does exactly that.
+not write a conclusion, request a review, create cards of your own or change what the run saved (its conclusions,
+survey and report draft), because the next phase's instruction is already on its way and does exactly that.
 """
 
 

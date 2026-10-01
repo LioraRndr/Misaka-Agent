@@ -11,8 +11,11 @@ it never judges or rewrites research prose.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
+import time
 from pathlib import Path
 
 from misaka.core.documents import index as corpus
@@ -20,6 +23,9 @@ from misaka.core.platform import prompt_guard
 from misaka.core.platform import tasks as task_store
 from misaka.core.research import bundle, commands, graph, planner, runs
 from misaka.core.session_manager import find_most_recent_session
+from misaka.utils import atomic
+
+_LOG = logging.getLogger(__name__)
 
 STAGE_OUTPUT = """
 Read the run through the catalog below: every conclusion, critique, divergence review, plan and card deliverable is an
@@ -271,8 +277,45 @@ def _checkpoint(con, run, kind):
     if not rows:
         return None
     row = rows[-1]
-    runs.artifact_text(row)  # A modified checkpoint is an integrity error, not permission to redraft.
+    _intact(con, run, row)  # A modified checkpoint is an integrity error, not permission to redraft.
     return row
+
+
+def _recorded_text(con, run, kind):
+    """The text a checkpoint was saved with, rebuilt from the commands it came from, or None."""
+    root = runs.root(con, run["id"])
+    if kind == "draft":
+        action = runs.action(con, run["id"], root["id"], "draft")
+        return action["payload"]["markdown"].strip() + "\n" if action else None
+    if kind == "survey":
+        sections = []
+        for node in runs.nodes(con, run["id"]):
+            action = runs.action(con, run["id"], root["id"], f"survey:{node['id']}")
+            if action is None:
+                return None
+            sections.append(action["payload"]["markdown"].strip())
+        return f"# Survey — run {run['id']}\n\n" + "\n\n".join(sections) + "\n"
+    return None
+
+
+def _intact(con, run, row):
+    """Check a checkpoint against its frozen digest. One changed afterwards -- outside the phase
+    that writes it -- is put back from the commands it was saved from, the changed file kept beside
+    it, and the run goes on: a draft edited during its final review failed the run, and every
+    resume failed the same way (B126). With nothing to rebuild it from, it stays an error."""
+    try:
+        runs.artifact_text(row)
+        return
+    except ValueError:
+        text = _recorded_text(con, run, row["kind"])
+        if text is None or hashlib.sha256(text.encode("utf-8")).hexdigest() != row["sha256"]:
+            raise
+    path = Path(row["path"])
+    kept = path.with_name(f"{path.stem}.edited-{int(time.time())}{path.suffix}")
+    os.replace(path, kept)
+    atomic.write_text(str(path), text)
+    _LOG.warning("Research %s: %s was changed after it was saved; restored it, the changed file is %s",
+                 run["id"], path, kept)
 
 
 def _save(con, run, kind, text, **metadata):
@@ -359,7 +402,8 @@ incompatible positions merged or presented as jointly true.
 Check completeness against the catalog below: Appendix I lists every node, and each line's final conclusion is argued
 in the body, not only listed; a line missing from either, or a conclusion the body misstates, is a material issue.
 Check the form: the body is written for a reader -- run vocabulary, ids and file paths belong in the notes and appendices.
-You may search/read supplementary sources; preserve and locate anything you use. Do not edit the draft.
+You may search/read supplementary sources; preserve and locate anything you use. Do not edit the draft, and do
+not send your critique to Last Order: completing this card delivers it to the adjudication that weighs it.
 
 ## deliverable
 `critique.md`
@@ -383,7 +427,7 @@ def review_receipt(con, run, draft, task_id):
     target = json.loads(task_store.latest_payload(con, task_id, "research_review_target") or "{}")
     if target != {"artifact": draft["id"], "sha256": draft["sha256"]}:
         raise ValueError("Final review target does not match the saved draft.")
-    runs.artifact_text(draft)
+    _intact(con, run, draft)
     payload = json.loads(task_store.latest_payload(con, task_id, "submitted", generation=task["generation"]) or "{}")
     if not isinstance(payload, dict) or not isinstance(payload.get("issues"), list):
         raise TypeError("Final red-team review requires a submitted issues array (issues=[] if none).")

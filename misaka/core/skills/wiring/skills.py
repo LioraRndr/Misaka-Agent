@@ -248,8 +248,10 @@ class SkillsPart:
                 target = os.path.realpath(os.path.join(workspace, os.path.expanduser(str(args.get("path") or ""))))
                 if any(target == root or target.startswith(root + os.sep) for root in live_roots):
                     return "path"
-                # The one place a file tool's target is resolved, so the home's rule is asked here too.
-                return home_guard.refusal(target, workspace, kind)
+                # The one place a file tool's target is resolved, so the home's rule is asked here too,
+                # and research's: what a run's workflow saved and froze is not the tools' to change (B126).
+                from misaka.core.research.runs import frozen_refusal
+                return home_guard.refusal(target, workspace, kind) or frozen_refusal(target)
             if tool in {"bash", "powershell"}:
                 return _command_touches(str(args.get("command") or ""), workspace, shell_roots,
                                         shell=tool, unattended=unattended)

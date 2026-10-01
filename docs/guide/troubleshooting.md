@@ -117,6 +117,12 @@ for no cap, before resuming.
 A card was given to a Sister you have since removed. Create her again with the same number
 (`misaka create ID`), then resume.
 
+**A file named `...-draft.edited-<number>.md` (or `...-survey.edited-...`) appeared in `final/`.**
+The run's saved draft was changed outside the phase that writes it, so MISAKA put the saved
+version back and kept the changed one under this name. Nothing is lost: what the change meant to
+fix is weighed in the final adjudication. While a run is unfinished, the agents' file tools leave
+its saved conclusions, survey and draft alone.
+
 **The report is called `...-partial.md`.**
 The run ended before its final report: you stopped it, the budget ran out, a node failed, or the
 final review failed. The partial report holds every node's latest conclusion.

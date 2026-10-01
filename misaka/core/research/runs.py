@@ -1555,6 +1555,35 @@ def artifact_text(row):
     return data.decode("utf-8")
 
 
+def frozen_refusal(target):
+    """Why a file tool may not write ``target``, or None: a file the workflow wrote and froze for
+    a run that is not over -- a node's plan, context and conclusions, the run's survey and report
+    draft. A hand edit fails the integrity check of the phase that reads it next; a draft edited
+    during its final review failed a whole run that way (B126). A card's deliverable is registered
+    with its card and stays its Sister's to change, and a finished run's files are anyone's."""
+    from misaka.config import CFG
+
+    try:
+        con = task_store.connect(os.path.expanduser(CFG["db"]))
+    except (OSError, sqlite3.Error):
+        return None
+    try:
+        row = con.execute(
+            "SELECT a.kind, a.run_id FROM research_artifacts a JOIN research_runs r ON r.id=a.run_id "
+            "WHERE a.path=? AND a.task_id IS NULL AND r.status!='done' LIMIT 1",
+            (str(Path(target).resolve()),)).fetchone()
+    except sqlite3.OperationalError:     # a board research has never touched has no such tables
+        return None
+    finally:
+        con.close()
+    if row is None:
+        return None
+    return (f"{target} is the {row['kind']} research run {row['run_id']} saved and froze: an edit here fails "
+            "the integrity check of the phase that reads it next. What it should say goes through the phase "
+            "that writes it -- a conclusion is revised in the node's next synthesis, the report draft in the "
+            "final adjudication.")
+
+
 def artifact_path(row):
     return row["path"]
 

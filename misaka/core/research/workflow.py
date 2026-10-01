@@ -1769,7 +1769,9 @@ def _partial_result(con, run, reason, *, status="stopped", driver_lock=None):
     expected = {**dict(run), "driver_lock": driver_lock} if driver_lock is not None else run
     with runs.owned_txn(con, expected, allow_stop=True):
         aid, path = runs.write_text(con, run["id"], "partial", 'Incomplete research run', runs.run_path(run, "partial.md"), "\n".join(lines))
-        runs.set_state(con, run["id"], status=status, final_artifact=aid, driver_lock=driver_lock)
+        # A failure says why where the run is looked up, not only in the partial report (B126).
+        runs.set_state(con, run["id"], status=status, final_artifact=aid, driver_lock=driver_lock,
+                       error=reason[:500] if status == "failed" else None)
     _try_refresh_workspace_index(con, runs.get(con, run["id"]))
     _bundle(con, run)
     graph.write_views(con, run, final=True)
