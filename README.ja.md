@@ -1,7 +1,4 @@
-<h1 align="center">
-  <img src="assets/logo.svg" alt="" width="96" height="96"><br>
-  MISAKA
-</h1>
+<p align="center"><img src="assets/banner.jpg" alt="MISAKA — designed by Luciole Studio" width="100%"></p>
 
 <p align="center"><strong>DAGと徴候的読解を組み合わせ、多元的なナラティブを掘り起こす、人文・社会科学研究に特化したAIエージェント・アーキテクチャ。</strong></p>
 

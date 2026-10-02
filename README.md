@@ -1,7 +1,4 @@
-<h1 align="center">
-  <img src="assets/logo.svg" alt="" width="96" height="96"><br>
-  MISAKA
-</h1>
+<p align="center"><img src="assets/banner.jpg" alt="MISAKA — designed by Luciole Studio" width="100%"></p>
 
 <p align="center"><strong>Pairing a DAG with symptomatic reading to unearth plural narratives: an AI agent architecture built for the humanities and social sciences.</strong></p>
 
