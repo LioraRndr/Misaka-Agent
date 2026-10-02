@@ -33,6 +33,12 @@ uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misak
 ```
 
 Install from this address; the package called `misaka` on PyPI is a different project.
+A GitHub release also ships one prebuilt archive per architecture, with uv, git, ripgrep, fd and
+poppler inside it. macOS and Linux:
+`curl -fsSL https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.sh | sh`.
+Windows PowerShell:
+`irm https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.ps1 | iex`.
+Homebrew and winget are described in [release/README.md](../release/README.md).
 
 `pip install` and `pipx install` accept the same requirement. The part in brackets chooses the
 optional pieces:

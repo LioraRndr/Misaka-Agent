@@ -50,6 +50,20 @@ misaka           # 启动 MISAKA，输入 /research
 
 运行环境为 macOS、Linux 或 Windows（x86_64 或 arm64），推荐在 macOS 上运行。需预先安装 [uv](https://docs.astral.sh/uv/)、git、[ripgrep](https://github.com/BurntSushi/ripgrep)、[fd](https://github.com/sharkdp/fd) 与 poppler，并准备一个模型服务商：API 密钥，或 ChatGPT、GitHub Copilot 订阅。亦支持以 Claude 账号登录，相应用量由 Anthropic 按 token 另行计为额外用量。请从本仓库安装：PyPI 上的 `misaka` 为另一无关项目。
 
+每个 GitHub release 也附带上述架构的预编译包。包内包含 uv、git、ripgrep（`rg`）、fd 与 poppler（`pdftotext`）。运行 `misaka` 时，这些工具会进入该进程的 PATH。ocrmypdf、DjVuLibre 与 LibreOffice 仍为可选项，不在包内。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.sh | sh
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.ps1 | iex
+```
+
+`brew install luciole-studio/tap/misaka` 与 `winget install Luciole-Studio.Misaka` 在 tap 和 winget 包发布后使用同一批压缩包。归档布局与发布步骤见 [release/README.md](release/README.md)。
+
 请在 `Documents` 下的工作文件夹中运行 MISAKA（如上例中的 `~/Documents/my-research`），切勿在根目录下运行。
 
 [入门指南](docs/getting-started.zh-CN.md)逐步介绍安装流程，并引导你完成第一个研究问题。
