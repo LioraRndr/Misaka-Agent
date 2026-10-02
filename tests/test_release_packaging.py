@@ -79,18 +79,58 @@ def test_archive_names_round_trip():
         assert filename.endswith(".zip" if target.archive == "zip" else ".tar.gz")
 
 
-def test_pacman_closure_installs_dependencies_first():
+def _pacman_db(entries: dict[str, str]) -> dict[str, dict[str, object]]:
     blob = io.BytesIO()
     with tarfile.open(fileobj=blob, mode="w") as archive:
-        for name, depends in (("rootpkg", ["liba"]), ("liba", ["libb"]), ("libb", [])):
-            text = f"%NAME%\n{name}\n\n%FILENAME%\n{name}.pkg.tar.zst\n\n%VERSION%\n1.0.0-1\n\n%DEPENDS%\n"
-            text += "\n".join(depends) + "\n"
-            data = text.encode()
+        for name, body in entries.items():
+            data = body.encode()
             info = tarfile.TarInfo(f"{name}/desc")
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
-    packages = build_release.parse_pacman_db(blob.getvalue())
+    return build_release.parse_pacman_db(blob.getvalue())
+
+
+def _desc(name: str, depends: tuple[str, ...] = (), provides: tuple[str, ...] = ()) -> str:
+    text = f"%NAME%\n{name}\n\n%FILENAME%\n{name}.pkg.tar.zst\n\n%VERSION%\n1.0.0-1\n"
+    if depends:
+        text += "\n%DEPENDS%\n" + "\n".join(depends) + "\n"
+    if provides:
+        text += "\n%PROVIDES%\n" + "\n".join(provides) + "\n"
+    return text
+
+
+def test_pacman_closure_installs_dependencies_first():
+    packages = _pacman_db(
+        {
+            "rootpkg": _desc("rootpkg", ("liba",)),
+            "liba": _desc("liba", ("libb",)),
+            "libb": _desc("libb"),
+        }
+    )
     assert build_release.dependency_closure(packages, ("rootpkg",)) == ["libb", "liba", "rootpkg"]
+
+
+def test_pacman_closure_installs_the_package_that_provides_a_virtual_dependency():
+    packages = _pacman_db(
+        {
+            "rootpkg": _desc("rootpkg", ("virtual-lib",)),
+            "provider": _desc("provider", ("base",), ("virtual-lib",)),
+            "base": _desc("base"),
+        }
+    )
+    assert build_release.dependency_closure(packages, ("rootpkg",)) == ["base", "provider", "rootpkg"]
+
+
+def test_pacman_closure_rejects_an_ambiguous_provider():
+    packages = _pacman_db(
+        {
+            "rootpkg": _desc("rootpkg", ("virtual-lib",)),
+            "left": _desc("left", provides=("virtual-lib",)),
+            "right": _desc("right", provides=("virtual-lib",)),
+        }
+    )
+    with pytest.raises(SystemExit, match="more than one package"):
+        build_release.dependency_closure(packages, ("rootpkg",))
 
 
 def test_tool_discovery_uses_the_bin_directory(tmp_path: Path):

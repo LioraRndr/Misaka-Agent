@@ -351,6 +351,7 @@ def parse_pacman_db(blob: bytes) -> dict[str, dict[str, object]]:
                 "filename": (fields.get("FILENAME") or [""])[0],
                 "version": (fields.get("VERSION") or [""])[0],
                 "depends": tuple(fields.get("DEPENDS") or []),
+                "provides": tuple(fields.get("PROVIDES") or []),
             }
     return packages
 
@@ -363,7 +364,31 @@ def _dep_name(spec: str) -> str:
 
 
 def dependency_closure(packages: dict[str, dict[str, object]], roots: tuple[str, ...]) -> list[str]:
-    """Runtime DEPENDS of ``roots``, dependencies before the package that needs them."""
+    """Runtime DEPENDS of ``roots``, dependencies before the package that needs them.
+
+    A dependency that is not itself a package is installed via the single package
+    that PROVIDES that name. ``mingw-w64-clang-aarch64-cc-libs`` is that kind of
+    name: libc++ provides it, and poppler's libraries are linked against it.
+    """
+    provided_by: dict[str, list[str]] = {}
+    for package_name, package in packages.items():
+        provides = package.get("provides", ())
+        if not isinstance(provides, tuple):
+            raise SystemExit(f"{package_name} has no provides list")
+        for provided in provides:
+            provided_by.setdefault(_dep_name(str(provided)), []).append(package_name)
+
+    def resolve(name: str) -> str:
+        if name in packages:
+            return name
+        choices = provided_by.get(name, [])
+        if len(choices) == 1:
+            return choices[0]
+        if not choices:
+            raise SystemExit(f"MSYS2 package {name} is not in the database")
+        listed = ", ".join(sorted(choices))
+        raise SystemExit(f"MSYS2 package {name} is provided by more than one package: {listed}")
+
     order: list[str] = []
     seen: set[str] = set()
 
@@ -371,16 +396,19 @@ def dependency_closure(packages: dict[str, dict[str, object]], roots: tuple[str,
         name = _dep_name(spec)
         if name in seen:
             return
-        package = packages.get(name)
-        if package is None:
-            raise SystemExit(f"MSYS2 package {name} is not in the database")
         seen.add(name)
+        real = resolve(name)
+        if real != name:
+            if real in seen:
+                return
+            seen.add(real)
+        package = packages[real]
         depends = package["depends"]
         if not isinstance(depends, tuple):
-            raise SystemExit(f"{name} has no dependency list")
+            raise SystemExit(f"{real} has no dependency list")
         for dependency in depends:
             visit(str(dependency))
-        order.append(name)
+        order.append(real)
 
     for root_name in roots:
         visit(root_name)
