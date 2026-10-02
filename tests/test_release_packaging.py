@@ -55,6 +55,12 @@ def test_package_workflow_builds_every_target_on_its_runner():
     assert "SHA256SUMS" in release
     assert "misaka.rb" in release
     assert "winget" in release
+    assert "secrets.HOMEBREW_TAP_TOKEN" in release
+    assert "vars.HOMEBREW_TAP_REPO" in release
+    readme = (ROOT / "release" / "README.md").read_text(encoding="utf-8")
+    assert "## GitHub secrets" in readme
+    assert "HOMEBREW_TAP_TOKEN" in readme
+    assert "HOMEBREW_TAP_REPO" in readme
     assert "msvc_arch: arm64" in workflow
     assert "msvc_arch: x64" in workflow
     assert "arch: ${{ matrix.msvc_arch }}" in workflow

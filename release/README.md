@@ -89,6 +89,49 @@ Build an archive locally on a machine of that architecture:
 python scripts/build_release.py
 ```
 
+## GitHub secrets
+
+`.github/workflows/ci.yml` and `.github/workflows/package.yml` use no secrets
+and no Actions variables. Pull requests and `main` build the archives with the
+default `contents: read` permission.
+
+Uploading those archives onto a prerelease also needs no secret a person
+creates. `.github/workflows/release.yml` sets `permissions: contents: write`
+and passes the automatic `GITHUB_TOKEN` (`github.token`) to `gh`. That token
+can view the triggering release and upload assets onto it. Creating a
+repository secret named `GITHUB_TOKEN` is not required, and a secret of that
+name would not replace the automatic token.
+
+One repository secret and one Actions variable exist, both for the Homebrew
+tap push. Set them on the repository that runs the workflow: **Settings →
+Secrets and variables → Actions**. Secrets go on the Secrets tab. Variables go
+on the Variables tab. They are repository settings, not environment settings,
+because the workflow reads `secrets.*` and `vars.*` with no environment.
+
+### `HOMEBREW_TAP_TOKEN`
+
+Repository secret. A fine-grained personal access token that clones the tap
+and pushes `Formula/misaka.rb`.
+
+Create the token on the account that can push to the tap. Repository access is
+only that tap. Permission is **Contents: Read and write**. The token does not
+need access to this Misaka repository. Metadata read comes with a fine-grained
+token.
+
+Until this secret exists, the release workflow still builds the six archives
+and still uploads the archives, `SHA256SUMS`, `misaka.rb`, `NOTES.md`, and the
+winget manifests onto the prerelease. The tap step prints that the token is
+missing and exits successfully. It does not clone or push the tap, so
+`brew install` from the tap does not see the new formula.
+
+### `HOMEBREW_TAP_REPO`
+
+Actions variable, not a secret. Value is `owner/name` of the tap repository.
+`HOMEBREW_TAP_TOKEN` must have Contents write on that repository.
+
+Until this variable exists, the workflow uses `Luciole-Studio/homebrew-tap`.
+Nothing else changes.
+
 ## Install scripts
 
 macOS and Linux pick the archive for `uname` and check it against `SHA256SUMS`:
@@ -119,8 +162,8 @@ symlinks `bin/misaka`. Windows is distributed with winget.
 
 This repository cannot create the tap. To publish it:
 
-1. Create `https://github.com/Luciole-Studio/homebrew-tap` with a `Formula/` directory. A different `owner/name` can be set as the Actions variable `HOMEBREW_TAP_REPO`.
-2. Add a fine-grained personal access token as the Actions secret `HOMEBREW_TAP_TOKEN`, with contents write on that repository.
+1. Create `https://github.com/Luciole-Studio/homebrew-tap` with a `Formula/` directory. A different `owner/name` can be set as the Actions variable `HOMEBREW_TAP_REPO` (see [GitHub secrets](#github-secrets)).
+2. Add the fine-grained personal access token described under [GitHub secrets](#github-secrets) as the Actions secret `HOMEBREW_TAP_TOKEN`.
 3. Publish a prerelease for tag `v` plus `project.version`, as described above. The release workflow copies the rewritten formula to `Formula/misaka.rb` and pushes it while the release is still a prerelease.
 
 Without the secret, the workflow still uploads `misaka.rb` onto the prerelease. After
