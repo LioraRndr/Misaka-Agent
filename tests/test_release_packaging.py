@@ -68,6 +68,29 @@ def test_package_workflow_builds_every_target_on_its_runner():
     assert build_release.windows_vcvars_arch("AMD64") == "x64"
 
 
+def test_install_workflow_is_manual_and_runs_the_real_installers():
+    text = (ROOT / ".github" / "workflows" / "install.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in text
+    assert "pull_request" not in text
+    assert "push:" not in text
+    assert "prereleased" not in text
+    assert "workflow_call:" not in text
+    assert "scripts/install.sh" in text
+    assert "scripts/install.ps1" in text
+    assert "SHA256SUMS" in text
+    assert "has no assets" in text
+    assert "build_release.py" not in text
+    assert "dist/work" not in text
+    for name, target in build_release.TARGETS.items():
+        assert name in text
+        assert target.runner in text
+    package = (ROOT / ".github" / "workflows" / "package.yml").read_text(encoding="utf-8")
+    assert "sh -n scripts/install.sh" in package
+    readme = (ROOT / "release" / "README.md").read_text(encoding="utf-8")
+    assert ".github/workflows/install.yml" in readme
+    assert "Run workflow" in readme
+
+
 def test_pe_machine_distinguishes_arm64_from_x64(tmp_path: Path):
     def pe(machine: int) -> Path:
         blob = bytearray(0x50)

@@ -89,6 +89,32 @@ Build an archive locally on a machine of that architecture:
 python scripts/build_release.py
 ```
 
+## Install test
+
+`.github/workflows/install.yml` runs only when someone starts it by hand:
+**Actions → Install → Run workflow**. It does not run on a pull request, on a
+push to `main`, or when a prerelease is published. The packaging workflow
+still syntax-checks `scripts/install.sh` with `sh -n`. This one runs the
+installers.
+
+Pick the branch that contains the scripts you want to test, then fill in:
+
+| Input | Default | What to enter |
+|---|---|---|
+| `repo` | this repository | `owner/name` of the GitHub release. Leave it empty to use the repository that contains the workflow. |
+| `tag` | required | `v0.18.5` or `0.18.5`. A prerelease tag works. A tag with no release does not. |
+| `targets` | `all` | `all`, or a comma-separated list of `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-arm64`, `windows-x86_64`, `windows-arm64`. |
+
+Each selected target runs on that target's runner. The job checks out this
+branch and runs `scripts/install.sh` (macOS and Linux) or `scripts/install.ps1`
+(Windows). The script downloads the archive for that machine from the release,
+checks `SHA256SUMS`, and installs under `MISAKA_PREFIX`. The job then runs
+`misaka --version`, `uv`, `rg`, `fd`, `git`, and `pdftotext` from that install.
+
+If the release has no assets, the workflow stops before those runners and says
+so. Publish the prerelease and wait until the Release workflow has uploaded
+the archives.
+
 ## GitHub secrets
 
 `.github/workflows/ci.yml` and `.github/workflows/package.yml` use no secrets
