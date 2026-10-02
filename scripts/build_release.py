@@ -292,6 +292,20 @@ def _find_poppler_data(prefixes: list[Path]) -> Path | None:
     return None
 
 
+def poppler_tool_roots(conda_prefix: Path, msys2_prefix: Path | None) -> list[Path]:
+    """Where the poppler CLIs live.
+
+    conda-forge git for win-arm64 vendors Xpdf 4.06 as
+    ``Library/clangarm64/bin/pdftotext.exe``. That file is on the archive
+    prefix next to the MSYS2 poppler build. Searching the git prefix picks
+    Xpdf, whose ``-v`` exits 99. The MSYS2 tree is the poppler the README asks
+    for, and its ``bin`` directory also holds the DLLs ``pdftotext.exe`` loads.
+    """
+    if msys2_prefix is not None:
+        return [msys2_prefix]
+    return [conda_prefix]
+
+
 def _poppler_programs(prefixes: list[Path]) -> list[Path]:
     found: list[Path] = []
     for prefix in prefixes:
@@ -886,24 +900,25 @@ def build(target_name: str) -> Path:
     prefixes = [prefix]
     poppler_version = ""
     poppler_origin = "conda-forge"
+    msys2_poppler: Path | None = None
     if target.poppler == "msys2":
-        poppler_prefix = stage / "opt" / "poppler"
+        msys2_poppler = stage / "opt" / "poppler"
         subprocess.check_call([sys.executable, "-m", "pip", "install", "zstandard"])
         subprocess.check_call(
-            [sys.executable, str(ROOT / "scripts" / "msys2_poppler.py"), str(poppler_prefix), str(cache)]
+            [sys.executable, str(ROOT / "scripts" / "msys2_poppler.py"), str(msys2_poppler), str(cache)]
         )
-        prefixes.append(poppler_prefix)
-        poppler_version = (poppler_prefix / "VERSION").read_text(encoding="utf-8").strip()
+        poppler_version = (msys2_poppler / "VERSION").read_text(encoding="utf-8").strip()
         poppler_origin = "MSYS2 clangarm64"
     else:
         poppler_version = _conda_version(prefix, "poppler")
+    poppler_roots = poppler_tool_roots(prefix, msys2_poppler)
     git_version = _conda_version(prefix, "git")
     bin_dir = stage / "bin"
     tools = stage / "tools"
     launcher = _compile_launcher(cache)
     git_exec = _find_git_exec(prefix)
     git_templates = _find_git_templates(prefix)
-    poppler_data = _find_poppler_data(prefixes)
+    poppler_data = _find_poppler_data(poppler_roots)
     shared_env = [
         ("GIT_EXEC_PATH", _rel(bin_dir, git_exec)),
         ("GIT_TEMPLATE_DIR", _rel(bin_dir, git_templates)),
@@ -931,8 +946,13 @@ def build(target_name: str) -> Path:
         tools / _exe("git"),
         _wrap(_rel(tools, _find_program(prefixes, "git")), [], tool_env, []),
     )
-    for program in _poppler_programs(prefixes):
+    programs = _poppler_programs(poppler_roots)
+    if not any(path.name.lower().removesuffix(".exe") == "pdftotext" for path in programs):
+        raise SystemExit(f"poppler pdftotext was not staged under {poppler_roots}")
+    for program in programs:
         stem = program.name[:-4] if program.name.lower().endswith(".exe") else program.name
+        if stem == "pdftotext":
+            print(f"pdftotext {program}", flush=True)
         program_env = tool_env if stem == "pdftotext" or poppler_data is not None else []
         _place_wrapper(
             launcher,

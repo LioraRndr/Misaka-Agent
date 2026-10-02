@@ -170,6 +170,25 @@ def test_tool_discovery_uses_the_bin_directory(tmp_path: Path):
     assert [path.name for path in build_release._poppler_programs([prefix])] == ["pdftotext"]
 
 
+def test_windows_arm64_poppler_tools_skip_git_bundled_xpdf(tmp_path: Path):
+    conda = tmp_path / "conda"
+    xpdf = conda / "Library" / "clangarm64" / "bin" / "pdftotext.exe"
+    xpdf.parent.mkdir(parents=True)
+    xpdf.write_bytes(b"xpdf")
+    msys2 = tmp_path / "poppler"
+    real = msys2 / "bin" / "pdftotext.exe"
+    real.parent.mkdir(parents=True)
+    real.write_bytes(b"poppler")
+    (msys2 / "bin" / "libpoppler-163.dll").write_bytes(b"dll")
+    (msys2 / "bin" / "pdfinfo.exe").write_bytes(b"info")
+    roots = build_release.poppler_tool_roots(conda, msys2)
+    assert roots == [msys2]
+    found = {path.name: path for path in build_release._poppler_programs(roots)}
+    assert found["pdftotext.exe"] == real
+    assert found["pdfinfo.exe"] == msys2 / "bin" / "pdfinfo.exe"
+    assert build_release.poppler_tool_roots(conda, None) == [conda]
+
+
 def test_launcher_resolves_a_symlink_and_sets_the_tool_path(tmp_path: Path):
     compiler = shutil.which("cc") or shutil.which("gcc")
     if compiler is None:
