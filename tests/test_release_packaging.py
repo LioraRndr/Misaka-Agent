@@ -41,8 +41,20 @@ def test_package_workflow_builds_every_target_on_its_runner():
     for name, target in build_release.TARGETS.items():
         assert name in workflow
         assert target.runner in workflow
-    assert "pull_request" in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert 'tags: ["v*"]' in (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "pull_request" in ci
+    assert "branches: [main]" in ci
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "types: [prereleased]" in release
+    assert "github.event.release.prerelease == true" in release
+    assert "gh release upload" in release
+    assert "isPrerelease" in release
+    assert "--clobber" in release
+    assert "gh release create" not in release
+    assert 'tags: ["v*"]' not in release
+    assert "SHA256SUMS" in release
+    assert "misaka.rb" in release
+    assert "winget" in release
     assert "msvc_arch: arm64" in workflow
     assert "msvc_arch: x64" in workflow
     assert "arch: ${{ matrix.msvc_arch }}" in workflow

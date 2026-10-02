@@ -63,11 +63,25 @@ A release rewrites them from the archives it just built. `brew install` and
 calls `.github/workflows/package.yml`, which runs the packaging tests and then
 builds one archive per target on that target's runner.
 
-`.github/workflows/release.yml` runs when a tag `v*` is pushed. The tag must
-be `v` plus `project.version` in `pyproject.toml`. The workflow builds the six
-archives, attaches them to a GitHub release with `SHA256SUMS`, `misaka.rb`,
-`NOTES.md` and the filled winget manifests, and updates the Homebrew tap when
-the token below is set.
+`.github/workflows/release.yml` runs when a GitHub Release is published as a
+prerelease (`release` event type `prereleased`). Pushing a `v*` tag does not
+publish a release and does not start this workflow. The tag on that prerelease
+must be `v` plus `project.version` in `pyproject.toml`. The workflow builds the
+six archives and uploads them onto that same prerelease, together with
+`SHA256SUMS`, `misaka.rb`, `NOTES.md` and the filled winget manifests. Hashes
+in those files come from the archives just built. The release stays a
+prerelease. When `HOMEBREW_TAP_TOKEN` is set, the tap is updated at the end of
+this build. Promoting the release later does not run the workflow again, so the
+tap is not updated a second time.
+
+To ship a version:
+
+1. On the GitHub releases page, publish a release for tag `v` plus `project.version` and check **Set as a pre-release**. That publish is what starts the build.
+2. Wait until the Release workflow has uploaded the archives and the checksum, formula, and winget files onto that prerelease.
+3. When the assets look right, edit the release and uncheck **Set as a pre-release**. That promotion does not rebuild the archives and does not replace the assets.
+
+Install scripts ask GitHub for `/releases/latest`, which omits prereleases, so
+`curl | sh` and `irm | iex` pick the version up only after that promotion.
 
 Build an archive locally on a machine of that architecture:
 
@@ -107,9 +121,9 @@ This repository cannot create the tap. To publish it:
 
 1. Create `https://github.com/Luciole-Studio/homebrew-tap` with a `Formula/` directory. A different `owner/name` can be set as the Actions variable `HOMEBREW_TAP_REPO`.
 2. Add a fine-grained personal access token as the Actions secret `HOMEBREW_TAP_TOKEN`, with contents write on that repository.
-3. Push a `v*` tag. The release workflow copies the rewritten formula to `Formula/misaka.rb` and pushes it.
+3. Publish a prerelease for tag `v` plus `project.version`, as described above. The release workflow copies the rewritten formula to `Formula/misaka.rb` and pushes it while the release is still a prerelease.
 
-Without the secret, the release still publishes and attaches `misaka.rb`. After
+Without the secret, the workflow still uploads `misaka.rb` onto the prerelease. After
 the tap exists:
 
 ```sh

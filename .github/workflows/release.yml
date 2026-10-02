@@ -1,17 +1,19 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [prereleased]
 
 permissions:
   contents: write
 
 jobs:
   package:
+    if: github.event.release.prerelease == true
     uses: ./.github/workflows/package.yml
 
   publish:
+    if: github.event.release.prerelease == true
     needs: package
     runs-on: ubuntu-24.04
     steps:
@@ -25,25 +27,29 @@ jobs:
           merge-multiple: true
       - name: Checksums, Homebrew formula, winget manifests
         run: python scripts/build_release.py --render-checksums dist/artifacts --publish-dir dist/publish
-      - name: GitHub release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -eu
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           if [ "$tag" != "v${version}" ]; then
             echo "tag ${tag} does not match pyproject version ${version}" >&2
             exit 1
           fi
-          gh release create "$tag" \
+          if [ "$(gh release view "$tag" --json isPrerelease --jq .isPrerelease)" != "true" ]; then
+            echo "release ${tag} is not a prerelease; leaving its assets unchanged" >&2
+            exit 1
+          fi
+          gh release upload "$tag" \
             dist/artifacts/misaka-* \
             dist/publish/SHA256SUMS \
             dist/publish/misaka.rb \
             dist/publish/NOTES.md \
             dist/publish/winget/manifests/l/Luciole-Studio/Misaka/"${version}"/* \
-            --title "$tag" \
-            --notes-file dist/publish/NOTES.md
+            --clobber
       - name: Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
