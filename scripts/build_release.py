@@ -657,6 +657,57 @@ def _wrap(exec_path: str, args: list[str], env: list[tuple[str, str]], prepend: 
     return lines
 
 
+# cryptography stopped publishing win_arm64 wheels after 46.0.3. That wheel is
+# cp311-abi3, so the bundled CPython 3.13 loads it, and google-auth / pyjwt still
+# accept it. tiktoken has never published a win_arm64 wheel; the cp313 build in
+# release/wheels is the one this installer passes via --find-links.
+WIN_ARM64_CRYPTOGRAPHY = "46.0.3"
+VENDORED_WHEELS = ROOT / "release" / "wheels"
+
+
+def windows_arm64_wheel_requirements(text: str) -> str:
+    """Pin cryptography to the last release that has a win_arm64 wheel.
+
+    Other lines, including tiktoken==0.14.0, stay at the locked version. A
+    hashed cryptography block from ``uv export`` lists 50.0.0 files only, so
+    those continuation lines are dropped with the pin.
+    """
+    lines = text.splitlines(keepends=True)
+    rewritten: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        body = line.split("#", 1)[0].strip()
+        name = body.rstrip("\\").strip()
+        if name.startswith("cryptography=="):
+            newline = "\n" if line.endswith("\n") or body.endswith("\\") else ""
+            rewritten.append(f"cryptography=={WIN_ARM64_CRYPTOGRAPHY}{newline}")
+            index += 1
+            if body.endswith("\\"):
+                while index < len(lines):
+                    continuation = lines[index].split("#", 1)[0].strip()
+                    index += 1
+                    if not continuation.endswith("\\"):
+                        break
+            continue
+        rewritten.append(line)
+        index += 1
+    return "".join(rewritten)
+
+
+def pip_install_command(uv: Path, python: Path, windows_arch: str | None) -> list[str]:
+    """Install command for the bundled interpreter.
+
+    On Windows ARM64, refuse sdists. The index has no win_arm64 wheel for the
+    locked cryptography or tiktoken, and building them wants OpenSSL or a Rust
+    toolchain. Published and vendored wheels are the only inputs.
+    """
+    command = [str(uv), "pip", "install", "--python", str(python), "--link-mode", "copy"]
+    if windows_arch == "arm64":
+        command.extend(["--only-binary", ":all:", "--find-links", str(VENDORED_WHEELS)])
+    return command
+
+
 def _install_project(uv: Path, python: Path) -> None:
     env = os.environ.copy()
     env["PYTHONNOUSERSITE"] = "1"
@@ -669,18 +720,23 @@ def _install_project(uv: Path, python: Path) -> None:
     if windows_arch is not None:
         env["VSCMD_ARG_TGT_ARCH"] = windows_arch
     requirements = ROOT / "dist" / "cache" / "requirements-providers.txt"
+    export = [
+        str(uv),
+        "export",
+        "--extra",
+        "providers",
+        "--no-dev",
+        "--frozen",
+        "--no-emit-project",
+        "-o",
+        str(requirements),
+    ]
+    if windows_arch == "arm64":
+        # Lock hashes name cryptography 50.0.0 and the tiktoken sdist. Neither
+        # matches the win_arm64 wheels this install uses.
+        export.append("--no-hashes")
     exported = subprocess.run(
-        [
-            str(uv),
-            "export",
-            "--extra",
-            "providers",
-            "--no-dev",
-            "--frozen",
-            "--no-emit-project",
-            "-o",
-            str(requirements),
-        ],
+        export,
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -689,12 +745,27 @@ def _install_project(uv: Path, python: Path) -> None:
         check=False,
     )
     install = [str(uv), "pip", "install", "--python", str(python), "--link-mode", "copy"]
+    # --only-binary applies to third-party requirements. The local project is
+    # installed afterwards with --no-deps and is not a published wheel.
+    dependencies = pip_install_command(uv, python, windows_arch)
     if exported.returncode == 0:
-        subprocess.check_call([*install, "-r", str(requirements)], env=env)
+        if windows_arch == "arm64":
+            rewritten = windows_arm64_wheel_requirements(requirements.read_text(encoding="utf-8"))
+            pin = f"cryptography=={WIN_ARM64_CRYPTOGRAPHY}"
+            if pin not in rewritten:
+                raise SystemExit(f"windows-arm64 requirements did not pin {pin}")
+            requirements.write_text(rewritten, encoding="utf-8")
+            print(f"windows-arm64: {pin} wheel and vendored tiktoken win_arm64 wheel", flush=True)
+        subprocess.check_call([*dependencies, "-r", str(requirements)], env=env)
         subprocess.check_call([*install, "--no-deps", str(ROOT)], cwd=ROOT, env=env)
         return
     print(exported.stdout, flush=True)
     print("uv export could not use the lock; installing misaka[providers] from the index", flush=True)
+    if windows_arch == "arm64":
+        constraint = requirements.with_name("windows-arm64-wheels.txt")
+        constraint.write_text(f"cryptography=={WIN_ARM64_CRYPTOGRAPHY}\n", encoding="utf-8")
+        subprocess.check_call([*dependencies, "-c", str(constraint), ".[providers]"], cwd=ROOT, env=env)
+        return
     subprocess.check_call([*install, ".[providers]"], cwd=ROOT, env=env)
 
 

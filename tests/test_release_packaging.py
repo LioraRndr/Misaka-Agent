@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -212,3 +213,56 @@ def test_launcher_resolves_a_symlink_and_sets_the_tool_path(tmp_path: Path):
     lines = completed.stdout.splitlines()
     assert lines[0] == str(marker.resolve())
     assert lines[1] == str(tools.resolve())
+
+
+def test_windows_arm64_requirements_use_the_published_cryptography_wheel():
+    exported = "cryptography==50.0.0\n    # via google-auth\npillow==10.4.0\ntiktoken==0.14.0\n"
+    rewritten = build_release.windows_arm64_wheel_requirements(exported)
+    assert "cryptography==46.0.3" in rewritten
+    assert "cryptography==50.0.0" not in rewritten
+    assert "pillow==10.4.0" in rewritten
+    assert "tiktoken==0.14.0" in rewritten
+    assert "google-auth" in rewritten
+
+    hashed = (
+        "cryptography==50.0.0 \\\n"
+        "    --hash=sha256:abc \\\n"
+        "    --hash=sha256:def\n"
+        "tiktoken==0.14.0 \\\n"
+        "    --hash=sha256:fff\n"
+    )
+    assert build_release.windows_arm64_wheel_requirements(hashed) == (
+        "cryptography==46.0.3\n"
+        "tiktoken==0.14.0 \\\n"
+        "    --hash=sha256:fff\n"
+    )
+
+
+def test_windows_arm64_install_refuses_source_builds():
+    command = build_release.pip_install_command(Path("uv"), Path("python"), "arm64")
+    assert "--only-binary" in command
+    assert ":all:" in command
+    assert "--find-links" in command
+    assert command[command.index("--find-links") + 1] == str(build_release.VENDORED_WHEELS)
+    other = build_release.pip_install_command(Path("uv"), Path("python"), "x64")
+    assert "--only-binary" not in other
+    assert "--find-links" not in other
+    assert "--only-binary" not in build_release.pip_install_command(Path("uv"), Path("python"), None)
+
+
+def test_vendored_tiktoken_wheel_is_a_cpython313_arm64_extension(tmp_path: Path):
+    wheel = build_release.VENDORED_WHEELS / "tiktoken-0.14.0-cp313-cp313-win_arm64.whl"
+    assert wheel.is_file()
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        pyd_name = "tiktoken/_tiktoken.cp313-win_arm64.pyd"
+        assert pyd_name in names
+        assert not any(name.endswith(".pyd") and "win_arm64" not in name for name in names)
+        wheel_meta = archive.read("tiktoken-0.14.0.dist-info/WHEEL").decode()
+        assert "Tag: cp313-cp313-win_arm64" in wheel_meta
+        pyd = archive.read(pyd_name)
+        assert b"PyInit__tiktoken" in pyd
+        assert b"python313.dll" in pyd
+    blob = tmp_path / "tiktoken.pyd"
+    blob.write_bytes(pyd)
+    assert build_release._pe_machine(blob) == 0xAA64
