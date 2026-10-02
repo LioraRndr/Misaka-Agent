@@ -1,5 +1,10 @@
 <p align="center"><img src="assets/banner.jpg" alt="MISAKA — designed by Luciole Studio" width="100%"></p>
 
+<h1 align="center">
+  <img src="assets/logo.svg" alt="" width="96" height="96"><br>
+  MISAKA
+</h1>
+
 <p align="center"><strong>将 DAG 与症候阅读结合、挖掘多元叙事，专为人文社科研究打造的 AI Agent 架构。</strong></p>
 
 <p align="center"><em>比在场更重要的是缺席！御坂御坂敲了敲你的脑袋。</em></p>
