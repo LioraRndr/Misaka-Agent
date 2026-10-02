@@ -505,6 +505,79 @@ def _conda_create(micromamba: Path, prefix: Path, packages: list[str], cache: Pa
     )
 
 
+def windows_vcvars_arch(machine: str) -> str | None:
+    """MSVC target name for a Windows CPU. ARM64 stays ``arm64``."""
+    return {"arm64": "arm64", "aarch64": "arm64", "amd64": "x64", "x86_64": "x64"}.get(machine.lower())
+
+
+def _host_windows_arch() -> str | None:
+    if sys.platform != "win32":
+        return None
+    return windows_vcvars_arch(platform.machine())
+
+
+# COFF machine field. An x64 CRT object is 0x8664; an ARM64 one is 0xAA64.
+_PE_MACHINE = {"arm64": 0xAA64, "x64": 0x8664}
+
+
+def _pe_machine(path: Path) -> int | None:
+    data = path.read_bytes()
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        return None
+    offset = int.from_bytes(data[0x3C:0x40], "little")
+    if offset < 0 or offset + 6 > len(data) or data[offset : offset + 4] != b"PE\0\0":
+        return None
+    return int.from_bytes(data[offset + 4 : offset + 6], "little")
+
+
+def _compiler_can_target(compiler: str, arch: str) -> bool:
+    """``cl`` follows the active vcvars prompt. gcc/clang must already target ``arch``."""
+    name = Path(compiler).name.lower()
+    if name in {"cl", "cl.exe"}:
+        return True
+    completed = subprocess.run(
+        [compiler, "-dumpmachine"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    machine = completed.stdout.strip().lower()
+    if completed.returncode != 0 or not machine:
+        return True
+    if arch == "arm64":
+        return "aarch64" in machine or "arm64" in machine
+    if arch == "x64":
+        return "x86_64" in machine or "amd64" in machine
+    return True
+
+
+def _compile_command(compiler: str, source: Path, dest: Path, arch: str | None) -> list[str]:
+    name = Path(compiler).name.lower()
+    if name in {"cl", "cl.exe"}:
+        return [compiler, "/nologo", "/O2", "/W4", "/std:c11", str(source), f"/Fe:{dest}"]
+    command = [compiler]
+    if "clang" in name and arch == "arm64":
+        command.append("--target=aarch64-pc-windows-msvc")
+    elif "clang" in name and arch == "x64":
+        command.append("--target=x86_64-pc-windows-msvc")
+    command.extend(["-std=c11", "-O2", "-Wall", "-Wextra", "-o", str(dest), str(source)])
+    return command
+
+
+def _accept_launcher(dest: Path, arch: str | None) -> bool:
+    expected = _PE_MACHINE.get(arch) if arch is not None else None
+    if expected is None:
+        return True
+    actual = _pe_machine(dest)
+    if actual == expected:
+        return True
+    got = "missing" if actual is None else f"{actual:#x}"
+    print(f"launcher machine {got} is not {arch} ({expected:#x})", flush=True)
+    dest.unlink(missing_ok=True)
+    return False
+
+
 def _compile_launcher(cache: Path) -> Path:
     source = ROOT / "scripts" / "toolwrap.c"
     dest_dir = cache / "toolwrap"
@@ -512,25 +585,34 @@ def _compile_launcher(cache: Path) -> Path:
     dest = dest_dir / _exe("toolwrap")
     if dest.exists():
         dest.unlink()
+    arch = _host_windows_arch()
     compilers: list[str] = []
     for name in ("cc", "gcc", "clang", "cl"):
         found = shutil.which(name)
         if found:
             compilers.append(found)
     for compiler in compilers:
-        if Path(compiler).name.lower() == "cl.exe" or Path(compiler).name == "cl":
-            command = ["cl", "/nologo", "/O2", "/W4", "/std:c11", str(source), f"/Fe:{dest}"]
-        else:
-            command = [compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-o", str(dest), str(source)]
+        if arch is not None and not _compiler_can_target(compiler, arch):
+            print(f"skip {compiler}: it does not target {arch}", flush=True)
+            continue
+        if dest.exists():
+            dest.unlink()
         completed = subprocess.run(
-            command, cwd=dest_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
+            _compile_command(compiler, source, dest, arch),
+            cwd=dest_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
         )
-        if completed.returncode == 0 and dest.is_file():
+        if completed.returncode == 0 and dest.is_file() and _accept_launcher(dest, arch):
             dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             return dest
         print(completed.stdout, flush=True)
     zig = _ensure_zig(cache)
     subprocess.check_call([str(zig), "cc", "-std=c11", "-O2", "-o", str(dest), str(source)])
+    if not _accept_launcher(dest, arch):
+        raise SystemExit(f"zig cc produced a launcher for the wrong architecture ({arch})")
     dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return dest
 
@@ -580,6 +662,12 @@ def _install_project(uv: Path, python: Path) -> None:
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["UV_PYTHON_DOWNLOADS"] = "never"
+    # setuptools reads VSCMD_ARG_TGT_ARCH before the interpreter. The x64 developer
+    # prompt on an ARM64 runner otherwise builds wheels as win-amd64, and
+    # setuptools-rust then passes --target x86_64-pc-windows-msvc.
+    windows_arch = _host_windows_arch()
+    if windows_arch is not None:
+        env["VSCMD_ARG_TGT_ARCH"] = windows_arch
     requirements = ROOT / "dist" / "cache" / "requirements-providers.txt"
     exported = subprocess.run(
         [

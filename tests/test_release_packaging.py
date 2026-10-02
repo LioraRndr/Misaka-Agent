@@ -42,6 +42,26 @@ def test_package_workflow_builds_every_target_on_its_runner():
         assert target.runner in workflow
     assert "pull_request" in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert 'tags: ["v*"]' in (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "msvc_arch: arm64" in workflow
+    assert "msvc_arch: x64" in workflow
+    assert "arch: ${{ matrix.msvc_arch }}" in workflow
+    assert build_release.windows_vcvars_arch("ARM64") == "arm64"
+    assert build_release.windows_vcvars_arch("AMD64") == "x64"
+
+
+def test_pe_machine_distinguishes_arm64_from_x64(tmp_path: Path):
+    def pe(machine: int) -> Path:
+        blob = bytearray(0x50)
+        blob[0:2] = b"MZ"
+        blob[0x3C:0x40] = (0x40).to_bytes(4, "little")
+        blob[0x40:0x44] = b"PE\0\0"
+        blob[0x44:0x46] = machine.to_bytes(2, "little")
+        path = tmp_path / f"{machine:04x}.exe"
+        path.write_bytes(blob)
+        return path
+
+    assert build_release._pe_machine(pe(0xAA64)) == 0xAA64
+    assert build_release._pe_machine(pe(0x8664)) == 0x8664
 
 
 def test_installers_name_every_archive():
