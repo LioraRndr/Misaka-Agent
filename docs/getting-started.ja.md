@@ -29,6 +29,11 @@ uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misak
 ```
 
 必ずこのアドレスからインストールしてください。PyPI の `misaka` という名前のパッケージは別のプロジェクトです。
+各 GitHub リリースにはアーキテクチャごとのビルド済みアーカイブもあり、uv、git、ripgrep、fd、poppler が入っています。macOS と Linux：
+`curl -fsSL https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.sh | sh`。
+Windows PowerShell：
+`irm https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.ps1 | iex`。
+Homebrew と winget は [release/README.md](../release/README.md) を見てください。
 
 `pip install` や `pipx install` でも同じ書き方が使えます。角かっこの中で追加機能を選びます：
 

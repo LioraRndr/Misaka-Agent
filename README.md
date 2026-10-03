@@ -59,6 +59,24 @@ ChatGPT or GitHub Copilot subscription. Claude accounts can also sign in, with t
 by Anthropic per token as extra usage. Install from this repository: the `misaka` package on PyPI
 is an unrelated project.
 
+Each GitHub release also has a prebuilt archive for those architectures. The archive includes
+uv, git, ripgrep (`rg`), fd and poppler (`pdftotext`); running `misaka` puts them on `PATH` for
+that process. ocrmypdf, DjVuLibre and LibreOffice stay optional and are not in the archive.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.ps1 | iex
+```
+
+`brew install luciole-studio/tap/misaka` and `winget install Luciole-Studio.Misaka` use the same
+archives once the tap and the winget package are published. [release/README.md](release/README.md)
+describes the archive layout and those publish steps.
+
 Run MISAKA in a working folder under `Documents` (such as `~/Documents/my-research` above),
 never in the root directory.
 

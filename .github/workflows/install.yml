@@ -1,0 +1,224 @@
+name: Install
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: GitHub owner/name. Empty uses the repository that contains this workflow.
+        required: false
+        type: string
+        default: ""
+      tag:
+        description: Release tag to install, such as v0.18.5. A prerelease tag works.
+        required: true
+        type: string
+      targets:
+        description: all, or a comma-separated list of darwin-arm64, darwin-x86_64, linux-x86_64, linux-arm64, windows-x86_64, windows-arm64
+        required: false
+        type: string
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      repo: ${{ steps.plan.outputs.repo }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - name: Check the release and choose runners
+        id: plan
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          repo = os.environ.get("INPUT_REPO", "").strip()
+          # An uninterpolated workflow expression left in the form field is not a repository name.
+          if not repo or ("${" + "{") in repo:
+              repo = os.environ["GITHUB_REPOSITORY"]
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+              raise SystemExit(f"repo must be owner/name, not {repo!r}.")
+          tag = os.environ.get("INPUT_TAG", "").strip()
+          if not tag:
+              raise SystemExit("tag is required. Pass the release tag, for example v0.18.5.")
+          if not tag.startswith("v"):
+              tag = "v" + tag
+          if not re.fullmatch(r"v[0-9A-Za-z][0-9A-Za-z._+-]*", tag):
+              raise SystemExit(f"tag must look like v0.18.5, not {tag!r}.")
+          version = tag[1:]
+
+          known = {
+              "darwin-arm64": ("macos-15", "tar.gz"),
+              "darwin-x86_64": ("macos-15-intel", "tar.gz"),
+              "linux-x86_64": ("ubuntu-24.04", "tar.gz"),
+              "linux-arm64": ("ubuntu-24.04-arm", "tar.gz"),
+              "windows-x86_64": ("windows-2025", "zip"),
+              "windows-arm64": ("windows-11-arm", "zip"),
+          }
+          raw = os.environ.get("INPUT_TARGETS", "all").replace(",", " ").split()
+          if not raw or raw == ["all"]:
+              selected = list(known)
+          else:
+              selected = list(dict.fromkeys(raw))
+              unknown = [name for name in selected if name not in known]
+              if unknown:
+                  raise SystemExit(
+                      "Unknown target(s): "
+                      + ", ".join(unknown)
+                      + ".\nChoose all, or: "
+                      + ", ".join(known)
+                  )
+
+          url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "misaka-install-check",
+          }
+          token = os.environ.get("GH_TOKEN", "")
+          if repo == os.environ["GITHUB_REPOSITORY"] and token:
+              headers["Authorization"] = f"Bearer {token}"
+          request = urllib.request.Request(url, headers=headers)
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  raise SystemExit(
+                      f"No GitHub release {tag} on {repo}.\n"
+                      "Create the release first. A prerelease counts. A tag by itself does not."
+                  ) from exc
+              raise SystemExit(f"Could not read {repo} release {tag}: HTTP {exc.code}.") from exc
+
+          assets = [str(item.get("name", "")) for item in payload.get("assets") or []]
+          if not assets:
+              raise SystemExit(
+                  f"Release {repo} {tag} has no assets.\n"
+                  "The install test downloads each archive and SHA256SUMS from that release.\n"
+                  "Wait until the Release workflow has uploaded them, then run this again."
+              )
+
+          missing = []
+          if "SHA256SUMS" not in assets:
+              missing.append("SHA256SUMS")
+          include = []
+          for name in selected:
+              runner, extension = known[name]
+              archive = f"misaka-{version}-{name}.{extension}"
+              if archive not in assets:
+                  missing.append(archive)
+              include.append({"target": name, "runner": runner})
+          if missing:
+              raise SystemExit(
+                  f"Release {repo} {tag} is missing: "
+                  + ", ".join(missing)
+                  + ".\nAssets on the release: "
+                  + ", ".join(assets)
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"repo={repo}\n")
+              handle.write(f"version={version}\n")
+              handle.write("matrix<<EOF\n")
+              handle.write(json.dumps({"include": include}))
+              handle.write("\nEOF\n")
+          print(f"release {repo} {tag}")
+          print("targets " + ", ".join(selected))
+          PY
+
+  install:
+    needs: select
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.select.outputs.matrix) }}
+    env:
+      REPO: ${{ needs.select.outputs.repo }}
+      VERSION: ${{ needs.select.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and run the bundled commands
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          prefix="${RUNNER_TEMP}/misaka-prefix"
+          bin_dir="${RUNNER_TEMP}/misaka-bin"
+          export MISAKA_REPO="${REPO}"
+          export MISAKA_PREFIX="${prefix}"
+          export MISAKA_BIN="${bin_dir}"
+          sh scripts/install.sh "${VERSION}"
+          dest="${prefix}/misaka-${VERSION}-${TARGET}"
+          if [ ! -d "${dest}" ]; then
+            echo "Installer did not create ${dest}." >&2
+            echo "scripts/install.sh should pick this machine's archive, check SHA256SUMS, and unpack it under MISAKA_PREFIX." >&2
+            exit 1
+          fi
+          if [ ! -x "${bin_dir}/misaka" ]; then
+            echo "Installer did not link ${bin_dir}/misaka." >&2
+            exit 1
+          fi
+          version_out=$("${bin_dir}/misaka" --version)
+          printf '%s\n' "${version_out}"
+          printf '%s\n' "${version_out}" | grep -F "${VERSION}" >/dev/null
+          for tool in uv rg fd git; do
+            "${dest}/tools/${tool}" --version
+          done
+          set +e
+          pdf_out=$("${dest}/tools/pdftotext" -v 2>&1)
+          pdf_code=$?
+          set -e
+          printf '%s\n' "${pdf_out}"
+          if [ "${pdf_code}" -ne 0 ]; then
+            echo "pdftotext -v exited ${pdf_code}. The installed tool must be poppler." >&2
+            exit 1
+          fi
+          printf '%s\n' "${pdf_out}" | grep -i poppler >/dev/null
+      - name: Install and run the bundled commands
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:RUNNER_TEMP "misaka-prefix"
+          $env:MISAKA_REPO = $env:REPO
+          $env:MISAKA_PREFIX = $prefix
+          $env:MISAKA_VERSION = $env:VERSION
+          & .\scripts\install.ps1 $env:VERSION
+          $dest = Join-Path $prefix "misaka-$($env:VERSION)-$($env:TARGET)"
+          $misaka = Join-Path $dest "bin\misaka.exe"
+          if (-not (Test-Path $misaka)) {
+            throw "Installer did not create $misaka. scripts/install.ps1 should pick this machine's archive, check SHA256SUMS, and unpack it under MISAKA_PREFIX."
+          }
+          $versionOut = (& $misaka --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "misaka --version exited $LASTEXITCODE" }
+          Write-Host $versionOut
+          if ($versionOut -notmatch [regex]::Escape($env:VERSION)) {
+            throw "misaka --version did not report $($env:VERSION): $versionOut"
+          }
+          foreach ($tool in @("uv", "rg", "fd", "git")) {
+            $exe = Join-Path $dest "tools\$tool.exe"
+            & $exe --version
+            if ($LASTEXITCODE -ne 0) { throw "$tool --version exited $LASTEXITCODE" }
+          }
+          $pdf = Join-Path $dest "tools\pdftotext.exe"
+          $pdfOut = & $pdf -v 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "pdftotext -v exited $LASTEXITCODE. The installed tool must be poppler.`n$pdfOut"
+          }
+          Write-Host $pdfOut
+          if ($pdfOut -notmatch "poppler") {
+            throw "pdftotext did not identify as poppler:`n$pdfOut"
+          }
