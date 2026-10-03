@@ -515,7 +515,9 @@ def test_real_cli_browser_setup_and_explicit_install_flags(monkeypatch, isolated
         return SimpleNamespace(extensions=[], errors=[], runtime=SimpleNamespace(invalidate=lambda: None))
     monkeypatch.setattr(web, '_discover', discover)
     monkeypatch.setattr(web_browser, 'status', lambda: None)
-    monkeypatch.setattr(web_browser.shutil, 'which', lambda name: '/fixture/' + name)
+    # Given a directory, answer as Windows does: the .cmd npm writes, never the bare shell script.
+    monkeypatch.setattr(web_browser.shutil, 'which',
+                        lambda name, path=None: f'{path}/{name}.cmd' if path else '/fixture/' + name)
     commands = []
     monkeypatch.setattr(web_browser.subprocess, 'run', lambda argv, **kw: commands.append(argv))
     app.main(['web', 'browser-setup', 'local', '--yes', '--profile', str(isolated)])
@@ -524,6 +526,7 @@ def test_real_cli_browser_setup_and_explicit_install_flags(monkeypatch, isolated
     assert commands[0][-1] == 'agent-browser@0.26.0'
     assert commands[1][-1] == 'install'
     assert str(isolated) in commands[1][0]
+    assert commands[1][0].endswith('node_modules/.bin/agent-browser.cmd')
 
 
 async def test_camofox_managed_state_requires_reusable_identity(monkeypatch, isolated):
