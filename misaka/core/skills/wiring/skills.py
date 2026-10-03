@@ -415,6 +415,7 @@ class SkillsPart:
                 promptGuidelines=[
                     f"New skill descriptions must be one sentence of at most {skill_index.SKILL_PROMPT_DESC_LIMIT} characters; put detail in the body.",
                     "Use `skill_manage`, never generic file tools, for every skill mutation.",
+                    "Keep reasoning Skills Markdown-only: no code, executable helpers, validators or scoring gates.",
                     "When the user-controlled gate blocks a write, report it and do not seek a bypass.",
                 ]))
 
