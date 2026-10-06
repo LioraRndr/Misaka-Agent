@@ -26,4 +26,4 @@ __pycache__/
 # Local GUI launcher state. The log contains the one-time browser address.
 /.gui-runtime/
 /.test-tmp/
-/.mimosa/
+.mimosa/
