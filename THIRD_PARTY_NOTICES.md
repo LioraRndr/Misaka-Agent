@@ -200,3 +200,17 @@ are not represented as verbatim upstream code.
 - 许可证全文、源文件 SHA256 和改动边界：`misaka/core/tools/_office/LICENSE.frontier-agent`、`PROVENANCE.json`、`ORIGIN.md`。
 - 来源：上游 `_writer_*`、`_reader_*`、`create_file.py`、`read_file.py`；其自身注明功能设计参考 Mercor-Intelligence/archipelago（Apache-2.0），寻址和参数设计由 FrontierAgent 实现。
 - 本地改动包含引用友好的文本渲染、工作区归属、权限和错误信封、线程／写入队列、暂存回滚、独立转换配置、缺陷修正；不包含上游 PDF OCR、视觉模型网关和沙箱基础设施。
+
+## Instrument Serif（图形界面字体）
+
+- 上游：https://github.com/Instrument/instrument-serif ，取自 Google Fonts 仓库 `ofl/instrumentserif`。
+- 许可证：SIL Open Font License 1.1；版权：Copyright 2022 The Instrument Serif Project Authors。
+- 位置：`misaka/ui/gui/static/fonts/InstrumentSerif-Regular.woff2`、`InstrumentSerif-Italic.woff2`；许可证全文 `OFL-InstrumentSerif.txt`。
+- 改动：仅由 TTF 转为 WOFF2，字形与命名未改。
+
+## Noto Serif SC / 思源宋体（图形界面字体）
+
+- 上游：https://github.com/notofonts/noto-cjk （与 Adobe 思源宋体同一设计），取自 Google Fonts 仓库 `ofl/notoserifsc` 的可变字重版本。
+- 许可证：SIL Open Font License 1.1；版权：Copyright 2012 Google Inc.。
+- 位置：`misaka/ui/gui/static/fonts/NotoSerifSC-VF-subset.woff2`；许可证全文 `OFL-NotoSerifSC.txt`。
+- 改动：子集化为 GB2312 字符、常用标点符号与界面用字，并转为 WOFF2；未声明保留字体名，命名沿用原名。
