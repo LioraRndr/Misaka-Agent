@@ -1,12 +1,15 @@
 """Document navigation, reading, search, and quotation-verification tools."""
 import asyncio
 import base64
+import hashlib
 import json
 import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
+from io import BytesIO
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -24,6 +27,7 @@ from misaka.core.platform.toolkit import register_tool as _register
 # one wording for the whole product beats a second one that drifts. It has no public alias.
 from misaka.core.tools.read import _get_non_vision_image_note
 from misaka.core.tools.truncate import TruncationOptions, format_size, truncate_head
+from misaka.utils import atomic
 from misaka.utils.image_resize import (
     ImageResizeOptions,
     format_dimension_note,
@@ -139,8 +143,9 @@ def _seeing(row):
     return "only the source file shows them"
 
 
-def _page_notes(row, start, end):
-    """What a reader of pages ``start``-``end`` should know that their text does not say."""
+def _page_notes(row, start, end, figs=None):
+    """What a reader of pages ``start``-``end`` should know that their text does not say: pages
+    with no text here, figures the text does not carry (``corpus.figures``), pages re-read."""
     lines = []
     unread = sorted((n, why) for n, why in {**_unread(row), **_unread(row, textless=True)}.items()
                     if start <= n <= end)
@@ -148,6 +153,11 @@ def _page_notes(row, start, end):
         lines.append(f"Page {n} has no text here ({why}); {_seeing(row).replace('them', 'it')}.")
     if len(unread) > 10:
         lines.append(f"{len(unread) - 10} more pages in this range have no text here either.")
+    pictured = [(page, record) for page, record in sorted((figs or {}).items()) if start <= page <= end]
+    lines += [_figure_line(page, record) for page, record in pictured[:10]]
+    if len(pictured) > 10:
+        lines.append(f"{len(pictured) - 10} more pages in this range carry figures; read a narrower "
+                     f"range to have them named.")
     pages, when = _reread(row)
     if hit := [n for n in pages if start <= n <= end]:
         lines.append(f"Pages {corpus._page_spec(hit)} were re-read by a newer extractor"
@@ -207,13 +217,108 @@ OUTLINE_MAX_BYTES = 200 * 1024
 PAGE_IMAGE_MAX_SCALE = 2.0
 PAGE_IMAGE_MAX_SIDE = 2000
 PAGE_IMAGE_MAX_BYTES = 768 * 1024
+# A figure is rendered alone at the scale that brings its longer side to PAGE_IMAGE_MAX_SIDE --
+# axis labels and legends that a whole page at 2x leaves unreadable -- but not past this, where a
+# thumbnail would only be blown up into blur. The margin takes in what sits just outside the
+# box: a vector chart's labels are text, not part of the drawing the box was measured round.
+FIGURE_MAX_SCALE = 6.0
+FIGURE_MARGIN = 0.05
+
+# Two questions for a vision model reading on behalf of a model that cannot see, taken from
+# FrontierAgent's reader (_reader_core.py, _VISION_PROMPT and _VISION_FIGURE_PROMPT): a figure or
+# a scan reproduced whole; a page whose text the corpus already holds, its figures only, so the
+# vision model is not paid to transcribe paragraphs doc_read already has.
+VISION_PROMPT = (
+    "Reproduce ALL content of this image faithfully and completely; do not summarize or guess. "
+    "First, one line: what it is (chart/diagram/table/form/photo/screenshot). Then: transcribe text "
+    "verbatim (exact numbers/units/labels); for any table preserve rows/columns and which cell each "
+    "value belongs to; for a chart/diagram give title, axes, legend, series and the values/relationships "
+    "it conveys; for purely visual elements describe only what carries information. Keep reading order. "
+    "Use [illegible] rather than guessing."
+)
+VISION_FIGURE_PROMPT = (
+    "This is a full page image that may contain charts/plots/diagrams/flowcharts/infographics, "
+    "possibly alongside body text and plain tables. Extract ONLY the visual figures — for EACH figure: "
+    "its title, axis labels and scales, legend, data series, and the concrete values or relationships it "
+    "conveys (read approximate values off the axes when not labeled). Do NOT transcribe ordinary paragraph "
+    "text, headings, or plain data tables — those are captured elsewhere. Process figures in reading order; "
+    "use [illegible] rather than guessing. If the page has no real figure (only text/logos), reply exactly: NO_FIGURE."
+)
+NO_FIGURE = "NO_FIGURE"
 
 
-def _render_page(pdf_path, page, scale):
+def _vision_model():
+    """``(provider/model, the setting that named it)`` for reading a page to a model without
+    vision: ``documents.vision_model``, else the browser's, or ``(None, None)``."""
+    from misaka.config.product import setting
+    selected = setting("documents", "vision_model", None, str)
+    if selected:
+        return selected, "documents.vision_model"
+    try:
+        from misaka.core.web.browser import settings as browser
+        selected = browser.config().get("vision_model")
+    except (ValueError, OSError):
+        selected = None                     # an unreadable web configuration names no model
+    return (selected, "browser.vision_model") if isinstance(selected, str) and selected else (None, None)
+
+
+def _figure_box(record, figure):
+    """The part of the page doc_page_image renders for ``figure`` (1-based), margin included."""
+    width, height = record["size"]
+    x0, y0, x1, y1 = record["boxes"][figure - 1]
+    dx, dy = FIGURE_MARGIN * width, FIGURE_MARGIN * height
+    return [max(0.0, x0 - dx), max(0.0, y0 - dy), min(width, x1 + dx), min(height, y1 + dy)]
+
+
+def _figure_line(page, record):
+    """One page's figures in doc_page_image's numbering: its images first, then its drawing."""
+    if "sparse" in record:
+        return (f"Page {page} is a scanned page with little text ({record['sparse']:.0%} of this book's "
+                f"usual): if it holds a map, a plate or a table, doc_page_image(doc_id, {page}) shows it.")
+    groups, count = [], 0
+    if record.get("images"):
+        count = record["images"]
+        what = "an image" if count == 1 else f"{count} images"
+        groups.append(f"{what} covering {record['cover']:.0%} of the page "
+                      f"(figure={'1' if count == 1 else f'1..{count}'})")
+    if record.get("strokes"):
+        count += 1
+        groups.append(f"a drawing of {record['strokes']} strokes -- a chart, a map or a ruled table "
+                      f"(figure={count})")
+    return (f"Page {page} carries what its text does not: {'; '.join(groups)}. "
+            f"doc_page_image(doc_id, {page}, figure=N) shows one at full resolution.")
+
+
+def _figure_summary(figs):
+    """The pages of a document that carry figures, for doc_outline, or ``""``."""
+    if not figs:
+        return ""
+    spec = corpus._page_spec(figs)
+    if len(spec) > 160:
+        spec = spec[:spec.rfind(",", 0, 160)] + ", ..."
+    return (f"{len(figs)} pages carry figures their text does not (pages {spec}): doc_read names them "
+            f"page by page, and doc_page_image(doc_id, page, figure=N) shows one.\n")
+
+
+def _cached_reading(path):
+    """A vision model's earlier reading of the same picture with the same question, or None."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _keep_reading(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    atomic.write_text(path, text)
+
+
+def _render_page(pdf_path, page, scale, box=None):
     """Isolate PDFium's process-global state and native faults from concurrent tools."""
     result = subprocess.run(
         [sys.executable, str(Path(__file__).with_name("_pdf_render.py")),
-         str(pdf_path), str(page), str(scale)],
+         str(pdf_path), str(page), str(scale), *([json.dumps(box)] if box else [])],
         capture_output=True, timeout=60, check=False,
     )
     if result.returncode:
@@ -221,6 +326,27 @@ def _render_page(pdf_path, page, scale):
         raise RuntimeError(f"PDF renderer exited with code {result.returncode}: {reason}")
     value = json.loads(result.stdout)
     return (base64.b64decode(value["png"], validate=True) if value["png"] else None), value["pages"]
+
+
+def _render_djvu(djvu_path, page, scale):
+    """One DjVu page as PNG through ddjvu, ``(png, page count)``; ``(None, count)`` past the end."""
+    from PIL import Image
+    count = corpus._djvu_page_count(djvu_path, {})
+    if count is None:
+        raise RuntimeError("djvused could not read the page count (djvulibre: brew install djvulibre)")
+    if not 1 <= page <= count:
+        return None, count
+    side = max(1, round(PAGE_IMAGE_MAX_SIDE * min(scale, PAGE_IMAGE_MAX_SCALE) / PAGE_IMAGE_MAX_SCALE))
+    with tempfile.TemporaryDirectory(prefix="misaka-djvu-") as tmp:
+        out = os.path.join(tmp, "page.pnm")
+        run = subprocess.run([corpus.DJVU_RENDER_BINARY, "-format=pnm", f"-page={page}", f"-size={side}x{side}",
+                              str(djvu_path), out], capture_output=True, timeout=60, check=False)
+        if run.returncode or not os.path.exists(out):
+            raise RuntimeError(run.stderr.decode("utf-8", errors="replace").strip()[-500:] or f"exit {run.returncode}")
+        with Image.open(out) as image:
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+    return buffer.getvalue(), count
 
 
 def register(harn):
@@ -270,6 +396,7 @@ def register(harn):
             return _text("Cancelled.")
         # The fidelity note is ours, so it stays outside the fence the document's headings go in.
         note = _ocr_note(await _off_loop(_row, params.doc_id, workspace))
+        note += _figure_summary(await _off_loop(corpus.figures, params.doc_id, workspace=workspace))
         if o:
             # One tool result is one prompt turn: a heading tree has no natural bound, so it gets
             # the same kind of cap as the workspace index (misaka_research_view) and find/grep.
@@ -325,7 +452,8 @@ def register(harn):
                               offset=params.offset, workspace=workspace)
         if signal_aborted(signal):
             return _text("Cancelled.")
-        notes = _page_notes(await _off_loop(_row, params.doc_id, workspace), start, end)
+        notes = _page_notes(await _off_loop(_row, params.doc_id, workspace), start, end,
+                            await _off_loop(corpus.figures, params.doc_id, workspace=workspace))
         if not txt:
             return _text(notes + f"No text was extracted from p{start}-{end}; the pages may contain only "
                          f"images. Use doc_page_image(doc_id, page) to see a page as it is printed.")
@@ -337,32 +465,55 @@ def register(harn):
         scale: float = Field(2.0, description=(
             "Render scale over the page's printed size; 2.0 is legible for most typefaces and is the "
             f"maximum (larger values are clamped to it). Neither side exceeds {PAGE_IMAGE_MAX_SIDE} pixels."))
+        figure: int = Field(0, description=(
+            "A figure on the page, numbered as doc_read lists them: renders that figure alone, at the "
+            "resolution its labels need. 0 (the default) renders the whole page."))
 
     @_register(
         harn, name="doc_page_image", label="View document page",
-        description="Render one page of a PDF document as an image, so figures, tables, maps, and scanned pages can be read directly.",
-        snippet="See a PDF page as an image when its text is not enough",
+        description="Render one page of a PDF or DjVu document as an image, or one figure on a PDF page, so figures, tables, maps, and scanned pages can be read directly.",
+        snippet="See a page, or one figure on it, as an image when its text is not enough",
         guidelines=[
-            "When doc_read returns no text for a page, or a claim rests on a figure, a map, or a table's layout, look at the page with `doc_page_image`.",
+            "doc_read names the figures on each page that its text does not carry; when a claim rests on one -- a chart, a map, a table's layout -- look at it with `doc_page_image(doc_id, page, figure=N)` rather than the whole page.",
+            "When doc_read returns no text for a page, look at the page with `doc_page_image`.",
+            "A value read off a figure is a reading, not a quotation: cite the page and say it was read from the figure. doc_verify cannot locate it.",
         ],
         parameters=PageImageParams)
     async def doc_page_image(tool_call_id, params, signal, on_update, ctx):
         root, source, title = await _off_loop(_source, params.doc_id, ctx)
         if root is None:
             raise ValueError("Document not found. Use doc_list to find its document ID.")
-        if source is None or os.path.splitext(source)[1].lower() != ".pdf":
-            kind = os.path.splitext(source)[1].lower().lstrip(".") if source else "no stored source"
-            raise ValueError(f"{params.doc_id} was not indexed from a PDF ({kind}), and only "
-                             f"PDF pages can be rendered. Use doc_read for its text.")
+        kind = os.path.splitext(source)[1].lower() if source else ""
+        if kind not in (".pdf", ".djvu"):
+            raise ValueError(f"{params.doc_id} was not indexed from a PDF or a DjVu "
+                             f"({kind.lstrip('.') or 'no stored source'}), and only their pages can be "
+                             f"rendered. Use doc_read for its text.")
         if not math.isfinite(params.scale) or params.scale <= 0:
             raise ValueError("scale must be finite and greater than 0.")
+        box, record = None, None
+        if params.figure:
+            if kind != ".pdf":
+                raise ValueError("Figures are numbered on PDF pages only; render the whole page (figure=0).")
+            record = (await _off_loop(corpus.figures, params.doc_id, workspace=root)).get(params.page)
+            count = len(record["boxes"]) if record else 0
+            if not 1 <= params.figure <= count:
+                raise ValueError(f"Page {params.page} has {count or 'no'} figure{'' if count == 1 else 's'} "
+                                 f"its text does not carry{f' (1..{count})' if count else ''}; doc_read lists "
+                                 f"them page by page. figure=0 renders the whole page.")
+            if not record.get("rotation"):
+                box = _figure_box(record, params.figure)
         # A page at scale 3 came back as a 1.7 MB PNG and a Sister asked for the same pages
         # again and again (2026-09-23, card t_9f10b6: 26 renders, ~25k provider tokens each on
         # Codex); the transcript and every LCM checkpoint carried each copy. Scale 2 reads the
         # same, and a byte cap under the PNG size of a text page makes the resize pick JPEG.
         scale = min(params.scale, PAGE_IMAGE_MAX_SCALE)
+        if box:
+            scale = min(FIGURE_MAX_SCALE, PAGE_IMAGE_MAX_SIDE / max(box[2] - box[0], box[3] - box[1], 1))
         try:
-            png, count = await _off_loop(_render_page, source, params.page, scale)
+            if kind == ".djvu":
+                png, count = await _off_loop(_render_djvu, source, params.page, scale)
+            else:
+                png, count = await _off_loop(_render_page, source, params.page, scale, *([box] if box else []))
         except Exception as e:
             # Child failures/timeouts are tool errors, with the requested locator attached.
             raise RuntimeError(f"Could not render {params.doc_id} p{params.page}: {e}") from e
@@ -383,6 +534,17 @@ def register(harn):
         # doc_outline and doc_find follow. What is left is ours: an id, a page number, pixels.
         titled = untrusted(f"{params.doc_id} title", title)
         caption = f"[{params.doc_id}] page {params.page} of {count}"
+        if params.figure:
+            caption += f", figure {params.figure}" + (" (a rotated page: shown whole)" if box is None else "")
+        if note and resized is not None:
+            # A model without vision would be handed nothing: the image is dropped from its request.
+            # FrontierAgent's reader hands such a model what a vision model reads off the picture
+            # instead, and so does this, with the browser's mechanism (core/web/vision.py).
+            selected, knob = _vision_model()
+            if selected:
+                return _text(titled + await _vision_reading(params, resized, ctx, root, selected, knob, caption))
+            note += (" Set documents.vision_model to a vision model (provider/model) to have pages and "
+                     "figures read to this one.")
         if resized is None:
             # Only reachable for a page that stays over the inline limit at 1x1 px, but the read
             # tool answers this case rather than failing, and so does this one.
@@ -394,7 +556,34 @@ def register(harn):
         return {"content": [{"type": "text", "text": titled + "\n".join(lines)},
                             ImageContent(data=resized.data, mimeType=resized.mimeType)],
                 "details": {"doc_id": params.doc_id, "page": params.page, "pages": count,
-                            "width": resized.width, "height": resized.height}}
+                            "figure": params.figure, "width": resized.width, "height": resized.height}}
+
+    async def _vision_reading(params, resized, ctx, root, selected, knob, caption):
+        """What the vision model reads off the rendered page or figure, kept beside the document so
+        the same picture is paid for once."""
+        from misaka.core.web.vision import describe
+        row = await _off_loop(_row, params.doc_id, root)
+        pictured = (params.figure or _page_from_ocr(row, params.page)
+                    or params.page in {**_unread(row), **_unread(row, textless=True)})
+        question = VISION_PROMPT if pictured else VISION_FIGURE_PROMPT
+        ddir = corpus.resolve_doc(params.doc_id, workspace=root)
+        numbering = corpus.FIGURES_VERSION if params.figure else 0      # figure N is N in one inventory
+        tag = hashlib.sha256(f"{selected}\n{question}\n{numbering}".encode()).hexdigest()[:12]
+        cache = os.path.join(ddir, "vision", f"p{params.page:04d}-f{params.figure}-{tag}.md") if ddir else None
+        text = await _off_loop(_cached_reading, cache) if cache else None
+        if text is None:
+            image = {"type": "image", "data": resized.data, "mimeType": resized.mimeType}
+            text = await describe(image, question, ctx, selected, setting=knob, purpose="document_vision",
+                                  max_tokens=4096)
+            if cache:
+                await _off_loop(_keep_reading, cache, text)
+        if text.strip() == NO_FIGURE:
+            return (f"{caption}: {selected} ({knob}) found no figure on this page beyond its text, "
+                    f"which doc_read has.")
+        return (f"{caption}, read from the rendered image by {selected} ({knob}) because this model has "
+                f"no vision. It is that model's transcription, not the document's text: doc_verify "
+                f"cannot locate it, and a citation should say it was read from the page image.\n"
+                + untrusted(f"{params.doc_id} p{params.page} vision", text))
 
     class FindParams(BaseModel):
         query: str = Field(description="Exact text to find.")

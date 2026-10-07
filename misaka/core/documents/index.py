@@ -266,38 +266,51 @@ def _route(pages, visuals=None):
 
 
 # Top-level objects only: pdfium reports an object nested in a form XObject in the form's own
-# coordinates, so a scan wrapped in a form (a common producer habit) is measured by the form's
-# placement on the page instead. Run in a child for the reason ``_PDFIUM_TEXT_CHILD`` is.
+# coordinates, so a scan or a chart wrapped in a form (a common producer habit) is measured by the
+# form's placement on the page instead. Boxes are counted from the crop box's lower-left corner,
+# where a render's crop is counted from. Run in a child for the reason ``_PDFIUM_TEXT_CHILD`` is.
 _PDFIUM_VISUALS_CHILD = """
 import json, sys
 import pypdfium2 as pdfium
 import pypdfium2.raw as raw
+IMAGE, PATH, FORM = raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_PATH, raw.FPDF_PAGEOBJ_FORM
 pdf = pdfium.PdfDocument(sys.argv[1])
 out = {}
 try:
     for number in json.loads(sys.argv[2]):
         page = pdf[number - 1]
         left, bottom, right, top = page.get_cropbox()
-        area = max((right - left) * (top - bottom), 1.0)
-        covered, marked, form = 0.0, False, None
+        width, height = max(right - left, 1.0), max(top - bottom, 1.0)
+
+        def clip(box):
+            x0, y0, x1, y1 = max(box[0], left) - left, max(box[1], bottom) - bottom, min(box[2], right) - left, min(box[3], top) - bottom
+            return [x0, y0, x1, y1] if x1 > x0 and y1 > y0 else None
+
+        images, strokes, ink, marked, form, counted = [], 0, None, False, None, False
         for obj in page.get_objects(max_depth=2):
             if obj.level == 0:
-                form = obj if obj.type == raw.FPDF_PAGEOBJ_FORM else None
-                if obj.type in (raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_PATH):
-                    marked = True
-                if obj.type != raw.FPDF_PAGEOBJ_IMAGE:
-                    continue
-                box = obj.get_pos()
-            elif form is not None and obj.type in (raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_PATH):
-                marked = True
-                if obj.type != raw.FPDF_PAGEOBJ_IMAGE:
-                    continue
-                box, form = form.get_pos(), None          # count a form holding images once
-            else:
+                form, counted, placed = (obj if obj.type == FORM else None), False, obj
+            elif form is None:
                 continue
-            x0, y0, x1, y1 = box
-            covered += max(0.0, min(x1, right) - max(x0, left)) * max(0.0, min(y1, top) - max(y0, bottom))
-        out[number] = [min(covered / area, 1.0), marked]
+            else:
+                placed = form
+            if obj.type == IMAGE:
+                marked = True
+                if obj.level == 0 or not counted:            # a form holding images is one figure
+                    box = clip(placed.get_pos())
+                    if box:
+                        images.append(box)
+                    counted = obj.level > 0
+            elif obj.type == PATH:
+                marked = True
+                strokes += max(raw.FPDFPath_CountSegments(obj.raw), 0)
+                box = clip(placed.get_pos())
+                if box and (box[2] - box[0]) * (box[3] - box[1]) < 0.9 * width * height:   # not a frame round the page
+                    ink = box if ink is None else [min(ink[0], box[0]), min(ink[1], box[1]),
+                                                   max(ink[2], box[2]), max(ink[3], box[3])]
+        cover = sum((b[2] - b[0]) * (b[3] - b[1]) for b in images) / (width * height)
+        out[number] = {"cover": min(cover, 1.0), "marked": marked, "images": images, "strokes": strokes,
+                       "ink": ink, "size": [width, height], "rotation": page.get_rotation()}
 finally:
     pdf.close()
 json.dump(out, sys.stdout)
@@ -305,16 +318,126 @@ json.dump(out, sys.stdout)
 
 
 def _pdf_visuals(p, numbers):
-    """``{page: (image_cover, marked)}`` for ``numbers``, or None when the file cannot be read."""
+    """What pages ``numbers`` of a PDF print besides text, ``{page: signals}``, or None when the
+    file cannot be read: ``cover`` (the share of the page under rasters), ``marked`` (anything
+    printed at all), ``images`` (each raster's box), ``strokes`` (path segments drawn) and ``ink``
+    (the box round the drawing), with the page's ``size`` and ``rotation``."""
     try:
         out = subprocess.run([sys.executable, "-c", _PDFIUM_VISUALS_CHILD, p, json.dumps(numbers)],
                              capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
         if out.returncode == 0:
-            return {int(number): (float(cover), bool(marked))
-                    for number, (cover, marked) in json.loads(out.stdout).items()}
+            return {int(number): signals for number, signals in json.loads(out.stdout).items()}
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         pass
     return None
+
+
+def _cover_and_marked(p):
+    """``_route``'s question about a PDF: ``{page: (image_cover, marked)}``."""
+    def ask(numbers):
+        seen = _pdf_visuals(p, numbers)
+        return None if seen is None else {n: (s["cover"], s["marked"]) for n, s in seen.items()}
+    return ask
+
+
+# -- figures the text layer does not carry ----------------------------------------------------------
+#
+# FrontierAgent's reader marks, on every page it reads from the text layer, a picture the text
+# cannot carry -- "figure not read: embedded image (covers 35% of page)" -- and counts a page's
+# drawing operators without concluding anything from them, so the model knows where to look and
+# looks only there. Its thresholds are taken as they are. A box the document repeats on half its
+# pages or more (a page background, a letterhead) is set aside the way a running line is.
+#
+# A raster covering the whole page is the page itself: a scan, with a text layer OCR'd under it
+# (archive.org's books, most of a humanities corpus) -- often twice over, a background and a
+# foreground layer of the same scan. Upstream finds the figures inside such a page with a
+# layout-aware OCR service; tesseract does not, so here a scanned page is named instead when it
+# carries far less text than the book's scanned pages usually do -- which is what a map, a plate
+# or a table of figures looks like from its text layer.
+FIGURE_COVER = 0.08      # rasters over this share of a page: a figure ("_PDF_INLINE_IMG_COVER")
+FIGURE_WIDTH = 0.15      # a raster narrower than this share of the page is a logo or an icon ("_OCR_FIG_MIN_WPCT")
+FIGURE_STROKES = 100     # past this many path segments a page is drawn on, not only ruled ("_PDF_DRAW_OPS_FLOOR")
+FIGURE_PAGE = 0.9        # a raster over this share of the page is the page's own scan
+SCAN_SPARSE = 0.25       # a scanned page with under this share of the book's usual text
+SCAN_USUAL_MIN = 400     # ... in a book whose scanned pages usually carry this much
+FIGURES_VERSION = 1
+
+
+def _figure_inventory(signals, count, texts=None):
+    """``{page: {"cover", "images", "strokes", "boxes", "size", "rotation", "sparse"}}`` for the
+    pages that carry what their text does not. ``boxes`` lists the figures in the order
+    doc_page_image numbers them -- each image, then the drawing; ``sparse`` is a scanned page's
+    text as a share of the book's usual, when it is low enough to say so."""
+    def key(box):
+        return tuple(round(v) for v in box)
+
+    def area(box):
+        return (box[2] - box[0]) * (box[3] - box[1])
+
+    repeated = {}
+    for s in signals.values():
+        for box in {key(b) for b in s["images"]}:
+            repeated[box] = repeated.get(box, 0) + 1
+    scanned, out = {}, {}
+    for page, s in sorted(signals.items()):
+        width, height = s["size"]
+        unique = list({key(b): b for b in s["images"]}.values())
+        if any(area(b) >= FIGURE_PAGE * width * height for b in unique):
+            scanned[page] = s
+            continue
+        images = [b for b in unique
+                  if b[2] - b[0] >= FIGURE_WIDTH * width and repeated[key(b)] < max(3, count // 2)]
+        cover = min(sum(area(b) for b in images) / (width * height), 1.0)
+        pictured = cover > FIGURE_COVER
+        drawn = s["strokes"] > FIGURE_STROKES and s["ink"] is not None
+        if pictured or drawn:
+            out[page] = {"cover": round(cover, 3) if pictured else 0.0, "images": len(images) if pictured else 0,
+                         "strokes": s["strokes"] if drawn else 0,
+                         "boxes": (images if pictured else []) + ([s["ink"]] if drawn else []),
+                         "size": [width, height], "rotation": s["rotation"]}
+    if texts and scanned:
+        running = _running_lines(texts)
+        lengths = {page: len(_own_text(texts[page - 1], running)) for page in scanned if page <= len(texts)}
+        usual = sorted(lengths.values())[len(lengths) // 2] if lengths else 0
+        for page, length in lengths.items():
+            if usual >= SCAN_USUAL_MIN and length < SCAN_SPARSE * usual:
+                width, height = scanned[page]["size"]
+                out[page] = {"cover": 1.0, "images": 0, "strokes": 0, "boxes": [], "size": [width, height],
+                             "rotation": scanned[page]["rotation"], "sparse": round(length / usual, 2)}
+    return dict(sorted(out.items()))
+
+
+def figures(doc_id, workspace=None):
+    """The figures of a PDF that its text does not carry, ``{page: record}``; ``{}`` for any other
+    format, or when the file cannot be read.
+
+    Read once from the stored source -- so a document indexed before this existed has them too --
+    and kept in ``figures.json``. Pages read by OCR, or left unread, are left out when asked: the
+    whole page is the picture there, and doc_read already says so of them.
+    """
+    ddir = resolve_doc(doc_id, workspace=workspace)
+    source = os.path.join(ddir, "source.pdf") if ddir else None
+    if not source or not _real_file(source, ddir):
+        return {}
+    meta = _read_meta_at(ddir) or {}
+    count = int(meta.get("pages") or 0)
+    path = os.path.join(ddir, "figures.json")
+    data = None
+    if _real_file(path, ddir):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = None
+    if not isinstance(data, dict) or data.get("version") != FIGURES_VERSION:
+        signals = _pdf_visuals(source, list(range(1, count + 1)))
+        if signals is None:
+            return {}
+        found = _figure_inventory(signals, count, _stored_pages(ddir, count))
+        data = {"version": FIGURES_VERSION, "pages": {str(page): v for page, v in found.items()}}
+        atomic.write_text(path, json.dumps(data, ensure_ascii=False))
+    pictured = _ocr_set(meta, count) | {int(n) for n in (meta.get("unread_pages") or {}) if str(n).isdigit()}
+    return {int(n): v for n, v in data.get("pages", {}).items() if str(n).isdigit() and int(n) not in pictured}
 
 
 # -- OCR: an optional external binary, fail-closed ------------------------------------------------
@@ -498,7 +621,7 @@ def _pdf_pages(p, meta=None):
             return []
         _note(meta, "ocr", True)
         return [read[number] for number in sorted(read)]
-    routed = _route(pages, lambda numbers: _pdf_visuals(p, numbers))
+    routed = _route(pages, _cover_and_marked(p))
     if not routed:
         return pages                        # a real text layer on every page: never OCR over it
     ocr = _ocr_pages(p, learned, sorted(routed), len(pages))

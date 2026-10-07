@@ -158,7 +158,8 @@ def _layer(monkeypatch, pages):
     """A PDF whose text layer is ``pages``: a page with text is typeset, one without is a scan."""
     monkeypatch.setattr(corpus, "_pdf_text_layer", lambda p: list(pages))
     monkeypatch.setattr(corpus, "_pdf_visuals",
-                        lambda p, numbers: {n: (0.0 if pages[n - 1].strip() else 1.0, True) for n in numbers})
+                        lambda p, numbers: {n: {"cover": 0.0 if pages[n - 1].strip() else 1.0, "marked": True}
+                                            for n in numbers})
 
 
 def test_two_typeset_pages_before_the_scans_keep_their_text_and_their_numbers(tmp_path, monkeypatch, fake_ocrmypdf):

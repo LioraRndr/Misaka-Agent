@@ -1,7 +1,6 @@
 """MISAKA tool schemas and artifact/image rendering around the browser owner."""
 import hashlib
 import json
-import time
 from pathlib import Path
 
 from misaka.core.extensions.types import ToolDefinition
@@ -11,6 +10,7 @@ from misaka.core.web import config
 from misaka.core.web.browser import settings
 from misaka.core.web.evidence import save_page
 from misaka.core.web.runtime import current_runtime
+from misaka.core.web.vision import describe
 from misaka.utils.async_lifecycle import run_in_thread
 from misaka.utils.atomic import write_bytes
 from misaka.utils.image_process import process_image
@@ -71,32 +71,8 @@ async def image_content(body, question, ctx):
     selected = settings.config().get('vision_model')
     if not selected:
         return [{'type': 'text', 'text': 'Screenshot saved. This model has no native vision; configure browser.vision_model for image analysis.'}]
-    from misaka.ai.stream import complete_simple
-    from misaka.ai.types import SimpleStreamOptions
-    from misaka.ai.utils.headers import provider_headers_to_record
-    from misaka.core.web.accounting import account_call
-
-    provider, separator, model_id = selected.partition('/')
-    registry = getattr(ctx, 'modelRegistry', None)
-    model = registry.find(provider, model_id) if registry is not None and separator else None
-    if model is None or 'image' not in model.input:
-        raise ValueError('browser.vision_model must identify an available vision model as provider/model')
-    auth = await registry.getAuth(model)
-    if auth is None:
-        raise ValueError('The selected browser vision model has no authentication')
-    if auth.auth.baseUrl:
-        model = model.model_copy(update={'baseUrl': auth.auth.baseUrl})
-    options = SimpleStreamOptions(apiKey=auth.auth.apiKey, headers=provider_headers_to_record(auth.auth.headers),
-                                  env=auth.env, signal=getattr(ctx, 'signal', None), maxTokens=2048)
-    async with account_call('browser_vision', provider, question, unit='provider_operation') as facts:
-        result = await complete_simple(model, {'messages': [{'role': 'user', 'content': [
-            {'type': 'text', 'text': question}, image], 'timestamp': int(time.time() * 1000)}]}, options)
-        usage = getattr(result, 'usage', None)
-        if usage is not None:
-            facts['model_usage'] = usage.model_dump()
-    if getattr(result, 'stopReason', None) in {'error', 'aborted'}:
-        raise ValueError(getattr(result, 'errorMessage', None) or 'Browser vision model call failed')
-    return [{'type': 'text', 'text': config.redact_secrets(''.join(getattr(item, 'text', '') for item in result.content))}]
+    text = await describe(image, question, ctx, selected, setting='browser.vision_model', purpose='browser_vision')
+    return [{'type': 'text', 'text': text}]
 
 
 def register(harn, cwd):

@@ -55,13 +55,23 @@ What reading them needs:
   `LIVRE III`, a title set in capitals, `#` in Markdown), with no extra needed. Outlines are made
   for documents of 20 pages or more. Running `misaka doc add` or `scan` again on a document
   indexed earlier fills its outline in. `--no-tree` skips the outline.
+- **Figures.** A map, a chart or a plate is not in a page's text, so `doc_read` names the figures
+  on the pages it returns: an image on a PDF page (covering more than 8% of it, and wider than a
+  logo), a drawing of more than 100 strokes (a chart, a map or a ruled table), and, in a scanned
+  book, a page with far less text than the book's pages usually carry. `doc_outline` lists the
+  pages that have them. `doc_page_image(doc_id, page, figure=N)` shows one figure alone, at the
+  resolution its labels need; without `figure` it shows the whole page, of a PDF or a DjVu. A
+  model without vision cannot be shown an image at all, so for it the page or the figure is read
+  by the vision model in `documents.vision_model` (or `browser.vision_model`), and what that
+  model read comes back as text, kept beside the document so the same picture is paid for once.
+  A value read off a figure is a reading, not a quotation: `doc_verify` cannot locate it.
 - **Pages.** In a PDF or DjVu file a page is a printed page. EPUB, HTML, text and Office files
   have none, so MISAKA cuts them into pages of about 3,000 characters at paragraph breaks, and
   a citation such as `p12` points into that cut.
 
 Agents use the same index through their tools: `doc_list`, `doc_outline`, `doc_read` (by outline
-node or page range), `doc_find` (literal text), `doc_page_image` (a PDF page as an image, for
-figures, tables, maps and scans) and `doc_add`. `doc_verify` finds the page and character offset
+node or page range), `doc_find` (literal text), `doc_page_image` (a PDF or DjVu page, or one figure on
+a PDF page, as an image, for figures, tables, maps and scans) and `doc_add`. `doc_verify` finds the page and character offset
 where a quotation occurs and returns a hash for it. It shows where the words are; whether they
 support the claim is for the red team and Last Order to judge. On an OCR page, a
 match means the quotation matches what OCR read.

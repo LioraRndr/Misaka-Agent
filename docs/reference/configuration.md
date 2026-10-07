@@ -122,6 +122,7 @@ see [the team guide](../guide/team.md#a-sisters-profile).
 | Setting | Default | Meaning |
 |---|---|---|
 | `documents.ocr_langs` | `eng+chi_sim+jpn` | languages for reading scanned PDFs, joined with `+` (needs `ocrmypdf` and each language's data) |
+| `documents.vision_model` | `browser.vision_model`, if set | a vision model (`provider/model`) that reads pages and figures to a model without vision, which `doc_page_image` otherwise could not show anything to |
 | `web.*` | search works with no setup | set with `misaka web`; see [Documents and the web](../guide/sources.md#the-web) |
 | `web.allow_private_urls` | `false` | let web tools reach private and loopback addresses; cloud metadata addresses stay blocked |
 
