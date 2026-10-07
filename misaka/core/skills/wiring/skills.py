@@ -1097,7 +1097,7 @@ def _is_context_file_above(target, workspace):
     PROJECT.md, and every later session of the project took it as its brief)."""
     from misaka.core.resource_loader import CONTEXT_FILE_NAMES
     target = home.folded(target)
-    if target.name not in {name.casefold() for name in CONTEXT_FILE_NAMES}:
+    if target.name not in {home.fold(name) for name in CONTEXT_FILE_NAMES}:
         return False
     here = home.folded(workspace)
     return here == target.parent or target.parent in here.parents
@@ -1124,7 +1124,10 @@ def _command_touches(command, workspace, live_roots, *, shell="bash", unattended
     """
     if not command.strip():
         return None
-    if any(root in command for root in live_roots):
+    # Compared as the file system compares names: `rm -rf ~/.MISAKA/skills/x` is the live tree on
+    # macOS and Windows (0.18.9 sweep).
+    live_roots = {home.fold(root) for root in live_roots}
+    if any(root in home.fold(command) for root in live_roots):
         return "path"
     # Substitution is only a reason by itself where nobody is watching. In a card or a child
     # the guard is the only reader of the command, so an expansion it cannot resolve is refused
@@ -1162,6 +1165,7 @@ def _command_touches(command, workspace, live_roots, *, shell="bash", unattended
         if not os.path.isabs(candidate):
             candidate = os.path.join(workspace, candidate)
         for resolved in (os.path.abspath(candidate), os.path.realpath(candidate)):
+            resolved = home.fold(resolved)
             if any(resolved == root or resolved.startswith(root + os.sep) for root in live_roots):
                 return "path"
     return "dynamic" if dynamic and unattended else None

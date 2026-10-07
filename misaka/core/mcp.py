@@ -63,8 +63,11 @@ _SAFE_ENV_KEYS_CASE_INSENSITIVE = frozenset({
     "PUBLIC", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERDOMAIN", "USERNAME", "USERPROFILE", "WINDIR",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
-    "NODE_OPTIONS", "PYTHONUTF8", "PYTHONIOENCODING", "LOGNAME", "SSH_AUTH_SOCK", "JAVA_HOME"})
+    "NODE_OPTIONS", "PYTHONUTF8", "PYTHONIOENCODING", "LOGNAME", "JAVA_HOME"})
 _PACKAGE_MANAGER_PREFIXES = ("NPM_CONFIG_", "YARN_", "PNPM_", "COREPACK_", "UV_", "PIP_")
+# A registry's credentials among those settings (npm's _authToken, UV_INDEX_<N>_PASSWORD, ...) stay
+# behind: a server that needs one names it in its env.
+_REGISTRY_SECRET = re.compile(r"AUTH|TOKEN|PASSWORD|SECRET|_IDENT|CLIENT_CERT|CLIENT_KEY", re.IGNORECASE)
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
@@ -74,7 +77,8 @@ def inherited_env(environ=None):
     environ = os.environ if environ is None else environ
     return {key: value for key, value in environ.items()
             if key in _SAFE_ENV_KEYS or key.upper() in _SAFE_ENV_KEYS_CASE_INSENSITIVE
-            or key.startswith(("XDG_", "LC_")) or key.upper().startswith(_PACKAGE_MANAGER_PREFIXES)}
+            or key.startswith(("XDG_", "LC_"))
+            or (key.upper().startswith(_PACKAGE_MANAGER_PREFIXES) and not _REGISTRY_SECRET.search(key))}
 
 
 def configured_env(configured, environ=None):

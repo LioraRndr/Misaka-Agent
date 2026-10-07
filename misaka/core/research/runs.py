@@ -1636,7 +1636,7 @@ def frozen_refusal(target):
     draft. A hand edit fails the integrity check of the phase that reads it next; a draft edited
     during its final review failed a whole run that way (B126). A card's deliverable is registered
     with its card and stays its Sister's to change, and a finished run's files are anyone's."""
-    from misaka.config import CFG
+    from misaka.config import CFG, home
 
     try:
         con = task_store.connect(os.path.expanduser(CFG["db"]))
@@ -1645,7 +1645,8 @@ def frozen_refusal(target):
     try:
         row = con.execute(
             "SELECT a.kind, a.run_id FROM research_artifacts a JOIN research_runs r ON r.id=a.run_id "
-            "WHERE a.path=? AND a.task_id IS NULL AND r.status!='done' LIMIT 1",
+            "WHERE a.path=? " + ("COLLATE NOCASE " if home.FOLDS_CASE else "") +   # a case variant is the file there
+            "AND a.task_id IS NULL AND r.status!='done' LIMIT 1",
             (str(Path(target).resolve()),)).fetchone()
     except sqlite3.OperationalError:     # a board research has never touched has no such tables
         return None

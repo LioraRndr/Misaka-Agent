@@ -218,11 +218,20 @@ def strays() -> list[str]:
                   and not any(name.endswith(tail) and name[:-len(tail)] in known for tail in sidecars))
 
 
+# The file systems MISAKA's users run fold case (APFS, NTFS): ``~/.MISAKA/Credentials`` is
+# ``~/.misaka/credentials`` there, and a check that compared names exactly let the variant through
+# (0.18.9 sweep). Linux's do not, and there a variant is another file.
+FOLDS_CASE = sys.platform in ("darwin", "win32")
+
+
+def fold(text: str) -> str:
+    """``text`` as this platform's file system compares names."""
+    return text.casefold() if FOLDS_CASE else text
+
+
 def folded(target: str | os.PathLike[str]) -> Path:
-    """``target`` resolved and case-folded, for a refusal to compare: macOS and Windows file systems
-    fold case, so ``~/.MISAKA/Credentials`` is ``~/.misaka/credentials`` there, and a check that
-    compared names exactly let the variant through (0.18.9 sweep)."""
-    return Path(os.path.realpath(Path(target).expanduser()).casefold())
+    """``target`` resolved and folded as the file system folds it, for a refusal to compare."""
+    return Path(fold(os.path.realpath(Path(target).expanduser())))
 
 
 def agent_may_write(target: str | os.PathLike[str], granted: tuple[str | None, ...] = ()) -> bool:

@@ -36,3 +36,11 @@ def test_an_npx_or_uvx_server_reaches_the_registry_the_user_set():
 
 def test_a_null_value_in_a_servers_env_is_no_value():
     assert mcp.configured_env({"TOKEN": None, "MODE": "a"}, ENVIRON) == {"MODE": "a"}
+
+
+def test_a_registrys_credentials_stay_behind_with_the_ssh_agent():
+    secrets = {"npm_config_//registry.npmjs.org/:_authToken": "npm-secret", "NPM_CONFIG__AUTH": "b64",
+               "UV_INDEX_1_PASSWORD": "pw", "YARN_NPM_AUTH_TOKEN": "y", "UV_PUBLISH_TOKEN": "t",
+               "PIP_CLIENT_CERT": "/c.pem", "SSH_AUTH_SOCK": "/tmp/agent.sock"}
+    env = mcp.inherited_env({**ENVIRON, **secrets, "npm_config_registry": "https://r"})
+    assert not set(secrets) & set(env) and env["npm_config_registry"] == "https://r"

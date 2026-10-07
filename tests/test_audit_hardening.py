@@ -21,9 +21,36 @@ def _write(tmp_path, kind, path):
                                   # as write resolves them: a leading @, and a case-folding file system
                                   "@PROJECT.md", "project.md", "Agents.md", "../claude.MD"])
 @pytest.mark.parametrize("kind", ["card", "beast", "child"])
-def test_a_sister_or_sub_agent_does_not_write_the_projects_instructions(tmp_path, kind, path):
+def test_a_sister_or_sub_agent_does_not_write_the_projects_instructions(tmp_path, monkeypatch, kind, path):
+    from misaka.config import home
+    monkeypatch.setattr(home, "FOLDS_CASE", True)                  # macOS and Windows
     decision = _write(tmp_path, kind, path)
     assert decision and decision["block"] and "Tell Last Order" in decision["reason"]
+
+
+def test_on_a_file_system_that_keeps_case_a_variant_is_another_file(tmp_path, monkeypatch):
+    """Linux: the loader reads PROJECT.md only, so project.md is an ordinary file there."""
+    from misaka.config import home
+    monkeypatch.setattr(home, "FOLDS_CASE", False)
+    assert _write(tmp_path, "card", "project.md") is None
+    assert _write(tmp_path, "card", "PROJECT.md")["block"]
+
+
+def test_the_shell_guard_reads_a_live_tree_in_any_case(tmp_path, monkeypatch):
+    from misaka.config import home
+    from misaka.core.skills.wiring.skills import _command_touches
+    monkeypatch.setattr(home, "FOLDS_CASE", True)
+    live = str(tmp_path / ".misaka" / "skills")
+    variant = str(tmp_path / ".MISAKA" / "Skills" / "x")
+    assert _command_touches(f"rm -rf {variant}", str(tmp_path), {live}) == "path"
+
+
+def test_web_evidence_originals_are_refused_in_any_case(tmp_path, monkeypatch):
+    from misaka.config import home
+    from misaka.core.web.evidence import check_material_read
+    monkeypatch.setattr(home, "FOLDS_CASE", True)
+    with pytest.raises(ValueError, match="Private Web material"):
+        check_material_read(str(tmp_path / "state" / "Web-Evidence" / "Originals" / "page.html"))
 
 
 def test_a_file_url_is_resolved_as_the_write_tool_resolves_it(tmp_path):
@@ -34,6 +61,7 @@ def test_a_file_url_is_resolved_as_the_write_tool_resolves_it(tmp_path):
 def test_the_home_refuses_a_case_variant_of_itself(tmp_path, monkeypatch):
     from misaka.config import home
     from misaka.core.platform import home_guard
+    monkeypatch.setattr(home, "FOLDS_CASE", True)
     monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
     variant = str(tmp_path / "HOME" / "Settings.json")
     assert home_guard.refusal(variant, str(tmp_path / "project"), "card")
@@ -72,10 +100,14 @@ def test_the_file_tools_do_not_read_misakas_credentials(tmp_path, monkeypatch):
 def test_credentials_are_refused_in_any_case_and_only_where_the_home_loads_them(tmp_path, monkeypatch):
     from misaka.config import home
     from misaka.core.web.evidence import is_credential_store
+    monkeypatch.setattr(home, "FOLDS_CASE", True)
     monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
     root = tmp_path / "home"
     for refused in (root / "Credentials" / "auth.json", tmp_path / "HOME" / "credentials" / "auth.json",
-                    root / ".ENV", root / "profiles" / "sisters" / "10032" / ".env"):
+                    root / ".ENV", root / "profiles" / "sisters" / "10032" / ".env",
+                    # what `misaka update` snapshots of them
+                    root / "state" / "backups" / "update-20261008" / ".env",
+                    root / "state" / "backups" / "update-20261008" / "credentials" / "auth.json"):
         assert is_credential_store(str(refused)), refused
     # A project's .env copied into a sub-agent's worktree is the project's own.
     assert not is_credential_store(str(root / "state" / "worktrees" / "w1" / ".env"))
