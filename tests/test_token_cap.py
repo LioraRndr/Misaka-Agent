@@ -202,6 +202,28 @@ def test_a_wait_ends_when_the_request_is_aborted(board, provider):
     assert message.stopReason == "aborted" and time.monotonic() - started < 3
 
 
+def test_the_provider_gets_the_callers_signal(board, provider):
+    """0.18.9 deep-copied the options: an Event a provider had already waited on dragged the running
+    loop into the copy ("cannot pickle '_asyncio.Task' object" on every card's second request), and
+    the copy's signal never fired, so nothing could abort a metered request."""
+    from misaka.agent.agent import AbortController
+
+    async def ask():
+        controller = AbortController()
+        waiter = asyncio.ensure_future(controller.signal.wait())     # a provider waited on it before
+        await asyncio.sleep(0)
+        with budget.usage_context(board.path, board.card, 1, 1_000_000):
+            message = await complete_simple(provider.model, {"messages": []},
+                                            SimpleStreamOptions(signal=controller.signal, maxTokens=4_000))
+        waiter.cancel()
+        return controller, message
+
+    controller, message = asyncio.run(ask())
+    assert message.stopReason == "stop"
+    assert provider.sent[0].signal is controller.signal
+    assert provider.sent[0].maxTokens <= 4_000
+
+
 # -- no second count ----------------------------------------------------------------------------------------
 
 def test_an_agent_end_event_carries_no_usage_any_more():

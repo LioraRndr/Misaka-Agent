@@ -78,23 +78,22 @@ def install() -> None:
 
 
 def _limited(options: Any, max_tokens: int) -> Any:
+    """The caller's options with ``maxTokens`` cut to the lease: a shallow copy, so the provider
+    still holds the caller's ``signal`` (0.18.9 copied deep: the copy's signal never fired, and an
+    Event a provider had already waited on dragged the running loop into the copy -- "cannot
+    pickle '_asyncio.Task' object" on a card's second request). A provider's own retry is left as
+    configured: it repeats a request that never started, which spends nothing."""
+    updates = {"maxTokens": max(1, int(max_tokens))}
     if options is None:
         from misaka.ai.types import SimpleStreamOptions
-        limited: Any = SimpleStreamOptions()
-    elif hasattr(options, "model_copy"):
-        limited = options.model_copy(deep=True)
-    elif isinstance(options, dict):
-        limited = dict(options)
-    else:
-        limited = copy.copy(options)
-    # Every retry of the agent loop leases again; a transparent provider retry would spend the
-    # lease twice with usage reported for the last attempt only.
-    updates = {"maxTokens": max(1, int(max_tokens)), "maxRetries": 0}
-    if isinstance(limited, dict):
-        limited.update(updates)
-    else:
-        for key, value in updates.items():
-            setattr(limited, key, value)
+        return SimpleStreamOptions(**updates)
+    if hasattr(options, "model_copy"):
+        return options.model_copy(update=updates)
+    if isinstance(options, dict):
+        return {**options, **updates}
+    limited = copy.copy(options)
+    for key, value in updates.items():
+        setattr(limited, key, value)
     return limited
 
 
