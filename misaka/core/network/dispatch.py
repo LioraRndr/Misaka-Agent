@@ -164,6 +164,10 @@ def reconcile(con, cfg, *, task_ids=None, workspace=None):
             # A recorded identity is checked against the PID that holds it now, so a reused
             # PID does not read as the original worker.
             continue
+        from misaka.utils import loop_watchdog
+        stall = loop_watchdog.report(f"card-{t['id']}", t["worker_pid"])
+        if stall:
+            reason = f"{reason}; {stall}"
         try:
             finish_abandoned(con, t, reason=reason)
         except Exception as error:  # noqa: BLE001 - one card must not strand the rest

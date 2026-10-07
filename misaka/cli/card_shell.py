@@ -106,7 +106,9 @@ def launch(task_id, resume_only=False, say=None):
             part.usage = {"usage_db": CFG["db"], "task_id": task_id,
                           "generation": int(task["generation"])}
     try:
-        code = asyncio.run(engine_main(flags, assembly.engine_options()))
+        from misaka.utils import loop_watchdog
+        loop_watchdog.configure(f"card-{task_id}", exit_on_stall=True)
+        code = asyncio.run(loop_watchdog.watched(engine_main(flags, assembly.engine_options())))
     finally:
         from misaka.core.skills import sandbox as skill_sandbox
         skill_sandbox.cleanup(ro_root)

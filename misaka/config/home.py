@@ -110,6 +110,7 @@ LAYOUT: dict[str, Entry] = {
     "crash_log": Entry("logs/misaka-crash.log", "logs"),
     "warnings_log": Entry("logs/misaka-warnings.log", "logs"),
     "panel_crash_log": Entry("logs/panel-crash.log", "logs"),
+    "stall_logs": Entry("logs/stalls", "logs"),
     "mcp_logs": Entry("logs/mcp", "logs"),
     "web_logs": Entry("logs/web", "logs"),
     "moa_traces": Entry("logs/moa-traces", "logs"),

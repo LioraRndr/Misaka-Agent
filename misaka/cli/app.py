@@ -433,6 +433,8 @@ def _task_start(con, task_id):
                 f"/research resume {context['run_id']} continues a paused run.")
     if row["status"] != "ready":
         return f"Card {task_id} is {row['status']}; only a ready card can be started."
+    from misaka.utils import loop_watchdog
+    loop_watchdog.configure(f"task-{task_id}", exit_on_stall=False)
     print(f"Running {task_id} → {row['assignee']} in this terminal (Ctrl+C stops it)…", flush=True)
     ran = dispatch.run_task(con, row, current_config())
     after = db.get(con, task_id)
@@ -549,9 +551,11 @@ def _cmd_research(args):
             print(f"  - {item['title']} → Sister {item['assignee']}", flush=True)
 
     try:
-        out = _asyncio.run(workflow.run(
+        from misaka.utils import loop_watchdog
+        loop_watchdog.configure("research", exit_on_stall=False)
+        out = _asyncio.run(loop_watchdog.watched(workflow.run(
             con, cfg, research_node.ProcessSpawner(),
-            run_id=run["id"], poll_seconds=1.0, resume=bool(args.resume), progress=progress))
+            run_id=run["id"], poll_seconds=1.0, resume=bool(args.resume), progress=progress)))
     except RuntimeError as err:
         # Node failures already print their own reason above; the workflow's own summary is
         # the useful part, and a traceback of the event loop is not.

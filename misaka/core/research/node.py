@@ -22,6 +22,7 @@ from misaka.config import CFG, current_config, home
 from misaka.core.platform import processes
 from misaka.core.platform import tasks as task_store
 from misaka.core.research import runs
+from misaka.utils import loop_watchdog
 
 
 class ProcessSpawner:
@@ -352,7 +353,7 @@ def _run(label, routine, *, row_id, runner_key):
             return 1
         cfg = current_config()
         runner = HeadlessRunner(con, cfg)
-        result = asyncio.run(routine(con, cfg, runner, progress))
+        result = asyncio.run(loop_watchdog.watched(routine(con, cfg, runner, progress)))
     except Exception as error:  # noqa: BLE001 - the persisted attempt names the actual cause
         failed(error)
         failure = error
@@ -398,6 +399,7 @@ def main(run_id, node_id, *, runner_key):
     """``misaka research --node RUN NODE``. In a pane of the panel (the daemon hands the process
     its pane id and a terminal of its own) the node is an interactive window; anywhere else --
     a command-line run, a test, a redirected stdin -- it runs headless in the background."""
+    loop_watchdog.configure(f"node-{node_id}", exit_on_stall=True)
     if os.environ.get("MISAKA_NET_PANE") and sys.stdin.isatty():
         return run_interactive(run_id, node_id, runner_key=runner_key)
     return run_headless(run_id, node_id, runner_key=runner_key)
@@ -449,7 +451,7 @@ def run_interactive(run_id, node_id, *, runner_key):
         "MISAKA_USAGE_GENERATION": "1", "MISAKA_USAGE_TOKEN_CAP": str(cfg.get("token_cap") or 0)})
     from misaka.cli.engine import main as engine_main
     try:
-        return asyncio.run(engine_main(flags, assembly.engine_options()))
+        return asyncio.run(loop_watchdog.watched(engine_main(flags, assembly.engine_options())))
     except Exception as error:  # noqa: BLE001 - a window that never opened is the node's failure to report
         traceback.print_exc()
         con = task_store.connect(os.path.expanduser(CFG["db"]))

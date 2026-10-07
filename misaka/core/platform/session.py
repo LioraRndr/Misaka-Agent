@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from misaka.agent.guards import install_guards
 from misaka.agent.request_budget import install_turn_budget
 from misaka.core.platform.vocabulary import BOOKKEEPING_MANAGEMENT_TOOLS
+from misaka.utils import loop_watchdog
 from misaka.utils.async_lifecycle import settle
 
 # ``NoProgressGuard``'s vocabulary: the tools a session can call all day without the world
@@ -62,7 +63,7 @@ def run_coro(coro):
     except RuntimeError:
         token = _ENV_REENTRY_OWNER.set(_ENV_WINDOW_OWNER.get())
         try:
-            return asyncio.run(coro)
+            return asyncio.run(loop_watchdog.watched(coro))
         finally:
             _ENV_REENTRY_OWNER.reset(token)
     box = {}
@@ -74,7 +75,8 @@ def run_coro(coro):
             def _run():
                 token = _ENV_REENTRY_OWNER.set(owner)
                 try:
-                    return asyncio.run(coro)
+                    # The caller's loop waits on this one meanwhile: this loop keeps the watch.
+                    return asyncio.run(loop_watchdog.watched(coro))
                 finally:
                     _ENV_REENTRY_OWNER.reset(token)
 

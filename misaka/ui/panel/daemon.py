@@ -1933,6 +1933,10 @@ class Daemon:
                             tail,
                         ).strip()
                         reason = f"{row['assignee']}'s card process exited with code {exit_code}"
+                        from misaka.utils import loop_watchdog
+                        stall = loop_watchdog.report(f"card-{pane.card}", since=pane.started or pane.started_at)
+                        if stall:
+                            reason += f"; {stall}"
                         if tail:
                             reason += f": {tail[-500:]}"
                         if db.add_event(
@@ -2501,7 +2505,9 @@ def main():
     home.ensure()
     configure_logging()      # the daemon's warnings belong in the log file, not net.sock.log (B6)
     env_file.load()          # panes inherit it; a panel started outside a shell still has its keys
-    asyncio.run(Daemon().run())
+    from misaka.utils import loop_watchdog
+    loop_watchdog.configure("panel-daemon", exit_on_stall=False)   # its exit would take every pane with it
+    asyncio.run(loop_watchdog.watched(Daemon().run()))
 
 
 if __name__ == "__main__":
