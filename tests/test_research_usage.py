@@ -1,0 +1,77 @@
+"""What a research run spent, by conversation and by model (GitHub issue #9).
+
+Spending could not be seen anywhere: the board's ledger keeps a token total per turn, and the
+price of each call is on its message in the session file, where nothing added it up."""
+import json
+from contextlib import closing
+from types import SimpleNamespace
+
+import pytest
+
+from misaka.config import sessions
+from misaka.core.platform import repo, tasks
+from misaka.core.research import runs, usage
+
+
+def _call(model, tokens, cost, at_ms):
+    usage_row = {"input": tokens // 2, "output": tokens - tokens // 2, "cacheRead": 0, "cacheWrite": 0,
+                 "totalTokens": tokens, "cost": {"total": cost}}
+    return {"type": "message", "message": {"role": "assistant", "provider": "p", "model": model,
+                                            "usage": usage_row, "timestamp": at_ms}}
+
+
+def _session(path, *entries):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def spent_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(repo, "enabled", lambda *a: False)
+    monkeypatch.setattr(tasks, "task_state_dir", lambda tid: str(tmp_path / "state" / tid))
+    monkeypatch.setattr(sessions, "sessions_root", lambda: str(tmp_path / "sessions"))
+    with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
+        runs.init(con)
+        run = runs.create(con, workspace=str(tmp_path), question="How was the salt monopoly run?")
+        started = run["created_at"] * 1000
+        window = _session(tmp_path / "sessions" / "last-order" / "window.jsonl",
+                          {"type": "session"},
+                          _call("big", 900, 9.0, started - 5000),        # the window's talk before the run
+                          _call("big", 100, 1.0, started + 1000))
+        runs.set_state(con, run["id"], root_session=str(window))
+        root = runs.root(con, run["id"])
+        with tasks.write_txn(con):
+            child = runs.create_node(con, run["id"], question="Who bought the licences?", parents=[root["id"]])
+        _session(tmp_path / "sessions" / "research" / f"{run['id']}--node-{child['id']}" / "a.jsonl",
+                 _call("big", 200, 2.0, started + 2000), {"type": "message", "message": {"role": "user"}})
+        tid = tasks.create_task(con, "licences", assignee="10032", workspace=str(tmp_path))
+        runs.link_task(con, run["id"], tid, kind="research", node=root, local_id="licences")
+        card = tmp_path / "sessions" / "cards" / tid
+        _session(card / "first.jsonl", _call("small", 50, 0.25, started + 3000))
+        _session(card / "retry.jsonl", _call("unpriced", 40, 0, started + 4000))
+        con.execute("UPDATE tasks SET session_dir=? WHERE id=?", (str(card), tid))
+        yield con, runs.get(con, run["id"]), child, tid
+
+
+def test_a_run_is_added_up_by_conversation_and_model(spent_run):
+    con, run, child, tid = spent_run
+    spent = usage.run_usage(con, run)
+    parts = {label: (part["calls"], part["tokens"], part["cost"]) for label, part in spent["parts"]}
+    assert parts == {"root Last Order": (1, 100, 1.0), f"node {child['id']}": (1, 200, 2.0),
+                     f"card {tid} (Sister 10032)": (2, 90, 0.25)}, "the window's talk before the run is not the run's"
+    assert (spent["total"]["tokens"], spent["total"]["cost"], spent["total"]["unpriced"]) == (390, 3.25, 1)
+    assert set(spent["models"]) == {"p/big", "p/small", "p/unpriced"}
+    assert usage.money(spent["total"]) == "$3.25 (+1 calls with no known price)"
+
+
+def test_misaka_usage_prints_the_run_and_the_list(spent_run, monkeypatch, capsys):
+    from misaka.cli import app
+    con, run, _child, tid = spent_run
+    monkeypatch.setattr(app, "current_config", lambda: {"db": "board.db", "token_cap": 0})
+    monkeypatch.setattr(app.db, "connect", lambda path: con)
+    app._cmd_usage(SimpleNamespace(run=run["id"], limit=10))
+    out = capsys.readouterr().out
+    assert f"card {tid} (Sister 10032)" in out and "$3.25" in out and "By model:" in out
+    app._cmd_usage(SimpleNamespace(run=None, limit=10))
+    assert run["id"] in capsys.readouterr().out

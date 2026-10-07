@@ -417,6 +417,11 @@ Each is read where it is used: the cards per node at once, the nodes at once fro
 of nodes, the depth and the node limit at the next reconciliation, follow-ups and revisions at
 each node's next decision. A limit is never set below what the graph already holds.
 
+`misaka usage --run RUN_ID` shows what a run spent, in tokens and money, by conversation (the
+root's Last Order, each node, each card with its retries) and by model; `misaka usage` lists the
+recent runs, and `/research status` gives the total. Money is what the model catalogue prices
+each call at; a call to a model with no price there is counted apart.
+
 For a hard limit on spending, set `research.token_cap` in `~/.misaka/settings.json` to a number
 of tokens for everything on the board (`0`, the default, means no limit). A run that reaches it
 stops with a partial report.

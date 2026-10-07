@@ -29,10 +29,20 @@ def _parser(extension_commands=None):
     p.add_argument("--version", "-V", action="version", version=VERSION)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    tk = sub.add_parser("task", help="Manage task cards")
-    tk.add_argument("task_id")
-    tk.add_argument("--delete", action="store_true", required=True,
-                    help="Delete the card and its event history")
+    tk = sub.add_parser("task", help="Add a task card, start one, or delete one",
+                        usage="misaka task add TITLE --to SISTER (--body TEXT | --body-file PATH) [options]\n"
+                              "       misaka task start ID\n"
+                              "       misaka task ID --delete")
+    tk.add_argument("words", nargs="+", help=argparse.SUPPRESS)
+    tk.add_argument("--delete", action="store_true", help="Delete the card and its event history")
+    tk.add_argument("--to", metavar="SISTER", help="add: the Sister (or ally) the card is for")
+    tk.add_argument("--body", help="add: the task contract; it must have a `## acceptance criteria` section")
+    tk.add_argument("--body-file", help="add: read the task contract from this file")
+    tk.add_argument("--reviewer", help="add: an independent reviewer, a Sister other than the assignee")
+    tk.add_argument("--priority", type=int, default=0, help="add: higher runs first (default: 0)")
+    tk.add_argument("--model", help="add: the model for this card only (default: the Sister's own)")
+    tk.add_argument("--needs", action="append", default=[], metavar="ID",
+                    help="add: a card this one waits for (repeatable)")
 
     sub.add_parser("board", help="Show the task board")
     sub.add_parser("allies", help="List the enabled allies and whether each can take a card (spends no quota)")
@@ -111,6 +121,10 @@ def _parser(extension_commands=None):
     access.add_argument("--attach", action="store_true", help="Send input to the original live session, without starting another agent")
     access.add_argument("--read-only", action="store_true",
                     help="Show existing session records without starting an agent")
+
+    us = sub.add_parser("usage", help="What research runs spent: tokens and money, by conversation and by model")
+    us.add_argument("--run", metavar="RUN_ID", help="One run, by conversation and by model")
+    us.add_argument("--limit", type=int, default=10, help="How many recent runs to list without --run (default: 10)")
 
     rs = sub.add_parser("research", help="Run the Research Workflow on a question")
     rs.add_argument("goal", nargs="?", help="Research question for a new run")
@@ -357,15 +371,101 @@ def _cmd_dm(args):
 def _cmd_task(args):
     from misaka.core.platform import cards as card_files
     con = db.connect(CFG["db"])
-    row = db.get(con, args.task_id)
-    ok, msg = (card_files.remove(con, row["workspace"], args.task_id) if row
-               else (False, f"Card not found: {args.task_id}"))
+    op, rest = args.words[0], args.words[1:]
+    if op == "add":
+        sys.exit(_task_add(con, " ".join(rest), args))
+    if op == "start" and len(rest) == 1:
+        sys.exit(_task_start(con, rest[0]))
+    if not args.delete or rest:
+        sys.exit("usage: misaka task add TITLE --to SISTER (--body TEXT | --body-file PATH) | "
+                 "misaka task start ID | misaka task ID --delete")
+    row = db.get(con, op)
+    ok, msg = (card_files.remove(con, row["workspace"], op) if row
+               else (False, f"Card not found: {op}"))
     print(msg)
     sys.exit(0 if ok else 1)
 
 
+def _task_add(con, title, args):
+    """A card made by hand: the front door, checks and defaults of Last Order's ``misaka_card``."""
+    from misaka.core.network import roster, validate
+    from misaka.core.platform import cards as card_files
+    body = args.body
+    if args.body_file:
+        try:
+            with open(args.body_file, encoding="utf-8") as f:
+                body = f.read()
+        except OSError as error:
+            return f"Cannot read {args.body_file}: {error}"
+    cards, errors = validate.validate_cards(
+        [{"title": title, "body": body, "assignee": args.to, "priority": args.priority, "model": args.model}],
+        roster.executors())
+    if args.reviewer and args.reviewer not in set(roster.roster_names()):
+        errors.append(f"reviewer {args.reviewer} is not in the Sister roster")
+    if args.reviewer and args.reviewer == args.to:
+        errors.append("the reviewer must be different from the assignee")
+    if errors:
+        return ("Card not added: " + "; ".join(errors) +
+                "\nThe body is the task contract: `## goal`, `## boundaries` and `## acceptance criteria`.")
+    card = cards[0]
+    try:
+        tid = card_files.create(con, db.canonical_workspace(), card["title"], card["body"], card["assignee"],
+                                model=card["model"], priority=card["priority"], reviewer=args.reviewer,
+                                needs=args.needs)
+    except ValueError as error:
+        return f"Card not added: {error}"
+    print(f"Added {tid}: {card['title']} → {card['assignee']}. Work has not started: "
+          f"misaka task start {tid}, or ask Last Order to dispatch it.")
+    return 0
+
+
+def _task_start(con, task_id):
+    """Run one ready card in this terminal: the claim, admission, budget and settling a pane or
+    Last Order's dispatch would give it (``dispatch.run_task``)."""
+    from misaka.core.network import dispatch
+    from misaka.core.research import runs
+    row = db.get(con, task_id)
+    if row is None:
+        return f"Card not found: {task_id}"
+    context = runs.task_contexts(con).get(task_id)
+    if context:
+        return (f"Card {task_id} belongs to research run {context['run_id']}, whose driver starts it; "
+                f"/research resume {context['run_id']} continues a paused run.")
+    if row["status"] != "ready":
+        return f"Card {task_id} is {row['status']}; only a ready card can be started."
+    print(f"Running {task_id} → {row['assignee']} in this terminal (Ctrl+C stops it)…", flush=True)
+    ran = dispatch.run_task(con, row, current_config())
+    after = db.get(con, task_id)
+    print(f"Card {task_id}: {after['status'] if after else 'gone'}.")
+    return 0 if ran else 1
+
+
 def _cmd_board(args):
     tail.board_view(db.connect(CFG["db"]), db.canonical_workspace())
+
+
+def _cmd_usage(args):
+    from misaka.core.research import runs, usage
+    cfg = current_config()
+    con = db.connect(cfg["db"])
+    runs.init(con)
+    if args.run:
+        run = runs.get(con, args.run)
+        if not run:
+            sys.exit(f"Research run not found: {args.run}")
+        scope = {run["id"], *(task["id"] for task in runs.tasks(con, run["id"]))}
+        print(usage.report(con, run, ledger_tokens=budget.spent(con, task_ids=scope)))
+        return
+    recent = con.execute("SELECT * FROM research_runs ORDER BY created_at DESC LIMIT ?", (max(1, args.limit),)).fetchall()
+    for run in recent:
+        spent = usage.run_usage(con, run)["total"]
+        print(f"{run['id']}  {time.strftime('%Y-%m-%d', time.localtime(run['created_at']))}  {run['status']:<8} "
+              f"{spent['tokens']:>13,} tokens  {usage.money(spent):<10}  {' '.join(run['question'].split())[:50]}")
+    if not recent:
+        print("No research runs yet.")
+    reading = budget.status(con, cfg.get("token_cap"))
+    print(f"Board token ledger: {reading['used']:,} tokens" + (f" of a cap of {reading['cap']:,}" if reading["cap"] else "")
+          + ". One run in detail: misaka usage --run RUN_ID")
 
 
 def _cmd_research(args):
@@ -802,6 +902,7 @@ COMMANDS = {
     "task": _cmd_task,
     "board": _cmd_board,
     "research": _cmd_research,
+    "usage": _cmd_usage,
     "web": _cmd_web,
     "moa": _cmd_moa,
     "skills": _cmd_skills,

@@ -13,7 +13,7 @@ from misaka.core.moments import CoreCommand
 from misaka.core.platform import budget
 from misaka.core.platform import tasks as task_store
 from misaka.core.research import node as research_node
-from misaka.core.research import planner, runs, window, workflow
+from misaka.core.research import planner, runs, usage, window, workflow
 from misaka.ui.tui.interactive.components.ask_user_question import (
     AskUserQuestionComponent,
 )
@@ -255,7 +255,8 @@ def _status(con, target, workspace):
     value = runs.summary(con, run["id"])
     reading = budget.status(con, _cfg().get("token_cap"))
     scope = {run["id"], *(t["id"] for t in runs.tasks(con, run["id"]))}
-    token_text = f" | tokens added by this run {budget.spent(con, task_ids=scope):,}"
+    token_text = (f" | tokens added by this run {budget.spent(con, task_ids=scope):,}"
+                  f" | spent {usage.money(usage.run_usage(con, run)['total'])} (misaka usage --run {run['id']})")
     if reading["cap"]:
         token_text += f" | global tokens {reading['used']:,}/{reading['cap']:,}"
     return (

@@ -127,7 +127,8 @@ for the answer. Last Order brings the question to you when it is yours to decide
 In ordinary chat, Last Order can split a request into cards for the Sisters. She lays the cards
 out and waits for your go-ahead before starting work that costs money. Cards are Markdown files in
 the project's `cards/` folder, each with its dependencies. `/board` or `misaka board` shows them;
-`misaka task --delete ID` removes one with its history. Research runs use the same board and
+`misaka task add TITLE --to SISTER --body-file FILE` adds one by hand, `misaka task start ID`
+runs a ready one in the terminal, and `misaka task ID --delete` removes one with its history. Research runs use the same board and
 cards.
 
 In the panel, each card she starts opens in a pane beside her, in her tab. A finished card's pane

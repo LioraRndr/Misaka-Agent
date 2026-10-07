@@ -291,6 +291,7 @@ for your confirmation before committing.
 | Check, halt or resume a run | `/research status`, `/research stop`, `/research resume` |
 | Say something to a running node | `/research tell [--to NODE_ID] MESSAGE` |
 | Change a running run's limits | `/research limits --sister-parallel 2` |
+| See what a run spent | `misaka usage --run RUN_ID` |
 | Talk to a single Sister | `/sister 10032` |
 | Create a Sister | `misaka create 10036 --desc "Econometrics and causal inference"` |
 | Index your documents | `misaka doc scan sources/` |

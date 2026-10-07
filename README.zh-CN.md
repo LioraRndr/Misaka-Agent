@@ -191,6 +191,7 @@ MISAKA 仅在你要求时提交。若项目为 git 仓库，可使用 `/commit` 
 | 查看、中止或恢复研究 | `/research status`、`/research stop`、`/research resume` |
 | 对进行中的节点说话 | `/research tell [--to 节点ID] 消息` |
 | 修改进行中研究的参数 | `/research limits --sister-parallel 2` |
+| 查看一次研究的花费 | `misaka usage --run RUN_ID` |
 | 与单个 Sister 对话 | `/sister 10032` |
 | 创建 Sister | `misaka create 10036 --desc "实证计量与因果识别"` |
 | 为文档建立索引 | `misaka doc scan sources/` |
