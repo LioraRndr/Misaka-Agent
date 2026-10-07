@@ -702,6 +702,57 @@ def limits(run):
         return dict(DEFAULT_LIMITS)
 
 
+# What `/research limits` and `misaka research --limits` may change on a running run, and when each
+# change is first read. The workflow reads them from the database at those points (current_limits),
+# not from the run row it started with.
+ADJUSTABLE_LIMITS = {
+    "sister_parallel": "at once",
+    "parallel": "from the next level of nodes",
+    "max_depth": "at the next reconciliation",
+    "max_nodes": "at the next reconciliation",
+    "max_followups": "at each node's next follow-up decision",
+    "max_revisions": "at each node's next review",
+}
+
+
+def limits_changed(before, after):
+    """What a change of limits did, and when each changed limit is first read."""
+    changed = [key for key in ADJUSTABLE_LIMITS if before[key] != after[key]]
+    if not changed:
+        return "no limit changed"
+    return "; ".join(f"{key} {before[key]} → {after[key]} ({ADJUSTABLE_LIMITS[key]})" for key in changed)
+
+
+def current_limits(con, run):
+    """The run's limits as they stand now: a run's limits can change while it runs (update_limits)."""
+    return limits(get(con, run["id"]) or run)
+
+
+def update_limits(con, run_id, changes):
+    """Change a run's limits while it runs: ``(before, after)``. The same bounds as a new run's, and
+    never below what the run already holds -- a graph of 12 nodes cannot be limited to 10. Raises
+    ValueError saying what to change."""
+    unknown = sorted(set(changes) - set(ADJUSTABLE_LIMITS))
+    if unknown:
+        raise ValueError(f"not adjustable: {', '.join(unknown)} (adjustable: {', '.join(ADJUSTABLE_LIMITS)})")
+    with task_store.write_txn(con):
+        run = get(con, run_id)
+        if not run:
+            raise ValueError(f"Research run not found: {run_id}")
+        if run["status"] == "done":
+            raise ValueError(f"Research run {run_id} is done; its limits no longer matter.")
+        before = limits(run)
+        after = normalize_limits({**json.loads(run["limits_json"] or "{}"), **changes})
+        held, deepest = con.execute(
+            "SELECT COUNT(*), COALESCE(MAX(depth), 0) FROM research_branches WHERE run_id=?", (run_id,)).fetchone()
+        if after["max_nodes"] < held:
+            raise ValueError(f"max_nodes {after['max_nodes']} is below the {held} nodes the graph already holds")
+        if after["max_depth"] < deepest:
+            raise ValueError(f"max_depth {after['max_depth']} is below the depth {deepest} a node already has")
+        con.execute("UPDATE research_runs SET limits_json=? WHERE id=?", (json.dumps(after, sort_keys=True), run_id))
+    return before, after
+
+
 def set_state(con, run_id, *, phase=None, status=None, error=None,
               root_session=None, final_artifact=None, wave=None, driver_lock=None):
     """Update run state. With ``driver_lock`` the write lands only while that lease is held:

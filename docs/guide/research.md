@@ -355,6 +355,7 @@ explains the tabs, panes and keys.
 | stop a run and get a partial report | `/research stop [RUN_ID]` | Ctrl+C in the running command |
 | resume a stopped or failed run | `/research resume [RUN_ID] [ANSWER]` | `misaka research --resume RUN_ID` |
 | resume in a different window | `/research resume RUN_ID --here` | |
+| change a running run's limits | `/research limits [RUN_ID] --sister-parallel 2 …` | `misaka research --limits RUN_ID --sister-parallel 2 …` |
 
 Resume a run in the Last Order conversation that started it; from any other window,
 `/research resume` names the conversation to open (the sidebar lists it under sessions).
@@ -404,6 +405,11 @@ limit, the follow-ups and the revisions.
 `--parallel` (default 4) sets how many nodes run at once, and `--sister-parallel` (default 4) how
 many cards each node runs at once. Your machine adds a ceiling of its own based on free memory
 (`network.max_concurrent_sisters`).
+
+Every limit can be changed while the run goes on, with `/research limits` and the same options.
+Each is read where it is used: the cards per node at once, the nodes at once from the next level
+of nodes, the depth and the node limit at the next reconciliation, follow-ups and revisions at
+each node's next decision. A limit is never set below what the graph already holds.
 
 For a hard limit on spending, set `research.token_cap` in `~/.misaka/settings.json` to a number
 of tokens for everything on the board (`0`, the default, means no limit). A run that reaches it

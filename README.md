@@ -119,7 +119,8 @@ your research question.
 Parameters and question may also be given on one line, as in
 `/research --depth 2 --max-nodes 12 QUESTION`. Parameters left unspecified take their defaults:
 depth 3, four nodes and four cards at a time, two follow-up rounds, two revisions and a limit of
-30 nodes. From the shell, `misaka research` accepts the same parameters.
+30 nodes. From the shell, `misaka research` accepts the same parameters. A running run's
+parameters are changed with `/research limits --sister-parallel 2` (and the other options).
 
 ### Inside a node
 
@@ -288,6 +289,7 @@ for your confirmation before committing.
 | Start MISAKA | `misaka` |
 | Begin a research run | `/research`, followed by your question |
 | Check, halt or resume a run | `/research status`, `/research stop`, `/research resume` |
+| Change a running run's limits | `/research limits --sister-parallel 2` |
 | Talk to a single Sister | `/sister 10032` |
 | Create a Sister | `misaka create 10036 --desc "Econometrics and causal inference"` |
 | Index your documents | `misaka doc scan sources/` |

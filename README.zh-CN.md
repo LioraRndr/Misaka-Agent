@@ -94,7 +94,7 @@ irm https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/i
 | 压缩阈值 | 对话压缩的触发比例，仅作用于本次研究 |
 | 输出上限 | 模型单次回复的最大长度，仅作用于本次研究 |
 
-也可以在一行中同时给出参数与问题，例如 `/research --depth 2 --max-nodes 12 问题`。未指定的参数取默认值：深度 3，节点与任务卡各并行 4，追加 2 轮，修订 2 次，节点上限 30。在终端中，`misaka research` 接受相同的参数。
+也可以在一行中同时给出参数与问题，例如 `/research --depth 2 --max-nodes 12 问题`。未指定的参数取默认值：深度 3，节点与任务卡各并行 4，追加 2 轮，修订 2 次，节点上限 30。在终端中，`misaka research` 接受相同的参数。研究进行中也可以改参数，例如 `/research limits --sister-parallel 2`。
 
 ### 节点内部
 
@@ -189,6 +189,7 @@ MISAKA 仅在你要求时提交。若项目为 git 仓库，可使用 `/commit` 
 | 启动 MISAKA | `misaka` |
 | 开始研究 | `/research`，随后输入问题 |
 | 查看、中止或恢复研究 | `/research status`、`/research stop`、`/research resume` |
+| 修改进行中研究的参数 | `/research limits --sister-parallel 2` |
 | 与单个 Sister 对话 | `/sister 10032` |
 | 创建 Sister | `misaka create 10036 --desc "实证计量与因果识别"` |
 | 为文档建立索引 | `misaka doc scan sources/` |

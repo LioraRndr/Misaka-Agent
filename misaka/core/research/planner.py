@@ -726,9 +726,9 @@ def validate_plan(obj, roster, *, decisions_allowed=False, root=False, red_team_
     }
 
 
-def decisions_allowed(run, node, round):
+def decisions_allowed(con, run, node, round):
     """A node forks in its first plan, and only where a child could still open."""
-    return int(round) <= 1 and int(node["depth"]) < runs.limits(run)["max_depth"]
+    return int(round) <= 1 and int(node["depth"]) < runs.current_limits(con, run)["max_depth"]
 
 
 def _roster(cfg):
@@ -808,12 +808,12 @@ def plan(run, cfg, worker, node, *, con, context_path=None):
     """Open or continue the node's Last Order session and return its research plan."""
     session_dir = _lo_session(run, node)
     roster = _roster({**cfg, "workspace": run["workspace"]})
-    forks = decisions_allowed(run, node, 1)
+    forks = decisions_allowed(con, run, node, 1)
     prompt = ROOT_CONTRACT + "\n# Artifact layout\nWithin the current workspace, every node's files live under " \
         "nodes/<node>/ and each of its cards under nodes/<node>/cards/<card>/; run-level products go to final/. " \
         "The runtime assigns these paths. Put one deliverable filename on the first line, not a directory; " \
         "use backticks for spaces. Put requirements on following lines.\n" \
-        + f"\n# Current node depth\n{node['depth']} (root = 0; max_depth = {runs.limits(run)['max_depth']})" \
+        + f"\n# Current node depth\n{node['depth']} (root = 0; max_depth = {runs.current_limits(con, run)['max_depth']})" \
         + ("" if forks else " -- this node cannot fork: no `decisions` here.") + "\n"
     if runs.is_root(node):
         brief = Path(run["workspace"]) / "PROJECT.md"
@@ -1181,7 +1181,7 @@ def dispose(con, run, cfg, worker, node, red, issues, *, round, revisions_left):
     if accepted:
         return accepted["payload"]["dispositions"]
     expected = {item["id"] for item in issues}
-    forks = int(node["depth"]) < runs.limits(run)["max_depth"]
+    forks = int(node["depth"]) < runs.current_limits(con, run)["max_depth"]
     known = {row["id"] for row in runs.nodes(con, run["id"])}
 
     def validate(value):
@@ -1346,7 +1346,7 @@ def decide(con, run, cfg, worker, node, *, divergence, proposals, branches):
                      "decision": row["decision_question"]}
                     for row in runs.pending_options(con, run["id"]) if row["decided_at"] == node["id"]]}
     prompt = (DECIDE_CONTRACT + f"\n# Node\n{node['id']}: {node['question']}\nThe paths list: `{graph.paths_path(run)}`\nThe graph: `{graph.graph_path(run)}`\n"
-              + f"Depth {node['depth']} of {runs.limits(run)['max_depth']}.\n"
+              + f"Depth {node['depth']} of {runs.current_limits(con, run)['max_depth']}.\n"
               + prompt_guard.untrusted("divergence", _catalog_text(material)) + navigation(run["id"]))
     action, _raw = _command(
         con, run, cfg, worker, node, prompt, key=runs.DECIDE_KEY, name="misaka_research_decide",

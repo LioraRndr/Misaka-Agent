@@ -114,7 +114,9 @@ def _parser(extension_commands=None):
     rs = sub.add_parser("research", help="Run the Research Workflow on a question")
     rs.add_argument("goal", nargs="?", help="Research question for a new run")
     rs.add_argument("--resume", metavar="RUN_ID", help="Resume an existing research run")
-    rs.add_argument("--depth", type=int, default=3, help="Maximum branch depth")
+    rs.add_argument("--limits", metavar="RUN_ID",
+                    help="Change the limits of a running run to the options given with it (--sister-parallel 2 ...)")
+    rs.add_argument("--depth", type=int, help="Maximum branch depth (default: 3)")
     rs.add_argument("--parallel", type=int, help="Maximum concurrent LO nodes (default: 4); saved with the run")
     rs.add_argument("--sister-parallel", type=int,
                     help="Maximum active Sister cards per LO node (default: 4); saved with the run, subject to global admission limits")
@@ -378,6 +380,21 @@ def _cmd_research(args):
                     "Create at least one Sister first, for example: misaka create 10032")
     con = db.connect(cfg["db"])
     runs.init(con)
+    def chosen_limits():
+        chosen = {"max_depth": args.depth, "parallel": args.parallel, "sister_parallel": args.sister_parallel,
+                  "max_followups": args.followups, "max_revisions": args.revisions, "max_nodes": args.max_nodes}
+        return {key: value for key, value in chosen.items() if value is not None}
+
+    if args.limits:
+        chosen = chosen_limits()
+        if not chosen:
+            sys.exit("Name the limits to change, for example: misaka research --limits RUN_ID --sister-parallel 2")
+        try:
+            before, after = runs.update_limits(con, args.limits, chosen)
+        except ValueError as error:
+            sys.exit(str(error))
+        print(f"Research run {args.limits}: {runs.limits_changed(before, after)}")
+        return
     if args.resume:
         run = runs.get(con, args.resume)
         if not run:
@@ -401,10 +418,7 @@ def _cmd_research(args):
         if not args.goal:
             sys.exit("A new research run requires a question; use --resume RUN_ID to continue one.")
         try:
-            chosen = {"parallel": args.parallel, "sister_parallel": args.sister_parallel, "max_followups": args.followups,
-                      "max_revisions": args.revisions, "max_nodes": args.max_nodes}
-            limits = runs.normalize_limits({"max_depth": args.depth,
-                                            **{key: value for key, value in chosen.items() if value is not None}})
+            limits = runs.normalize_limits(chosen_limits())
         except ValueError as error:
             sys.exit(str(error))
         from misaka.core.platform import cards as card_files

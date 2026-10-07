@@ -1053,7 +1053,7 @@ def _after_review(con, run, node, set_node):
     """Where a node goes once its red-team loop is over: to the divergence review when it can still
     fork -- the gaps it left are filled first, its possibilities not taken become its decision --
     else it has finished its own work."""
-    if node["depth"] < runs.limits(run)["max_depth"]:
+    if node["depth"] < runs.current_limits(con, run)["max_depth"]:
         set_node(status="diverging")
         return None
     return _close(con, run, node, "closed")
@@ -1244,7 +1244,7 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             # The round whose cards she is reading is the latest one with cards back, not the
             # latest plan: a follow-up plan recorded just before a crash has no cards yet.
             round = max((int(row["round"] or 1) for row in done), default=1)
-            left = runs.limits(run)["max_followups"] - (round - 1)    # follow-ups still allowed on this node
+            left = runs.current_limits(con, run)["max_followups"] - (round - 1)    # follow-ups still allowed on this node
             version = _revisions(con, run, node) + _revisions(con, run, node, loop="gaps") + 1
             # The red team reviews the versions of its own loop; once the divergence review has
             # begun, a revision is reviewed by her divergence review again.
@@ -1372,7 +1372,7 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             if red is None or red["status"] != "done" or not _reviewed(con, red, version):
                 raise RuntimeError(f"Node {nid} has no completed red-team review to answer.")
             issues = list(runs.issues(con, run["id"], node_id=nid, round=version, origin="critique"))
-            revisions_left = runs.limits(run)["max_revisions"] - _revisions(con, run, node, before=version)
+            revisions_left = runs.current_limits(con, run)["max_revisions"] - _revisions(con, run, node, before=version)
             await _progress(progress, "review_returned",
                             f"The red-team review of {_label(node)} is back with its Last Order: "
                             f"{len(issues)} material issue(s) to answer.", run)
@@ -1467,7 +1467,7 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             if card is None or card["status"] != "done" or not _divergence_reviewed(con, card, version):
                 raise RuntimeError(f"Node {nid} has no completed divergence review to answer.")
             gaps = _gaps(con, run, node, version)
-            revisions_left = runs.limits(run)["max_revisions"] - _revisions(con, run, node, before=version, loop="gaps")
+            revisions_left = runs.current_limits(con, run)["max_revisions"] - _revisions(con, run, node, before=version, loop="gaps")
             await _progress(progress, "review_returned",
                             f"The divergence review of {_label(node)} is back with its Last Order: "
                             f"{len(gaps)} gap(s) to fill or answer.", run)
@@ -1550,7 +1550,7 @@ async def _await_approval(con, cfg, runner, worker, run, node, *, poll_seconds, 
         current = runs.node(con, nid)
     session_file = current["session_file"] or run["root_session"]   # the conversation that recorded the plan
     roster = planner._roster({**cfg, "workspace": run["workspace"]})
-    forks = planner.decisions_allowed(run, node, round)
+    forks = planner.decisions_allowed(con, run, node, round)
     tools = commands.review_tools(
         con, run, current, session_file=session_file, round=round, forks=forks,
         validate=lambda value: planner.validate_plan(value, roster, decisions_allowed=forks,
@@ -1911,7 +1911,7 @@ async def _expand_level(con, cfg, spawner, run, level, *, poll_seconds, progress
         return key
     try:
         return await _wait_level(con, cfg, spawner, run, handles, poll_seconds=poll_seconds, progress=progress,
-                                 driver_lock=driver_lock, pending=list(level), width=runs.limits(run)["parallel"],
+                                 driver_lock=driver_lock, pending=list(level), width=runs.current_limits(con, run)["parallel"],
                                  start=start)
     except BaseException:
         await _stop_all_off_loop(spawner, handles)
@@ -2075,7 +2075,7 @@ def _prepare_sessions(con, run):
 def _reconcile_material(con, run):
     """What the root Last Order reconciles: every pending option with the decision it belongs to,
     every node that finished its own work, and the limits."""
-    chosen = runs.limits(run)
+    chosen = runs.current_limits(con, run)
     workspace = run["workspace"]
     rel = lambda path: posix_relpath(path, workspace) if path else None
     covered = set()

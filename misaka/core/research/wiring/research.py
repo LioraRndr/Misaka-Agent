@@ -93,6 +93,10 @@ USAGE = (
     f"       --max-nodes N: how many nodes the research graph may hold, the root included (1-{runs.MAX_NODES_CEILING}).\n"
     "       /research status [RUN_ID]          show the latest run of this folder, or the run you name\n"
     "       /research stop [RUN_ID]            ask the latest active run (or RUN_ID) to stop\n"
+    "       /research limits [RUN_ID] --sister-parallel N ...  change a running run's limits (the options above);\n"
+    "                                          Sister parallelism at once, LO parallelism from the next level,\n"
+    "                                          depth and nodes at the next reconciliation, follow-ups and revisions\n"
+    "                                          at each node's next decision\n"
     "       /research resume [RUN_ID] [ANSWER] resume a paused run, optionally answering its clarification questions\n"
     "       /research resume RUN_ID --here     adopt this window as the run's Last Order (it will not remember earlier turns)"
 )
@@ -146,7 +150,7 @@ def parse_command(raw):
         if here:
             rest = rest[len("--here"):].strip()
         return {"action": "resume", "run_id": run_id, "clarification": rest, "here": here}
-    if head in {"help", "-h", "--help", "status", "stop"}:
+    if head in {"help", "-h", "--help", "status", "stop", "limits"}:
         try:
             tokens = shlex.split(line)
         except ValueError as error:
@@ -161,6 +165,8 @@ def parse_command(raw):
         if len(tokens) > 2:
             raise ValueError(USAGE)
         return {"action": "stop", "run_id": tokens[1] if len(tokens) == 2 else None}
+    if tokens and tokens[0] == "limits":
+        return _parse_limits(tokens[1:])
     # Activation: [start] [DEPTH (alone or before an option)] [--depth N] [--parallel N] [--sister-parallel N] [QUESTION...]. Use the raw
     # line, not the shlex tokens: an apostrophe in "Stalin's constitution" is not an open quote.
     line = (raw or "").strip()
@@ -191,6 +197,24 @@ def parse_command(raw):
     limits = runs.normalize_limits(selected)
     return {"action": "activate", "limits": {key: limits[key] for key in _OPTIONS.values()},
             "explicit": explicit, "question": line}
+
+
+def _parse_limits(tokens):
+    """`limits [RUN_ID] --opt N ...`: the limits to change on a run that is running."""
+    run_id = tokens.pop(0) if tokens and not tokens[0].startswith("--") else None
+    changes = {}
+    while tokens:
+        option, separator, value = tokens.pop(0).partition("=")
+        if option not in _OPTIONS:
+            raise ValueError(f"Unknown option {option}.\n{USAGE}")
+        if not separator:
+            value = tokens.pop(0) if tokens else ""
+        if _OPTIONS[option] in changes:
+            raise ValueError(f"{option} was supplied more than once.")
+        changes[_OPTIONS[option]] = value
+    if not changes:
+        raise ValueError(f"Name at least one limit to change.\n{USAGE}")
+    return {"action": "limits", "run_id": run_id, "changes": changes}
 
 
 def _workspace(ctx):
@@ -427,6 +451,13 @@ class ResearchPart:
                         f"Stop request recorded for {run['id']}. Running tasks will stop or drain.",
                         "info",
                     )
+                    return
+                if spec["action"] == "limits":
+                    run = _find_run(con, spec["run_id"], _workspace(ctx), active=True)
+                    if not run:
+                        raise ValueError("No active research run.")
+                    before, after = runs.update_limits(con, run["id"], spec["changes"])
+                    ctx.ui.notify(f"Research run {run['id']}: {runs.limits_changed(before, after)}", "info")
                     return
                 if spec["action"] == "resume":
                     run = _find_run(con, spec["run_id"], _workspace(ctx))
