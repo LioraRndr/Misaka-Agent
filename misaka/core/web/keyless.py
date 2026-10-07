@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -85,6 +86,36 @@ def is_rate_limitish(message: str) -> bool:
     """Heuristic: does an error message look like free-tier throttling?"""
     lowered = (message or "").lower()
     return any(marker in lowered for marker in _RATE_LIMIT_MARKERS)
+
+
+# A free tier that refuses this client (401/402/403: anonymous access revoked, IP reputation gate)
+# or errors server-side (5xx) fails every query from here, while another vendor may still serve it.
+# Anchored to the status the error starts with (after the ``Keyless <Vendor> search failed:`` prefix),
+# so a terminal error that echoes the query ("HTTP 400: invalid query 'http 503'") does not match.
+# Hermes' own, taken over 2026-10-07 (GitHub issue #9: Firecrawl's keyless 403 stopped the walk).
+_VENDOR_REFUSAL_RE = re.compile(
+    r"\s*(?:keyless\s+\w+\s+search\s+failed:\s*)?"
+    r"(?:http(?:\s+status)?|status(?:\s+code)?|client\s+error|error\s+code)"
+    r"\s*[:=']*\s*(?:40[123]|5\d\d)\b",
+    re.IGNORECASE,
+)
+
+
+def is_search_failover_eligible(message: str) -> bool:
+    """Return whether another anonymous vendor may serve the search.
+
+    Rate limits and structured HTTP 401/402/403/5xx vendor refusals are local to
+    one free search endpoint. Free-text markers are deliberately ignored:
+    vendors may echo the query in an otherwise terminal error.
+    """
+    return is_rate_limitish(message) or bool(_VENDOR_REFUSAL_RE.match(message or ""))
+
+
+def _short_reason(message: str) -> str:
+    if is_rate_limitish(message):
+        return "throttled"
+    status = re.search(r"\b([45]\d\d)\b", message or "")
+    return f"HTTP {status.group(1)}" if status else "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -658,9 +689,14 @@ async def search_with_failover(name: str, query: str, limit: int = 5) -> dict[st
     """Keyless search across the vendor ring with next-in-line failover.
 
     Starts at *name* when the user pinned it, otherwise at the round-robin cursor.
-    Rate-limit-shaped errors advance to the next ring vendor; non-throttle errors stop
-    the walk (a malformed query fails everywhere). The result notes the serving vendor
-    via ``data.served_by`` whenever it differs from *name*.
+    Rate limits and vendor refusals (HTTP 401/402/403/5xx) advance to the next vendor;
+    other errors stop the walk (a malformed query fails everywhere). The result notes
+    the serving vendor via ``data.served_by`` whenever it differs from *name*.
+
+    When every vendor failed, the model is told so in one line and the vendors' own
+    messages -- each a paragraph of setup advice -- go to the log (local delta from Hermes,
+    2026-10-07, GitHub issue #9: handed that advice as the tool's answer, a card set out to
+    write its own scraper).
     """
     order = ring_order(name)
     if not order:
@@ -668,23 +704,30 @@ async def search_with_failover(name: str, query: str, limit: int = 5) -> dict[st
             "success": False,
             "error": "All keyless web providers are disabled or pinned to paid tiers.",
         }
-    last: dict[str, Any] = {}
+    failed: list[tuple[str, str]] = []
     for i, vendor in enumerate(order):
         result = await _KEYLESS_SEARCHERS[vendor](query, limit)
         if result.get("success"):
             if vendor != name:
                 result.setdefault("data", {})["served_by"] = vendor
             return result
-        last = result
-        if not is_rate_limitish(result.get("error", "")):
+        error = result.get("error", "")
+        if not is_search_failover_eligible(error):
             return result
+        failed.append((vendor, error))
         nxt = order[i + 1] if i + 1 < len(order) else None
         if nxt:
-            logger.info("keyless %s search throttled; failing over to %s", vendor, nxt)
-    last["error"] = (
-        f"{last.get('error', '')} (all keyless vendors throttled: {', '.join(order)})"
-    )
-    return last
+            logger.info("keyless %s search unavailable; failing over to %s", vendor, nxt)
+    logger.warning("keyless web search failed at every vendor: %s",
+                   " | ".join(f"{vendor}: {error}" for vendor, error in failed))
+    said = ", ".join(f"{vendor} {_short_reason(error)}" for vendor, error in failed)
+    return {
+        "success": False,
+        "error": (
+            f"Web search is unavailable right now: every free search service failed ({said}). "
+            "Try again later or go on with the sources at hand; a search key is set up with `misaka web`."
+        ),
+    }
 
 
 def _note_served_by(results: list[dict[str, Any]], vendor: str) -> None:
