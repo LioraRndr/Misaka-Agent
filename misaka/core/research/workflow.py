@@ -462,6 +462,26 @@ async def _wait_unpaused(con, run_id, session):
         await asyncio.sleep(.1)
 
 
+async def _tell_failed(con, run, linked, told, progress):
+    """A card that failed for good is news the moment it lands (GitHub issue #9): what becomes of it
+    -- retried, concluded without, or the node failed -- is decided once the phase's other cards are
+    back, and until then nothing said it had failed. Told once per attempt."""
+    open_ = [row for row in linked if row["status"] not in ("done", "failed", "stopped")]
+    for row in linked:
+        if row["status"] != "failed" or (row["id"], row["generation"]) in told:
+            continue
+        told.add((row["id"], row["generation"]))
+        try:
+            why = json.loads(task_store.latest_payload(con, row["id"], "failed", generation=row["generation"]) or "{}")
+        except ValueError:
+            why = {}
+        why = (why.get("reason") if isinstance(why, dict) else None) or row["last_failure_error"] or "no failure detail recorded"
+        await _progress(progress, "card_failed",
+                        f"Card {row['id']} ({row['title']} → Sister {row['assignee']}) failed: {' '.join(str(why).split())[:300]}. "
+                        + (f"What becomes of it is decided when the other {len(open_)} card(s) of this phase are back."
+                           if open_ else "What becomes of it is decided now."), run, task_ids=[row["id"]])
+
+
 async def _drive_tasks(con, cfg, runner, run_id, *, scope, context=None,
                        tool_call_id="research", poll_seconds=POLL_SECONDS, progress=None, check_active=None, session=None, owner=None):
     """Drive the cards in ``scope`` (task ids) until none is open; tasks waiting on dependencies stay in ``todo``."""
@@ -487,6 +507,8 @@ async def _drive_tasks_inner(con, cfg, runner, run_id, *, scope, context=None,
                        tool_call_id="research", poll_seconds=POLL_SECONDS, progress=None, check_active=None, session=None, captured=None, owner=None):
     """Drive the cards in ``scope`` (task ids) until none is open; tasks waiting on dependencies stay in ``todo``."""
     last_snapshot = None
+    # Attempts already failed when the phase began were told of then.
+    told_failed = {(tid, row["generation"]) for tid, row in captured.items() if row["status"] == "failed"}
     while True:
         await _wait_unpaused(con, run_id, session)
         if check_active:
@@ -494,6 +516,7 @@ async def _drive_tasks_inner(con, cfg, runner, run_id, *, scope, context=None,
         run = runs.get(con, run_id)
         await _roster_check(cfg, run, progress)
         linked = [row for row in runs.tasks(con, run_id) if row["id"] in scope]
+        await _tell_failed(con, run, linked, told_failed, progress)
         for row in linked:
             previous = captured.get(row["id"])
             if previous is not None and previous["generation"] != row["generation"]:
