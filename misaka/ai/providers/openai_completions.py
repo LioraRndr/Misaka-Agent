@@ -17,9 +17,9 @@ from misaka.ai.env_api_keys import get_env_api_key
 from misaka.ai.models import calculate_cost, clamp_thinking_level
 from misaka.ai.providers._common import (
     _await_maybe_with_signal,
-    _await_with_signal,
     _close_stream,
     _empty_usage,
+    _iterate_async_iterable,
     _option,
     resolve_cache_retention,
 )
@@ -1503,13 +1503,10 @@ async def _create_completion_stream(client: Any, params: dict[str, Any], options
 
 
 async def _iterate_stream(stream_obj: Any, signal: Any = None) -> AsyncIterator[dict[str, Any]]:
-    iterator = stream_obj.__aiter__()
-    while True:
-        try:
-            chunk = await _await_with_signal(iterator.__anext__(), signal, on_abort=lambda: _close_stream(stream_obj))
-        except StopAsyncIteration:
-            return
-
+    # One abort task for the whole stream (_iterate_async_iterable), not one per SSE item: a task
+    # per item cost several loop turns per event, which a busy TUI turned into a stream that fell
+    # minutes behind the provider (GitHub issue #6).
+    async for chunk in _iterate_async_iterable(stream_obj, signal, on_abort=lambda: _close_stream(stream_obj)):
         if hasattr(chunk, "model_dump"):
             dumped = chunk.model_dump()
             if isinstance(dumped, dict):
@@ -1522,7 +1519,22 @@ async def _iterate_stream(stream_obj: Any, signal: Any = None) -> AsyncIterator[
 
 
 def _format_completion_error(error: Any) -> str:
-    return str(error) if isinstance(error, Exception) else json.dumps(error, default=str)
+    if not isinstance(error, Exception):
+        return json.dumps(error, default=str)
+    message = str(error)
+    # The SDK's "Connection error." says nothing of what failed; the transport exception it was
+    # raised from does (a read timeout, a reset, a peer that closed mid-body). Name the innermost
+    # one so a report can tell them apart (GitHub issue #6). The SDK's text stays first, which is
+    # what the retry classifier matches on.
+    cause = error.__cause__
+    for _ in range(8):  # a chain is a handful deep; the bound only guards `raise e from e`
+        if cause is None or cause.__cause__ is None:
+            break
+        cause = cause.__cause__
+    if cause is None:
+        return message
+    detail = str(cause)
+    return f"{message} ({type(cause).__name__}: {detail})" if detail and detail != message else f"{message} ({type(cause).__name__})"
 
 
 streamOpenAICompletions = stream_openai_completions

@@ -20,6 +20,7 @@ from misaka.ai.providers._common import (
     _await_with_signal,
     _close_stream,
     _empty_usage,
+    _iterate_async_iterable,
     _option,
 )
 from misaka.ai.providers.constrained_sampling import (
@@ -262,13 +263,10 @@ def build_params(model: Model, context: TranscriptContext, options: Any, deploym
 
 
 async def _iterate_stream(stream_obj: Any, signal: Any = None) -> AsyncIterable[dict[str, Any]]:
-    iterator = stream_obj.__aiter__()
-    while True:
-        try:
-            event = await _await_with_signal(iterator.__anext__(), signal, on_abort=lambda: _close_stream(stream_obj))
-        except StopAsyncIteration:
-            return
-
+    # One abort task for the whole stream (_iterate_async_iterable), not one per SSE item: a task
+    # per item cost several loop turns per event, which a busy TUI turned into a stream that fell
+    # minutes behind the provider (GitHub issue #6).
+    async for event in _iterate_async_iterable(stream_obj, signal, on_abort=lambda: _close_stream(stream_obj)):
         if hasattr(event, "model_dump"):
             yield event.model_dump()
         elif isinstance(event, dict):
