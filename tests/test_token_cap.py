@@ -20,6 +20,7 @@ from misaka.ai.stream import complete_simple
 from misaka.ai.types import (
     AssistantMessage,
     DoneEvent,
+    ErrorEvent,
     SimpleStreamOptions,
     TextContent,
     TextDeltaEvent,
@@ -222,6 +223,63 @@ def test_the_provider_gets_the_callers_signal(board, provider):
     assert message.stopReason == "stop"
     assert provider.sent[0].signal is controller.signal
     assert provider.sent[0].maxTokens <= 4_000
+
+
+def test_requests_in_flight_do_not_count_as_spent(board):
+    """A lease is a worst case; one large request may hold all the room left. 0.18.9 counted leases
+    into the mode, so a busy run read "stop" with nothing spent and its planner failed the run."""
+    held = budget.lease_request(board.con, 10_000, board.run, 1, need=1_000, want=10_000)
+    assert held["tokens"] == 10_000
+    reading = budget.status(board.con, 10_000, task_id=board.card)
+    assert reading["mode"] == "normal" and reading["reserved"] == 10_000 and reading["used"] == 0
+    assert not worker.over_cap(board.path, board.card, 10_000)
+
+
+def test_the_guards_read_the_cap_less_what_is_spent(board, provider):
+    async def ask():
+        with budget.usage_context(board.path, board.card, 1, 10_000):
+            budget.lease_request(board.con, 10_000, board.run, 1, need=1_000, want=3_000)   # another card's
+            await complete_simple(provider.model, {"messages": []})
+            return metering.allowance()
+    assert asyncio.run(ask()) == (10_000 - USED, 10_000), "neither its own lease nor another's is spent"
+
+
+def test_a_local_allowance_running_out_does_not_stop_the_run(board, provider):
+    async def review():
+        with budget.usage_context(board.path, board.card, 1, 10_000_000), metering.local_allowance(10):
+            return await complete_simple(provider.model, {"messages": []})
+    message = asyncio.run(review())
+    assert message.stopReason == "error" and "allowance" in message.errorMessage
+    assert not worker.stopped_at_cap(message.errorMessage)
+    assert not budget.exhausted(board.con, 10_000_000, task_id=board.run), "the skill review's budget is not the run's"
+
+
+def test_a_request_refused_before_its_reply_began_spends_nothing(board, monkeypatch):
+    def refuse(model, context, options=None):
+        out = AssistantMessageEventStream()
+
+        async def fail():
+            message = AssistantMessage(content=[], api=model.api, provider=model.provider, model=model.id,
+                                       usage=_empty_usage(), stopReason="error",
+                                       errorMessage="429 Too Many Requests", timestamp=0)
+            out.push(ErrorEvent(reason="error", error=message))
+            out.end(message)
+
+        asyncio.get_running_loop().create_task(fail())
+        return out
+
+    register_api_provider(ApiProvider(api="metered-refused", stream=refuse, streamSimple=refuse),
+                          source_id="token-cap-test-refused")
+    monkeypatch.setattr(api_registry, "_request_meter", metering.meter)
+    model = get_model("anthropic", "claude-sonnet-4-5").model_copy(update={"api": "metered-refused"})
+    try:
+        with budget.usage_context(board.path, board.card, 1, 1_000_000):
+            for _ in range(4):
+                assert _ask(model, None).stopReason == "error"
+    finally:
+        api_registry.unregister_api_providers("token-cap-test-refused")
+    assert budget.spent(board.con, task_ids=budget.scope(board.con, board.run)) == 0
+    assert budget.reserved(board.con) == 0
 
 
 # -- no second count ----------------------------------------------------------------------------------------

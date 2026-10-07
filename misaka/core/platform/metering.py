@@ -63,8 +63,10 @@ def local_allowance(limit: int):
 
 
 def allowance() -> tuple[int, int] | None:
-    """``(remaining, cap)`` as the last request of the current ledger found it, for the guards'
-    wind-down hint; None when nothing caps this turn. No lookup: the reading is the meter's own."""
+    """``(remaining, cap)`` -- the cap less what the run has spent, as the meter last read and then
+    settled it -- for the guards' wind-down hint; None when nothing caps this turn. Leases in flight
+    are not taken off: they are worst cases that mostly come back, and counting them (0.18.9) wound
+    sessions down with most of the cap unspent. No lookup: the reading is the meter's own."""
     local = _local.get()
     if local is not None:
         return local.limit - local.used, local.limit
@@ -121,7 +123,7 @@ async def _lease(current, local, need: int, want: int, signal: Any) -> dict:
         if local is not None:
             room = local.limit - local.used - local.in_flight
             if room < need:
-                return {"status": "exhausted", "used": local.used, "cap": local.limit}
+                return {"status": "exhausted", "used": local.used, "cap": local.limit, "local": True}
             want = min(want, room)
         if current and cap:
             reading = await asyncio.to_thread(budget.lease_request_path, path, cap, task_id, generation, need, want)
@@ -131,7 +133,7 @@ async def _lease(current, local, need: int, want: int, signal: Any) -> dict:
             if reading["status"] == "granted" and local is not None:
                 local.in_flight += reading["tokens"]
             if current and reading.get("cap"):
-                _last[(path, task_id)] = (reading["cap"] - reading["used"] - reading["held"], reading["cap"])
+                _last[(path, task_id)] = (reading["cap"] - reading["used"], reading["cap"])
             return reading
         if read_field(signal, "aborted"):
             return {"status": "aborted"}
@@ -168,18 +170,23 @@ def meter(model: Any, context: Any, options: Any, send) -> AssistantMessageEvent
             _ended(out, model, "aborted", "Request was aborted")
             return
         if reading["status"] == "exhausted":
+            if reading.get("local"):
+                # The session's own allowance, not the run's: the run goes on.
+                _ended(out, model, "error", f"this session's allowance of {reading['cap']:,} tokens is used up")
+                return
             if current and current[3]:
                 # Every driver and card of the run stops on it, not only this session.
                 await asyncio.to_thread(budget.cap_reached_path, current[0], current[1], current[3])
             _ended(out, model, "error", _exhausted_text(reading, need))
             return
         lease, granted = reading.get("lease"), int(reading["tokens"])
-        streamed = 0
+        streamed, started = 0, False
         message = None
         try:
             inner = send(_limited(options, granted - bound - extra))
             renewed = time.monotonic()
             async for event in inner:
+                started = started or read_field(event, "type") == "start"
                 delta = read_field(event, "delta")
                 if isinstance(delta, str):
                     streamed += len(delta)
@@ -194,13 +201,18 @@ def meter(model: Any, context: Any, options: Any, send) -> AssistantMessageEvent
             failure = None
         finally:
             used = usage_tokens(read_field(message, "usage", {}) or {}) if message is not None else 0
-            if used <= 0:
+            if used <= 0 and started:
                 # A reply cut off reports no usage: count the context sent and what came back,
                 # not the whole lease -- a retried cut would otherwise fill the cap with nothing.
+                # A request refused before its reply began (a 429, a dropped connection) spent
+                # nothing; 0.18.9 charged it the context's whole bound, every retry.
                 used = bound + streamed
             if local is not None:
                 local.in_flight -= granted
                 local.used += used
+            key = (current[0], current[1]) if current else None
+            if key in _last:
+                _last[key] = (_last[key][0] - used, _last[key][1])
             if current:
                 try:
                     await asyncio.shield(asyncio.to_thread(

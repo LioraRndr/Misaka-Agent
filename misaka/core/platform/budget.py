@@ -227,14 +227,17 @@ def exhausted(con, cap=None, *, task_id=None):
 
 def status(con, cap=None, *, task_id=None):
     """Spent, in flight and the cap, for the research run ``task_id`` belongs to (``mode`` normal,
-    beast past ``beast_at`` of the cap, stop at the cap); a task outside a run is never capped."""
+    beast past ``beast_at`` of the cap, stop at the cap); a task outside a run is never capped.
+    The mode follows what is spent, as ``exhausted`` does: a lease is a request's worst case and
+    mostly comes back, and one large request can hold all the room left (0.18.9 counted leases
+    in, so a busy run read "stop" with nothing spent and its planner failed)."""
     cap = default_cap() if cap is None else cap
     ids = scope(con, task_id) if task_id else None
     held = reserved(con, task_id=task_id)
     used = spent(con, task_ids=ids)
     if not cap or (task_id and ids is None):
         return {"mode": "normal", "used": used, "reserved": held, "cap": 0, "ratio": 0.0}
-    ratio = (used + held) / cap
+    ratio = used / cap
     mode = "stop" if ratio >= 1.0 or _cap_refused(con, ids, cap) else ("beast" if ratio >= beast_at() else "normal")
     return {
         "mode": mode,
