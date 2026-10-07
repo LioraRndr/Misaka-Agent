@@ -538,7 +538,8 @@ def _install(harn, runtime):
             signal=signal,
         )
         _require_project_tasks(ctx, params)  # A blocking read may span a new generation.
-        return _text(json.dumps(result, ensure_ascii=False))
+        # The Sister's summary and result are her session's output: fenced, as peek and card-log are.
+        return _text(untrusted(f"sister-output:{params.task_id}", json.dumps(result, ensure_ascii=False)))
 
 
     class SisterPeekParams(CardReadParams):

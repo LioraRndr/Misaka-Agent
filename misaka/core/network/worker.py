@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from misaka.config import profiles
 from misaka.core.platform import tasks as task_store
+from misaka.core.platform.prompt_guard import untrusted
 from misaka.core.platform.session import run_coro, run_session
 from misaka.core.platform.vocabulary import MANAGEMENT_TOOLS
 from misaka.core.skills import sandbox as skill_sandbox
@@ -201,6 +202,7 @@ def card_handoffs(con, task):
     return out
 
 
+_MATERIAL_TITLE_CHARS = 200    # an HTML <title> is cut there already; a downloaded .md's front matter is not
 _MATERIALS_LIMIT = 40   # lines of the "already downloaded" list; the rest is counted, not listed
 
 
@@ -252,13 +254,17 @@ def materials_on_hand(workspace):
             if url:
                 line += f" ← {url}"
             if provenance.get("title"):
-                line += f' "{provenance["title"]}"'
+                title = " ".join(str(provenance["title"]).split())
+                line += f' "{title[:_MATERIAL_TITLE_CHARS]}"'
         doc_id = doc_ids.get(os.path.realpath(path))
         if doc_id:
             line += f" (doc {doc_id})"
         lines.append(line)
     if len(files) > _MATERIALS_LIMIT:
         lines.append(f"- … and {len(files) - _MATERIALS_LIMIT} more under `{_download_dir_name()}/`")
+    # URLs and titles come from the pages themselves: web_fetch fences a title, and reading it
+    # back out of the saved file's front matter must not unfence it (issue #10 audit, M5).
+    lines = [untrusted("materials", "\n".join(lines))]
     lines.append("This material list is a snapshot. Reuse relevant items; check the current workspace "
                  "or an available document index when you need to discover additional or newer material.")
     return "\n".join(lines)

@@ -248,6 +248,10 @@ class SkillsPart:
                 target = os.path.realpath(os.path.join(workspace, os.path.expanduser(str(args.get("path") or ""))))
                 if any(target == root or target.startswith(root + os.sep) for root in live_roots):
                     return "path"
+                if kind in _WORKER_KINDS and _is_context_file_above(target, workspace):
+                    return ("PROJECT.md, AGENTS.md and CLAUDE.md here are what every later session in this "
+                            "project reads as its instructions; a Sister or sub-agent does not change them. "
+                            "Tell Last Order what should change.")
                 # The one place a file tool's target is resolved, so the home's rule is asked here too,
                 # and research's: what a run's workflow saved and froze is not the tools' to change (B126).
                 from misaka.core.research.runs import frozen_refusal
@@ -1076,6 +1080,22 @@ def _has_dynamic_shell_syntax(command, shell):
     return (not argv or argv[0] not in {"printf", "echo"}
             or "\n" in command
             or any(token and all(c in ";&|()<>" for c in token) for token in argv))
+
+
+# Sisters' cards and the sub-agents they start: the sessions that work for Last Order, unattended.
+_WORKER_KINDS = frozenset({"card", "beast", "child"})
+
+
+def _is_context_file_above(target, workspace):
+    """Whether ``target`` is a file a session in ``workspace`` loads as its instructions: a context
+    file name in the workspace or a folder above it (issue #10 audit, H4: a card could rewrite
+    PROJECT.md, and every later session of the project took it as its brief)."""
+    from misaka.core.resource_loader import CONTEXT_FILE_NAMES
+    if os.path.basename(target) not in CONTEXT_FILE_NAMES:
+        return False
+    folder = os.path.dirname(target)
+    here = os.path.realpath(workspace)
+    return here == folder or here.startswith(folder.rstrip(os.sep) + os.sep)
 
 
 def _command_touches(command, workspace, live_roots, *, shell="bash", unattended=True):

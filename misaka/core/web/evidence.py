@@ -102,12 +102,31 @@ def frontmatter_line_count(provenance: dict[str, Any]) -> int:
     return _frontmatter(provenance).count("\n")
 
 
+def is_credential_store(path: str) -> bool:
+    """Whether ``path`` is MISAKA's own credentials: the home's ``credentials/`` (auth.json, the
+    vault, MCP tokens) or a ``.env`` in the home (its own or a role's). Hermes' file tools refuse
+    their credential stores the same way (agent/file_safety.py)."""
+    from misaka.config import home
+    resolved = Path(path).resolve()
+    store = home.path("credentials").resolve()
+    root = home.home().resolve()
+    return (resolved == store or store in resolved.parents
+            or (resolved.name == ".env" and (resolved.parent == root or root in resolved.parents)))
+
+
+CREDENTIALS_REFUSED = ("MISAKA's credentials (credentials/ and .env in its home) are not read through file tools. "
+                       "(Defense in depth, not a security boundary: a shell command can still reach them.)")
+
+
 def check_material_read(path: str) -> None:
-    """Keep vault key/ciphertext and restricted originals out of ordinary readers.
+    """Keep vault key/ciphertext, restricted originals and MISAKA's credentials out of ordinary
+    readers (issue #10 audit, M1: read and grep reached credentials/auth.json).
 
     Resolved paths also cover symlinks. This is a tool/corpus boundary, not an OS
     sandbox for an independently approved terminal command.
     """
+    if is_credential_store(path):
+        raise ValueError(CREDENTIALS_REFUSED)
     resolved = Path(path).resolve()
     for directory in (resolved, *resolved.parents):
         if (directory.name == "originals" and directory.parent.name == "web-evidence") or (
