@@ -47,7 +47,8 @@ What reading them needs:
 - **Documents indexed by an older version.** Running `misaka doc add` or `scan` again on a PDF or
   DjVu indexed before per-page OCR re-reads it when its stored pages show it may need it: pages
   that printed something the old version did not read get OCR, and a document whose pages were
-  numbered out of step with the file is renumbered. Only the pages whose text changed are
+  numbered out of step with the file is renumbered. An EPUB with pictures whose text has no
+  `![...]` markers is read again too, so its pictures are named. Only the pages whose text changed are
   rewritten, and the command lists how many; `doc_read` and `doc_verify` say so on those pages,
   because a quotation located there earlier may have pointed at different text.
 - **Outlines.** With the `pageindex` extra installed, long PDFs get an outline (chapters and
@@ -65,8 +66,7 @@ What reading them needs:
   `doc_page_image(doc_id, page)` shows the slide (LibreOffice renders it; hidden slides have no
   image). A Word document or an EPUB marks each picture where it stands, `![alt]`, and
   `doc_page_image(doc_id, page, figure=N)` shows the N-th picture on that page as the file
-  stores it (a Word chart pasted as EMF or WMF needs LibreOffice). An EPUB indexed by an
-  earlier version has no markers in its text, so its pictures are not named. A
+  stores it (a Word chart pasted as EMF or WMF needs LibreOffice). A
   model without vision cannot be shown an image at all, so for it the page or the figure is read
   in words by the team's vision model (`vision.model`, see [Models](models.md)).
   A value read off a figure is a reading, not a quotation: `doc_verify` cannot locate it.

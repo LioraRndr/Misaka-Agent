@@ -170,3 +170,28 @@ async def test_a_slide_is_rendered_through_libreoffice_past_the_hidden_one(tmp_p
     hidden = next(p for p in range(1, 10) if "## Slide 3" in (corpus.read_page(doc_id, p, workspace=str(workspace)) or ""))
     with pytest.raises(ValueError, match="hidden"):
         await _call("doc_page_image", {"doc_id": doc_id, "page": hidden}, str(workspace))
+
+
+def test_an_epub_indexed_before_markers_is_read_again_and_its_pictures_named(tmp_path):
+    import json
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    book = _epub(workspace / "march.epub")
+    doc_id = _ingest(book, workspace)
+    ddir = corpus.resolve_doc(doc_id, workspace=str(workspace))
+    page = f"{ddir}/pages/p0001.txt"
+    with open(page, encoding="utf-8") as f:
+        text = f.read()
+    with open(page, "w", encoding="utf-8") as f:
+        f.write(text.replace("![Map of the crossing]", ""))            # what version 1 stored
+    with open(f"{ddir}/meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    meta.pop("extract_version")
+    with open(f"{ddir}/meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    assert corpus.figures(doc_id, workspace=str(workspace)) == {}      # and found nothing to name
+    _ingest(book, workspace)
+    assert "![Map of the crossing]" in corpus.read_page(doc_id, 1, workspace=str(workspace))
+    assert corpus.figures(doc_id, workspace=str(workspace))[1]["embedded"][0]["member"] == "OEBPS/Images/map 1.png"
+    with open(f"{ddir}/meta.json", encoding="utf-8") as f:
+        assert json.load(f)["reread"]["pages"] == [1]

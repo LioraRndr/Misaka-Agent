@@ -1661,11 +1661,11 @@ def _page_path(ddir, page):
 TREE_ATTEMPT_VERSION = 1
 
 
-# Bumping this re-reads a PDF or DjVu indexed by an older extractor the next time it is ingested
-# (``_reread``). 2: pages chosen for OCR one by one (``_route``), and OCR sidecars and DjVu text
-# lined up with the file's own page numbers.
+# Bumping this re-reads a PDF, a DjVu or an EPUB indexed by an older extractor the next time it is
+# ingested (``_reread``). 2: pages chosen for OCR one by one (``_route``), OCR sidecars and DjVu
+# text lined up with the file's own page numbers, and an EPUB's pictures marked where they stand.
 EXTRACT_VERSION = 2
-REREAD_SUFFIXES = (".pdf", ".djvu")
+REREAD_SUFFIXES = (".pdf", ".djvu", ".epub")
 
 
 def _needs_reread(pages):
@@ -1703,9 +1703,14 @@ def _reread(ddir, p, count):
     old = _stored_pages(ddir, count) if ext in REREAD_SUFFIXES else None
     pages, learned = None, {}
     # djvutxt skipped a page with no hidden text outright, so a DjVu stored out of step can have
-    # nothing but full pages to show for it: only its page count gives it away.
-    if old is not None and (_needs_reread(old) or (ext == ".djvu" and shutil.which(DJVU_TEXT_BINARY)
-                                                   and _djvu_page_count(p, {}) not in (None, count))):
+    # nothing but full pages to show for it: only its page count gives it away. An EPUB's text
+    # used to drop its pictures, so one with pictures and no ``![...]`` marker is read again.
+    if ext == ".epub":
+        stale = old is not None and not any("![" in text for text in old) and bool(_epub_images(p))
+    else:
+        stale = old is not None and (_needs_reread(old) or (ext == ".djvu" and shutil.which(DJVU_TEXT_BINARY)
+                                                            and _djvu_page_count(p, {}) not in (None, count)))
+    if stale:
         pages = extract_pages(p, meta=learned)
         if not _has_text_layer(pages):
             return count                    # nothing better to offer; asked again next time
@@ -1719,7 +1724,7 @@ def _reread(ddir, p, count):
         changed, final_ocr = list(range(1, len(pages) + 1)), now_ocr
     elif pages is not None:
         changed = [n for n in range(1, count + 1)
-                   if (n in now_ocr or _SKIPPED.search(old[n - 1])) and pages[n - 1] != old[n - 1]]
+                   if (ext == ".epub" or n in now_ocr or _SKIPPED.search(old[n - 1])) and pages[n - 1] != old[n - 1]]
         final_ocr = (was_ocr - set(changed)) | (now_ocr & set(changed))
         # A page still holding an earlier OCR's reading has been read, whatever this run managed.
         unread = {n: why for n, why in unread.items() if n in changed or n not in was_ocr}
@@ -1730,6 +1735,9 @@ def _reread(ddir, p, count):
         for n in range(total + 1, count + 1):           # a count that shrank
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(_page_path(ddir, n))
+        if changed:
+            with contextlib.suppress(FileNotFoundError):  # read off the old pages: found again on asking
+                os.unlink(os.path.join(ddir, "figures.json"))
         m = _read_meta_at(ddir) or {}
         if pages is not None:
             for key in ("ocr", "ocr_pages", "unread_pages"):
