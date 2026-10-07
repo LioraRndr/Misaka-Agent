@@ -17,11 +17,27 @@ def _write(tmp_path, kind, path):
 
 # -- H4: a card rewriting the instructions every later session loads --------------------------------------
 
-@pytest.mark.parametrize("path", ["PROJECT.md", "AGENTS.md", "../CLAUDE.md"])
+@pytest.mark.parametrize("path", ["PROJECT.md", "AGENTS.md", "../CLAUDE.md",
+                                  # as write resolves them: a leading @, and a case-folding file system
+                                  "@PROJECT.md", "project.md", "Agents.md", "../claude.MD"])
 @pytest.mark.parametrize("kind", ["card", "beast", "child"])
 def test_a_sister_or_sub_agent_does_not_write_the_projects_instructions(tmp_path, kind, path):
     decision = _write(tmp_path, kind, path)
     assert decision and decision["block"] and "Tell Last Order" in decision["reason"]
+
+
+def test_a_file_url_is_resolved_as_the_write_tool_resolves_it(tmp_path):
+    decision = _write(tmp_path, "card", (tmp_path / "project" / "PROJECT.md").as_uri())
+    assert decision and decision["block"]
+
+
+def test_the_home_refuses_a_case_variant_of_itself(tmp_path, monkeypatch):
+    from misaka.config import home
+    from misaka.core.platform import home_guard
+    monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
+    variant = str(tmp_path / "HOME" / "Settings.json")
+    assert home_guard.refusal(variant, str(tmp_path / "project"), "card")
+    assert home_guard.refusal(str(tmp_path / "elsewhere.json"), str(tmp_path / "project"), "card") is None
 
 
 @pytest.mark.parametrize("kind, path", [("foreground", "PROJECT.md"), ("card", "nodes/b_1/notes.md"),
@@ -53,6 +69,19 @@ def test_the_file_tools_do_not_read_misakas_credentials(tmp_path, monkeypatch):
     assert CREDENTIALS_REFUSED.startswith("MISAKA's credentials")
 
 
+def test_credentials_are_refused_in_any_case_and_only_where_the_home_loads_them(tmp_path, monkeypatch):
+    from misaka.config import home
+    from misaka.core.web.evidence import is_credential_store
+    monkeypatch.setenv(home.ENV_HOME, str(tmp_path / "home"))
+    root = tmp_path / "home"
+    for refused in (root / "Credentials" / "auth.json", tmp_path / "HOME" / "credentials" / "auth.json",
+                    root / ".ENV", root / "profiles" / "sisters" / "10032" / ".env"):
+        assert is_credential_store(str(refused)), refused
+    # A project's .env copied into a sub-agent's worktree is the project's own.
+    assert not is_credential_store(str(root / "state" / "worktrees" / "w1" / ".env"))
+    assert not is_credential_store(str(tmp_path / "project" / ".env"))
+
+
 # -- H5: a node in a restricted container ----------------------------------------------------------------------
 
 def test_a_runner_claims_its_row_where_no_identity_can_be_read(tmp_path, monkeypatch):
@@ -73,7 +102,7 @@ def test_a_runner_claims_its_row_where_no_identity_can_be_read(tmp_path, monkeyp
         assert processes.identity(12345) is None, "everyone else still sees an unreadable process as unknown"
 
 
-# -- H6: restoring an official optional skill goes through the scan --------------------------------------------
+# -- H6: restoring an official optional skill is scanned as the hub scans it --------------------------------------------
 
 def test_an_optional_skill_is_scanned_before_it_is_restored(tmp_path, monkeypatch):
     from misaka.core.skills.vendor import skills_sync
@@ -89,14 +118,43 @@ def test_an_optional_skill_is_scanned_before_it_is_restored(tmp_path, monkeypatc
         sources[name] = (name, f"research/{name}", src)
     monkeypatch.setattr(skills_sync, "_skills_dir", lambda: live)
     monkeypatch.setattr(optional, "_optional_skill_index", lambda: sources)
-    monkeypatch.setattr(optional, "_backfill_optional_provenance", lambda quiet=False, verdicts=None: sorted(verdicts or {}))
+    recorded = {}
+    monkeypatch.setattr(optional, "_backfill_optional_provenance",
+                        lambda quiet=False, verdicts=None: recorded.update(verdicts or {}) or sorted(recorded))
+    from misaka.core.skills import guard
+    scanned = []
+    real_scan = guard.scan_skill
+    monkeypatch.setattr(guard, "scan_skill", lambda path, source: scanned.append(source) or real_scan(path, source=source))
     result = optional.restore_official_optional_skill("all", restore=True)
-    assert result["restored"] == ["plain"] and (live / "research" / "plain" / "SKILL.md").exists()
-    assert not (live / "research" / "leaky").exists() and result["blocked"][0].startswith("leaky:")
-    assert result["ok"] is False and result["backfilled"] == ["plain"], "the restored one carries its own verdict"
+    # Shipped official content, scanned as the hub scans it: the verdict is recorded, not a refusal
+    # (0.18.9 scanned it as community and refused 66 of the 140 shipped skills).
+    assert set(scanned) == {"official"}
+    assert result["ok"] is True and sorted(result["restored"]) == ["leaky", "plain"]
+    assert recorded["plain"] == "safe" and recorded["leaky"] != "safe"
 
 
 # -- M6 and node_dir ------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cited, expected", [
+    ("downloads/my paper 2024.pdf", "downloads/my paper 2024.pdf"),
+    ("downloads/a.pdf p. 3", "downloads/a.pdf"),              # words after the path in the same span
+    ("nodes/b_1/synthesis.md (v2)", "nodes/b_1/synthesis.md"),
+    ("downloads/my%20paper.pdf", "downloads/my%20paper.pdf"),  # a file saved under its escaped name
+    ("downloads/my%20other.pdf", "downloads/my other.pdf"),    # a Markdown link's escape
+    ("downloads/a%00b.pdf", None),                             # a NUL is no path, and no crash
+])
+def test_a_cited_path_resolves_through_its_possible_spellings(tmp_path, cited, expected):
+    from misaka.core.research.bundle import _Collector, _Index
+    workspace = tmp_path / "project"
+    for name in ("downloads/my paper 2024.pdf", "downloads/a.pdf", "nodes/b_1/synthesis.md",
+                 "downloads/my%20paper.pdf", "downloads/my other.pdf"):
+        (workspace / name).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / name).write_bytes(b"x")
+    collector = object.__new__(_Collector)
+    collector.index = _Index(str(workspace))
+    real, _ = collector._resolve(cited, [str(workspace)])
+    assert real == (str((workspace / expected).resolve()) if expected else None)
+
 
 @pytest.mark.parametrize("text, found", [
     ("`downloads/my paper 2024.pdf`", ["downloads/my paper 2024.pdf"]),

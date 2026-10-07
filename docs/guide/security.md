@@ -19,8 +19,8 @@ What MISAKA does keep out of the models' way, as defence in depth (a shell comma
 reach all of it):
 
 - the live skill folders, which change only through `skill_manage`;
-- MISAKA's own credentials, `~/.misaka/credentials/` and `.env` files in the home, which the file
-  tools (`read`, `grep`, `find`) do not open;
+- MISAKA's own credentials, `~/.misaka/credentials/` and the `.env` of the home and of its roles,
+  which the file tools (`read`, `grep`, `find`) do not open, in any spelling of the path;
 - the files every later session loads as its instructions -- `PROJECT.md`, `AGENTS.md`,
   `CLAUDE.md` in the project or a folder above it -- which a Sister or a sub-agent does not
   change (Last Order and you can);

@@ -15,6 +15,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from misaka.config import home
 from misaka.core.moments import CoreCommand
 from misaka.core.platform import home_guard
 from misaka.core.skills import bundles, reader, sandbox, visibility
@@ -31,6 +32,7 @@ from misaka.core.skills.manage import (
     prepare_arguments,
 )
 from misaka.core.skills.vendor import commands as hermes_commands
+from misaka.core.tools.path_utils import resolve_to_cwd
 from misaka.utils.async_lifecycle import run_in_thread, settle
 
 _SKILL_INVOCATION_PREFIX = "[IMPORTANT: The user has invoked the "
@@ -245,8 +247,11 @@ class SkillsPart:
         def _touches_live_skills(tool, args):
             """Why this call is refused -- "path", "dynamic", or the home's own sentence -- or None."""
             if tool in ("write", "edit"):
-                target = os.path.realpath(os.path.join(workspace, os.path.expanduser(str(args.get("path") or ""))))
-                if any(target == root or target.startswith(root + os.sep) for root in live_roots):
+                # Resolved as write and edit resolve it (a leading @, file://, Unicode spaces): a
+                # target read any other way let `@PROJECT.md` past this check onto PROJECT.md.
+                target = os.path.realpath(resolve_to_cwd(str(args.get("path") or ""), workspace))
+                folded = home.folded(target)
+                if any(folded == root or root in folded.parents for root in map(home.folded, live_roots)):
                     return "path"
                 if kind in _WORKER_KINDS and _is_context_file_above(target, workspace):
                     return ("PROJECT.md, AGENTS.md and CLAUDE.md here are what every later session in this "
@@ -1091,11 +1096,11 @@ def _is_context_file_above(target, workspace):
     file name in the workspace or a folder above it (issue #10 audit, H4: a card could rewrite
     PROJECT.md, and every later session of the project took it as its brief)."""
     from misaka.core.resource_loader import CONTEXT_FILE_NAMES
-    if os.path.basename(target) not in CONTEXT_FILE_NAMES:
+    target = home.folded(target)
+    if target.name not in {name.casefold() for name in CONTEXT_FILE_NAMES}:
         return False
-    folder = os.path.dirname(target)
-    here = os.path.realpath(workspace)
-    return here == folder or here.startswith(folder.rstrip(os.sep) + os.sep)
+    here = home.folded(workspace)
+    return here == target.parent or target.parent in here.parents
 
 
 def _command_touches(command, workspace, live_roots, *, shell="bash", unattended=True):

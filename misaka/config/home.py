@@ -218,6 +218,13 @@ def strays() -> list[str]:
                   and not any(name.endswith(tail) and name[:-len(tail)] in known for tail in sidecars))
 
 
+def folded(target: str | os.PathLike[str]) -> Path:
+    """``target`` resolved and case-folded, for a refusal to compare: macOS and Windows file systems
+    fold case, so ``~/.MISAKA/Credentials`` is ``~/.misaka/credentials`` there, and a check that
+    compared names exactly let the variant through (0.18.9 sweep)."""
+    return Path(os.path.realpath(Path(target).expanduser()).casefold())
+
+
 def agent_may_write(target: str | os.PathLike[str], granted: tuple[str | None, ...] = ()) -> bool:
     """Whether an agent's file tools may create or change ``target``.
 
@@ -226,14 +233,14 @@ def agent_may_write(target: str | os.PathLike[str], granted: tuple[str | None, .
     when those lie inside the home. A workspace that merely *contains* the home, such as the
     user's home directory, grants nothing in it: the rest belongs to the program and the user.
     """
-    resolved = Path(os.path.realpath(Path(target).expanduser()))
-    root = home()
+    resolved = folded(target)
+    root = folded(home())
     if resolved != root and not resolved.is_relative_to(root):
         return True
-    allowed = [path("shared")]
+    allowed = [folded(path("shared"))]
     for directory in granted:
         if directory:
-            candidate = Path(os.path.realpath(Path(directory).expanduser()))
+            candidate = folded(directory)
             if candidate != root and candidate.is_relative_to(root):
                 allowed.append(candidate)
     return any(resolved == directory or resolved.is_relative_to(directory) for directory in allowed)

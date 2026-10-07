@@ -148,10 +148,11 @@ def restore_official_optional_skill(name: str, *, restore: bool = False) -> dict
     backup_root = ss._skills_dir() / ".restore-backups" / f"official-optional-{timestamp}"
     from misaka.core.skills import guard
     for folder_name, install_path, src in targets if restore else []:
-        # Scanned as the hub scans a local official optional bundle (label "builtin"), before
-        # anything is moved: a refused restore leaves the user's copy where it was. Copying it
-        # straight into the live tree skipped the scan (issue #10 audit, H6).
-        scan = guard.scan_skill(src, source="builtin")
+        # Scanned as the hub scans a shipped official bundle (Hermes' reserved label "official",
+        # skills_hub._scan_quarantined), before anything is moved, and the verdict recorded
+        # (issue #10 audit, H6). 0.18.9 passed "builtin", a label the scanner does not know: it
+        # read as community and refused 66 of the 140 shipped skills.
+        scan = guard.scan_skill(src, source="official")
         allowed, reason = guard.should_allow_install(scan)
         if allowed is not True:
             blocked.append(f"{folder_name}: {reason}")

@@ -63,6 +63,21 @@ _NOTE = ("Written by misaka when the products here were settled and rebuilt from
          "Cite original project files, not this bundle's disposable sources paths.")
 
 
+def _spellings(locator):
+    """The ways a cited path may be meant, in order: as written; with a Markdown link's %-escapes
+    decoded (downloads/my%20paper.pdf -- a file really named with a %20 is tried first); and, for a
+    quoted span with words after the path (`downloads/a.pdf p. 3`), the path alone, as it was read
+    before quoted spans were taken whole (0.18.9 sweep)."""
+    found = [locator]
+    if "%" in locator:
+        found.append(urllib.parse.unquote(locator))
+    head = re.match(_STOP + "+", locator)
+    if head:
+        found.append(head.group(0).rstrip(".,;:!?*"))
+    return [spelling for number, spelling in enumerate(found)
+            if spelling and "\0" not in spelling and spelling not in found[:number]]
+
+
 def locators_in(text):
     """Every source locator a text mentions, in order, once each: ``doc:<id>#p<n>``, URLs, paths
     under downloads/, nodes/, final/ or cards/, and absolute paths (which count only when they
@@ -180,7 +195,10 @@ class _Index:
         return actual
 
     def dir_inside(self, path):
-        real = os.path.realpath(path)
+        try:
+            real = os.path.realpath(path)
+        except ValueError:                          # a NUL in a cited path
+            return None
         return real if os.path.isdir(real) and corpus.under(real, self.workspace) else None
 
 
@@ -237,15 +255,14 @@ class _Collector:
         if locator.startswith(("http://", "https://")):
             real = self.index.pages.get(_url_key(locator))
             return real, "" if real else f"no saved copy under {DOWNLOAD_DIR_NAME}/"
-        if "%" in locator:
-            locator = urllib.parse.unquote(locator)     # a Markdown link's path: downloads/my%20paper.pdf
-        for base in ([""] if os.path.isabs(locator) else bases):
-            candidate = os.path.join(base, locator)
-            real = self.index.file_inside(candidate)
-            if real:
-                return real, ""
-            if self.index.dir_inside(candidate):        # a folder named in passing is not a citation
-                return None, ""
+        for spelling in _spellings(locator):
+            for base in ([""] if os.path.isabs(spelling) else bases):
+                candidate = os.path.join(base, spelling)
+                real = self.index.file_inside(candidate)
+                if real:
+                    return real, ""
+                if self.index.dir_inside(candidate):    # a folder named in passing is not a citation
+                    return None, ""
         # An absolute path that is not one of ours is ordinary prose, not a broken citation.
         return None, "" if os.path.isabs(locator) else "no such file in this project"
 

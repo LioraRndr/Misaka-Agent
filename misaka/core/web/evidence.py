@@ -104,14 +104,16 @@ def frontmatter_line_count(provenance: dict[str, Any]) -> int:
 
 def is_credential_store(path: str) -> bool:
     """Whether ``path`` is MISAKA's own credentials: the home's ``credentials/`` (auth.json, the
-    vault, MCP tokens) or a ``.env`` in the home (its own or a role's). Hermes' file tools refuse
-    their credential stores the same way (agent/file_safety.py)."""
+    vault, MCP tokens) or a ``.env`` the home loads -- its own, or a role's under ``profiles/``.
+    A project's ``.env`` copied into a sub-agent's worktree is the project's, not MISAKA's. Hermes'
+    file tools refuse their credential stores the same way (agent/file_safety.py)."""
     from misaka.config import home
-    resolved = Path(path).resolve()
-    store = home.path("credentials").resolve()
-    root = home.home().resolve()
+    resolved = home.folded(path)
+    store = home.folded(home.path("credentials"))
+    roles = home.folded(home.path("roles_root"))
     return (resolved == store or store in resolved.parents
-            or (resolved.name == ".env" and (resolved.parent == root or root in resolved.parents)))
+            or (resolved.name == ".env" and (resolved.parent == home.folded(home.home())
+                                             or roles in resolved.parents)))
 
 
 CREDENTIALS_REFUSED = ("MISAKA's credentials (credentials/ and .env in its home) are not read through file tools. "
