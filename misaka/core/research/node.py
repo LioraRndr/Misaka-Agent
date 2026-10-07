@@ -405,9 +405,12 @@ def main(run_id, node_id, *, runner_key):
     """``misaka research --node RUN NODE``. In a pane of the panel (the daemon hands the process
     its pane id and a terminal of its own) the node is an interactive window; anywhere else --
     a command-line run, a test, a redirected stdin -- it runs headless in the background."""
-    loop_watchdog.configure(f"node-{node_id}", exit_on_stall=True)
     if os.environ.get("MISAKA_NET_PANE") and sys.stdin.isatty():
+        # A window a person reads and answers in, and keeps open after the routine: a stall
+        # leaves its stack, but the window stays, as a chat window's does.
+        loop_watchdog.configure(f"node-{node_id}", exit_on_stall=False)
         return run_interactive(run_id, node_id, runner_key=runner_key)
+    loop_watchdog.configure(f"node-{node_id}", exit_on_stall=True)
     return run_headless(run_id, node_id, runner_key=runner_key)
 
 
@@ -454,7 +457,7 @@ def run_interactive(run_id, node_id, *, runner_key):
         "MISAKA_CODING_AGENT": "true",
         # Her tools' spending counts against the run, as a card's counts against its card.
         "MISAKA_USAGE_DB": str(cfg["db"]), "MISAKA_USAGE_TASK_ID": run_id,
-        "MISAKA_USAGE_GENERATION": "1", "MISAKA_USAGE_TOKEN_CAP": str(cfg.get("token_cap") or 0)})
+        "MISAKA_USAGE_GENERATION": "1", "MISAKA_USAGE_TOKEN_CAP": ""})
     from misaka.cli.engine import main as engine_main
     try:
         return asyncio.run(loop_watchdog.watched(engine_main(flags, assembly.engine_options())))

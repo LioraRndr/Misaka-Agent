@@ -153,7 +153,8 @@ class WindowLO:
         if os.path.realpath(options["session_dir"]) != os.path.realpath(os.path.dirname(self.session_file)):
             raise RuntimeError("A research call was routed to a different node's session.")
         if worker.over_cap(options.get("usage_db"), options.get("usage_task_id"), options.get("usage_token_cap")):
-            return None, "", worker.budget_cap_reason()
+            # Last Order's window, not a card: nothing "stays ready" here; the run halts at its cap.
+            return None, "", f"{budget.EXHAUSTED_MESSAGE}: this research run stops here until the cap is raised."
         definitions = list(options.get("extra_tools", ()))
         scope = ExitStack()
         guard_hooks = None
@@ -246,7 +247,7 @@ async def node_session(con, cfg, run, node):
     else:
         flags.append("--continue")
     env.update(MISAKA_USAGE_DB=str(cfg["db"]), MISAKA_USAGE_TASK_ID=run["id"],
-               MISAKA_USAGE_GENERATION="1", MISAKA_USAGE_TOKEN_CAP=str(cfg.get("token_cap") or 0))
+               MISAKA_USAGE_GENERATION="1", MISAKA_USAGE_TOKEN_CAP="")
 
     def check_active():
         if runs.stop_requested(con, run["id"]):
@@ -283,7 +284,7 @@ async def node_session(con, cfg, run, node):
                         "session_dir": directory, "tools": planner.session_tools(bridge),
                         "extra_tools": list(getattr(control, "review_tools", ()) or ()),
                         "usage_db": cfg["db"], "usage_task_id": run["id"], "usage_generation": 1,
-                        "usage_token_cap": cfg.get("token_cap"),
+                        "usage_token_cap": None,
                     }, preflight=preflight)
                     if error:
                         raise RuntimeError(error)

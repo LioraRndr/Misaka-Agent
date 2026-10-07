@@ -467,8 +467,9 @@ def _cmd_usage(args):
               f"{spent['tokens']:>13,} tokens  {usage.money(spent):<10}  {' '.join(run['question'].split())[:50]}")
     if not recent:
         print("No research runs yet.")
-    reading = budget.status(con, cfg.get("token_cap"))
-    print(f"Board token ledger: {reading['used']:,} tokens" + (f" of a cap of {reading['cap']:,}" if reading["cap"] else "")
+    cap = int(cfg.get("token_cap") or 0)
+    print(f"Board token ledger: {budget.spent(con):,} tokens recorded"
+          + (f"; research.token_cap is {cap:,} for each research run" if cap else "")
           + ". One run in detail: misaka usage --run RUN_ID")
 
 

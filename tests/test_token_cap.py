@@ -5,6 +5,7 @@ request, so a cap stopped every run at its first call -- and only a session's ow
 bounded: compaction, the vision bridge, MoA and LCM spent outside it, most of them unrecorded."""
 import asyncio
 import json
+import os
 import threading
 import time
 from contextlib import closing
@@ -304,3 +305,88 @@ def test_a_refused_request_stops_the_whole_run_until_the_cap_is_raised(board, pr
     assert budget.exhausted(board.con, 3_000, task_id=board.run), "spent is 0, and the run has still reached it"
     assert budget.status(board.con, 3_000, task_id=board.run)["mode"] == "stop"
     assert not budget.exhausted(board.con, 2_000_000, task_id=board.run), "a higher cap clears it"
+
+
+HALTED_CARD = '''
+import asyncio
+from misaka.ai.api_registry import ApiProvider, register_api_provider
+from misaka.ai.models import get_model
+from misaka.ai.stream import complete_simple
+from misaka.ai.utils.event_stream import AssistantMessageEventStream
+from misaka.core.platform import metering
+from misaka.utils import loop_watchdog
+
+def slow(model, context, options=None):
+    out = AssistantMessageEventStream()
+    async def never():
+        await asyncio.sleep(3600)
+    asyncio.get_running_loop().create_task(never())
+    return out
+
+register_api_provider(ApiProvider(api="slow-test", stream=slow, streamSimple=slow), source_id="slow")
+metering.install()
+loop_watchdog.configure("card-t_halted", exit_on_stall=True)
+model = get_model("anthropic", "claude-sonnet-4-5").model_copy(update={"api": "slow-test", "maxTokens": 32_000})
+asyncio.run(loop_watchdog.watched(complete_simple(model, {"messages": [{"role": "user", "content": "x" * 40_000, "timestamp": 0}]})))
+'''
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows ends a process outright: its lease expires as a crash's does")
+def test_a_card_a_halt_terminates_settles_its_request(board):
+    """A halt stops cards with SIGTERM: their requests in flight held their whole worst case for the
+    lease's 15 minutes, then were charged it in full."""
+    import subprocess
+    import sys
+    env = {**os.environ, "MISAKA_USAGE_DB": board.path, "MISAKA_USAGE_TASK_ID": board.card,
+           "MISAKA_USAGE_GENERATION": "1", "MISAKA_USAGE_TOKEN_CAP": "200000"}
+    child = subprocess.Popen([sys.executable, "-c", HALTED_CARD], env=env)
+    try:
+        for _ in range(200):
+            if budget.reserved(board.con, task_id=board.run):
+                break
+            time.sleep(0.05)
+        assert budget.reserved(board.con, task_id=board.run) > 0
+        child.terminate()
+        assert child.wait(10) == 143
+    finally:
+        if child.poll() is None:
+            child.kill()
+    assert budget.reserved(board.con, task_id=board.run) == 0
+    assert budget.spent(board.con, task_ids=budget.scope(board.con, board.run)) == 0, "its reply had not begun"
+
+
+def test_an_agent_started_in_a_window_research_turn_is_billed_to_its_run(board, monkeypatch):
+    """A window turn bills through an async-local ledger, never through the environment, and the
+    agents it started were neither capped nor recorded."""
+    from misaka.core.subagent import runtime
+    for name in ("MISAKA_USAGE_DB", "MISAKA_USAGE_TASK_ID", "MISAKA_USAGE_GENERATION", "MISAKA_USAGE_TOKEN_CAP"):
+        monkeypatch.delenv(name, raising=False)
+    context = runtime.RoleContext.capture(role="last_order", profile_dir=str(board.path), workspace=str(board.path))
+    holder = SimpleNamespace(role_context=context)
+    assert runtime.SubagentManager._billed_to(holder) is None, "a plain chat bills nothing"
+    with budget.usage_context(board.path, board.run, 1):
+        assert runtime.SubagentManager._billed_to(holder) == (board.path, board.run, 1, None, None)
+
+
+def test_a_google_request_refused_on_its_first_read_spends_nothing(board, monkeypatch):
+    """The Python SDK sends a streamed request on the first read, so a 429 came after "start" and
+    was charged the context's bound, on every retry."""
+    from google.genai import errors as genai_errors
+
+    from misaka.ai.providers import google as google_provider
+
+    class Models:
+        async def generate_content_stream(self, **kw):
+            async def refused():
+                raise genai_errors.ClientError(429, {"error": {"code": 429, "message": "Resource exhausted",
+                                                               "status": "RESOURCE_EXHAUSTED"}})
+                yield  # pragma: no cover
+            return refused()
+
+    monkeypatch.setattr(google_provider, "create_client", lambda *a, **k: SimpleNamespace(aio=SimpleNamespace(models=Models())))
+    monkeypatch.setattr(api_registry, "_request_meter", metering.meter)
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    with budget.usage_context(board.path, board.card, 1, 1_000_000):
+        message = _ask(get_model("google", "gemini-2.5-flash"), None)
+    assert message.stopReason == "error"
+    assert budget.spent(board.con, task_ids=budget.scope(board.con, board.run)) == 0

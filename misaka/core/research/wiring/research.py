@@ -226,7 +226,8 @@ def _parse_tell(rest):
 
 def _fits_subcommand(tokens):
     """Whether these words are the subcommand their first word names, not a question that starts
-    with it: help alone, status/stop with at most a run, limits with a run or options. 0.18.7 took
+    with it: help alone; status, stop and limits alone or naming a run (a run id is ``r_...``;
+    words after it are a mistake USAGE answers); limits with its options. 0.18.7 took
     "/research limits of state capacity in Qing China" for a limits change and refused it."""
     if not tokens:
         return False
@@ -234,7 +235,7 @@ def _fits_subcommand(tokens):
     if head in {"help", "-h", "--help"}:
         return not rest
     if head in {"status", "stop"}:
-        return len(rest) <= 1
+        return not rest or rest[0].startswith("r_")
     return not rest or rest[0].startswith(("r_", "--"))
 
 

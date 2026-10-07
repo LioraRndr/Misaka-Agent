@@ -107,16 +107,34 @@ def test_a_report_reads_only_the_last_process_of_a_reused_pid(tmp_path, monkeypa
 def test_old_logs_are_pruned_when_a_process_starts(tmp_path):
     folder = tmp_path / "logs" / "stalls"
     folder.mkdir(parents=True)
-    old, recent = folder / "card-old-1.log", folder / "card-recent-2.log"
-    for path in (old, recent):
+    gone = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+    old, recent = folder / f"card-old-{gone}.log", folder / "card-recent-2.log"
+    running = folder / f"panel-daemon-{os.getpid()}.log"       # a process open for weeks, still running
+    for path in (old, recent, running):
         path.write_text("--- header\nTimeout (\n", encoding="utf-8")
     month_ago = os.path.getmtime(old) - 30 * 86400
-    os.utime(old, (month_ago, month_ago))
+    for path in (old, running):
+        os.utime(path, (month_ago, month_ago))
     _run(tmp_path, "healthy")
-    assert not old.exists() and recent.exists()
+    assert not old.exists() and recent.exists() and running.exists()
 
 
 def test_an_unconfigured_process_is_not_watched(tmp_path):
     code, _log, logs = _run(tmp_path, "blocked", configured=False)
     assert code == 0 and logs == []
 
+
+
+@pytest.mark.parametrize("pane, tty, exits", [("p1", True, False), ("", False, True)])
+def test_a_node_window_a_person_reads_is_left_open_on_a_stall(monkeypatch, pane, tty, exits):
+    """An interactive node window stays open after its routine for the user; a stall killed it."""
+    import sys
+
+    from misaka.core.research import node
+    monkeypatch.setenv("MISAKA_NET_PANE", pane)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty)
+    monkeypatch.setattr(node, "run_interactive", lambda *a, **k: "window")
+    monkeypatch.setattr(node, "run_headless", lambda *a, **k: "headless")
+    node.main("r_1", "b_1", runner_key="k")
+    assert loop_watchdog._settings == {"label": "node-b_1", "exit": exits}

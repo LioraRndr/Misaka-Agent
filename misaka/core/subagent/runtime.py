@@ -1609,14 +1609,29 @@ class SubagentManager:
                 status, detail = "failed", str(error)
             await self._finish(task, status, detail, notify)
 
+    def _billed_to(self):
+        """``(db, task id, generation, claim lock, cap)`` an agent started now is billed to, or
+        None: the role's own (a card's environment), else the turn's -- a window research turn
+        bills through an async-local ledger its environment never held, and the agents it started
+        ran uncapped and unrecorded (0.18.9 sweep). Cap None: settings.json, read at each request."""
+        context = self.role_context
+        if context.usage_db and context.usage_task_id and context.usage_generation is not None:
+            return (context.usage_db, context.usage_task_id, context.usage_generation,
+                    context.usage_claim_lock, context.usage_token_cap)
+        from misaka.core.platform import budget
+        current = budget.ledger()
+        if current is None:
+            return None
+        path, task_id, generation, _cap = current
+        return path, task_id, int(generation) if str(generation).isdigit() else 1, None, None
+
     async def _admit(self, task: AgentTask) -> None:
         """Refuse to start an agent once the research run it is billed to has spent its cap; what
         it then spends is leased and recorded request by request (``metering``), in this process
         or the child's."""
         from misaka.core.network import worker
-        context = self.role_context
-        over = await asyncio.to_thread(worker.over_cap, context.usage_db, context.usage_task_id,
-                                       context.usage_token_cap)
+        billed = self._billed_to()
+        over = billed is not None and await asyncio.to_thread(worker.over_cap, billed[0], billed[1], billed[4])
         if over:
             raise RuntimeError(f"Nested Agent launch rejected: {worker.budget_cap_reason()}")
 
@@ -2011,26 +2026,22 @@ class SubagentManager:
             env["MISAKA_SUBAGENT_INHERIT_ALL_TOOLS"] = "1"
         else:
             env.pop("MISAKA_SUBAGENT_INHERIT_ALL_TOOLS", None)
-        if (
-            self.role_context.usage_db
-            and self.role_context.usage_task_id
-            and self.role_context.usage_generation is not None
-        ):
+        billed = self._billed_to()
+        if billed is not None:
+            usage_db, usage_task_id, usage_generation, claim_lock, token_cap = billed
             env.update(
                 {
-                    "MISAKA_USAGE_DB": self.role_context.usage_db,
-                    "MISAKA_USAGE_TASK_ID": self.role_context.usage_task_id,
-                    "MISAKA_USAGE_GENERATION": str(
-                        self.role_context.usage_generation
-                    ),
+                    "MISAKA_USAGE_DB": str(usage_db),
+                    "MISAKA_USAGE_TASK_ID": str(usage_task_id),
+                    "MISAKA_USAGE_GENERATION": str(usage_generation),
                 }
             )
-            if self.role_context.usage_claim_lock:
-                env["MISAKA_USAGE_CLAIM_LOCK"] = self.role_context.usage_claim_lock
+            if claim_lock:
+                env["MISAKA_USAGE_CLAIM_LOCK"] = claim_lock
             else:
                 env.pop("MISAKA_USAGE_CLAIM_LOCK", None)
-            if self.role_context.usage_token_cap is not None:
-                env["MISAKA_USAGE_TOKEN_CAP"] = str(self.role_context.usage_token_cap)
+            if token_cap is not None:
+                env["MISAKA_USAGE_TOKEN_CAP"] = str(token_cap)
             else:
                 env.pop("MISAKA_USAGE_TOKEN_CAP", None)
         else:

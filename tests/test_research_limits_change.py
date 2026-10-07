@@ -99,3 +99,11 @@ def test_a_question_that_starts_with_a_subcommand_word_is_a_question(line):
     from misaka.core.research.wiring.research import parse_command
     parsed = parse_command(line)
     assert parsed["action"] == "activate" and parsed["question"] == line.removeprefix("start ")
+
+
+@pytest.mark.parametrize("line", ["stop r_abc now", "status r_abc extra"])
+def test_words_after_a_run_id_are_a_mistake_not_a_new_question(line):
+    """The first fix read these as a question and would have started a new, paid run."""
+    from misaka.core.research.wiring.research import parse_command
+    with pytest.raises(ValueError, match="Usage"):
+        parse_command(line)

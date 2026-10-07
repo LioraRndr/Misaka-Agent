@@ -27,7 +27,7 @@ def default_cap():
     """The token cap of one research run (0 = none): settings.json ``research.token_cap``."""
     from misaka.config.product import setting
 
-    return setting("research", "token_cap", 0, int)
+    return max(0, setting("research", "token_cap", 0, int))      # a negative cap is none, as 0 is
 
 
 def beast_at():
@@ -348,7 +348,10 @@ def ledger():
     """``(path, task_id, generation, cap)`` this turn is billed to, or None: a window research turn
     supplies an async-local ``usage_context``; other metered processes the ``MISAKA_USAGE_*``
     environment a worker exports for its card. A session with neither (an interactive chat) has
-    nothing to bill."""
+    nothing to bill. No cap given (an empty ``MISAKA_USAGE_TOKEN_CAP``, the drivers' choice) is
+    ``research.token_cap`` as settings.json reads at this request: a driver and its cards that each
+    kept the value they started with disagreed once it was edited, and the driver relaunched cards
+    the cap refused, for ever (0.18.9 sweep)."""
     context = _USAGE_CONTEXT.get()
     if context is None:
         raw_cap = os.environ.get("MISAKA_USAGE_TOKEN_CAP", "")

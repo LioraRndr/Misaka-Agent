@@ -25,6 +25,7 @@ import atexit
 import faulthandler
 import os
 import re
+import signal
 import sys
 import sysconfig
 import time
@@ -85,14 +86,19 @@ def _drop_if_clean(file, path: str, before: int, after: int) -> None:
 
 
 def _prune(folder: str) -> None:
+    """Remove logs older than ``KEEP_DAYS`` -- not one whose process still runs: a panel open for
+    weeks without a stall would dump its next stack into a file no one can find."""
+    import psutil
     cutoff = time.time() - KEEP_DAYS * 86400
     try:
         entries = list(os.scandir(folder))
     except OSError:
         return
     for entry in entries:
+        pid = entry.name[:-len(".log")].rpartition("-")[2]
         try:
-            if entry.name.endswith(".log") and entry.stat().st_mtime < cutoff:
+            if (entry.name.endswith(".log") and entry.stat().st_mtime < cutoff
+                    and not (pid.isdigit() and psutil.pid_exists(int(pid)))):
                 os.remove(entry.path)
         except OSError:
             continue
@@ -116,8 +122,25 @@ def suspend() -> None:
         faulthandler.cancel_dump_traceback_later()
 
 
+def _end_on_sigterm():
+    """On POSIX, a SIGTERM -- how a halted run stops its cards and nodes -- cancels this coroutine
+    instead of killing the process outright, so what it holds is let go on the way out: a model
+    request's token lease is settled, not left to expire and be charged in full (0.18.9 sweep).
+    Returns ``(was it asked, undo)``; Windows ends a process outright and has nothing to catch."""
+    asked = []
+    if os.name != "posix":
+        return asked, lambda: None
+    loop, task = asyncio.get_running_loop(), asyncio.current_task()
+    try:
+        loop.add_signal_handler(signal.SIGTERM, lambda: (asked.append(True), task.cancel()))  # windows-footgun: ok - POSIX only, returned early above
+    except (NotImplementedError, RuntimeError, ValueError):     # a loop off the main thread
+        return asked, lambda: None
+    return asked, lambda: loop.remove_signal_handler(signal.SIGTERM)
+
+
 async def watched(coro):
-    """``await coro`` with this loop re-arming the watchdog; a pass-through when not configured."""
+    """``await coro`` with this loop re-arming the watchdog, and ended gracefully by a SIGTERM;
+    a pass-through when not configured."""
     global _depth
     if _settings is None:
         return await coro
@@ -126,11 +149,17 @@ async def watched(coro):
     _arm(_seconds())
     rearm = asyncio.ensure_future(_rearm(_seconds()))
     _depth += 1
+    terminated, undo = _end_on_sigterm() if _depth == 1 else ([], lambda: None)
     try:
         return await coro
+    except asyncio.CancelledError:
+        if terminated:
+            raise SystemExit(128 + signal.SIGTERM) from None    # asyncio.run then settles the rest
+        raise
     finally:
         _depth -= 1
         rearm.cancel()
+        undo()
         if _depth == 0:
             faulthandler.cancel_dump_traceback_later()
 

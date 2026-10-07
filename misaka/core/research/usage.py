@@ -73,13 +73,16 @@ def run_usage(con, run):
     root = run["root_session"]
     # The window goes on after its run: once the run has ended (done, stopped, failed) count it up
     # to the run's last change, and never past the next run started from the same window. 0.18.7
-    # bounded a done run only, so a stopped run was charged for every later run in its window.
-    until = int(run["updated_at"]) * 1000 + 60_000 if run["status"] != "active" else None
-    if root:
-        later = con.execute("SELECT MIN(created_at) FROM research_runs WHERE root_session=? AND created_at>?",
-                            (root, run["created_at"])).fetchone()[0]
+    # bounded a done run only, so a stopped run was charged for every later run in its window. A
+    # run still going (waiting for the user, stopping, or resumed) is counted to now; one resumed
+    # in a window that started another run meanwhile counts that run's turns there too.
+    until = None
+    if run["status"] not in runs.ACTIVE:
+        until = int(run["updated_at"]) * 1000 + 60_000
+        later = root and con.execute("SELECT MIN(created_at) FROM research_runs WHERE root_session=? AND created_at>?",
+                                     (root, run["created_at"])).fetchone()[0]
         if later:
-            until = min(until, int(later) * 1000) if until else int(later) * 1000
+            until = min(until, int(later) * 1000)
     research = Path(sessions.sessions_root()) / "research"
     folders = sorted(research.glob(f"{run['id']}--*")) if research.is_dir() else []
     window = root and not any(Path(root).is_relative_to(folder) for folder in folders)

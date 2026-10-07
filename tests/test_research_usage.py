@@ -99,3 +99,19 @@ def test_a_window_is_charged_to_a_run_only_until_it_ended_or_the_next_run_began(
         assert usage.run_usage(con, runs.get(con, second["id"]))["total"]["cost"] == 50.0
         con.execute("UPDATE research_runs SET status='failed', updated_at=99999 WHERE id=?", (first["id"],))
         assert usage.run_usage(con, runs.get(con, first["id"]))["total"]["cost"] == 4.0, "never past run B's start"
+
+
+@pytest.mark.parametrize("status", ["active", "waiting_input", "stopping"])
+def test_a_run_still_going_is_counted_to_now(tmp_path, monkeypatch, status):
+    monkeypatch.setattr(repo, "enabled", lambda *a: False)
+    monkeypatch.setattr(tasks, "task_state_dir", lambda tid: str(tmp_path / "state" / tid))
+    monkeypatch.setattr(sessions, "sessions_root", lambda: str(tmp_path / "sessions"))
+    with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
+        runs.init(con)
+        run = runs.create(con, workspace=str(tmp_path), question="Run A")
+        window = _session(tmp_path / "sessions" / "last-order" / "window.jsonl",
+                          _call("big", 100, 1.0, 1_050_000), _call("big", 700, 7.0, 9_000_000))
+        runs.set_state(con, run["id"], root_session=str(window))
+        con.execute("UPDATE research_runs SET status=?, created_at=1000, updated_at=1100 WHERE id=?",
+                    (status, run["id"]))
+        assert usage.run_usage(con, runs.get(con, run["id"]))["total"]["cost"] == 8.0

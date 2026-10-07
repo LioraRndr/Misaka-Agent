@@ -1852,7 +1852,7 @@ class Daemon:
                        "MISAKA_USAGE_TASK_ID": task_id,
                        "MISAKA_USAGE_GENERATION": str(generation),
                        "MISAKA_USAGE_CLAIM_LOCK": lock,
-                       "MISAKA_USAGE_TOKEN_CAP": str(int(CFG["token_cap"] or 0))}
+                       "MISAKA_USAGE_TOKEN_CAP": ""}          # settings.json, read at each request
             if reuse is not None and self.panes.get(reuse.id) is reuse:
                 pane = reuse
                 await self._replace_program(pane, argv, cwd=workspace, env=hosting, title=title)
