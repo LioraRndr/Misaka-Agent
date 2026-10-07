@@ -22,3 +22,39 @@ def test_a_gone_or_reused_pid_is_absent_and_a_live_one_is_ended():
     finally:
         if child.poll() is None:
             child.kill()
+
+
+def test_a_dead_leaders_children_are_ended_too(monkeypatch):
+    """Windows keeps the dead leader's PID as its children's parent and has no group to signal:
+    the old attempt's tool processes went on writing while the card ran again."""
+    import os
+    import time
+
+    import psutil
+
+    leader = subprocess.Popen([sys.executable, "-c", "pass"])
+    recorded = processes.identity(leader.pid)
+    leader.wait(5)
+    time.sleep(0.05)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    stranger = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        def windows_like(attrs=None):
+            for process in (psutil.Process(child.pid), psutil.Process(stranger.pid)):
+                process.info = {"ppid": leader.pid if process.pid == child.pid else os.getpid(),
+                                "create_time": process.create_time()}
+                yield process
+        monkeypatch.setattr(psutil, "process_iter", windows_like)
+        assert processes._terminate_recorded_tree(leader.pid, recorded) is True
+        assert child.wait(5) is not None
+        assert stranger.poll() is None, "a process with another parent is left alone"
+    finally:
+        for process in (child, stranger):
+            if process.poll() is None:
+                process.kill()
+
+
+def test_this_process_holding_a_dead_roots_pid_reclaims_it():
+    import os
+    assert processes._terminate_recorded_tree(os.getpid(), "elsewhere:1:0.0") is True
+    assert processes._terminate_recorded_tree(os.getpid(), processes.identity(os.getpid())) is False

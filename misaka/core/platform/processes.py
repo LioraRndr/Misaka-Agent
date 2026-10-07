@@ -207,17 +207,41 @@ def terminate_orphaned_group(pgid: int, leader_identity: str) -> bool:
 
 
 def _terminate_recorded_tree(pid: int, leader_identity: str) -> bool:
-    """The non-POSIX half of :func:`terminate_orphaned_group`: gone, or now another process's PID,
-    is absent; the recorded process still running is terminated with its tree."""
-    if pid <= 0 or pid == os.getpid():
+    """The non-POSIX half of :func:`terminate_orphaned_group`: now another process's PID is absent;
+    the recorded process still running is terminated with its tree; gone, its children that outlived
+    it are -- Windows has no process group to signal, and they keep the dead leader's PID as their
+    parent's (a card's bash or tool processes would otherwise go on writing into the workspace while
+    the card runs again)."""
+    if pid <= 0:
         return False
     current = identity(pid)
+    if current is not None and not same_identity(current, leader_identity):
+        return True                                # the PID is another process's now (this one's, even)
+    if pid == os.getpid():
+        return False
     if current is None:
-        return not psutil.pid_exists(pid)          # alive but unreadable cannot be named the orphan
-    if not same_identity(current, leader_identity):
+        if psutil.pid_exists(pid):
+            return False                           # alive but unreadable cannot be named the orphan
+        for child in _outlived_children(pid, leader_identity):
+            terminate(child.pid)
         return True
     terminate(pid)
     return not identity_is_alive(pid, leader_identity)
+
+
+def _outlived_children(pid: int, leader_identity: str) -> list[psutil.Process]:
+    """Processes whose parent is the dead ``pid`` and that started after it did: its own children.
+    Without the leader's start time nothing can be told apart from an unrelated later process."""
+    parts = _identity_parts(leader_identity)
+    started = parts[2] if parts else None
+    if started is None:
+        return []
+    found = []
+    for process in psutil.process_iter(["ppid", "create_time"]):
+        info = process.info
+        if info.get("ppid") == pid and (info.get("create_time") or 0) >= started - IDENTITY_TOLERANCE_SECONDS:
+            found.append(process)
+    return found
 
 
 def _token(process: psutil.Process) -> ProcessToken | None:

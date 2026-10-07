@@ -58,7 +58,8 @@ MCP servers are set per role, in that role's own `settings.json`, in the shape H
 `/mcp` in her window lists the servers and their tools.
 
 A server starts with a small part of MISAKA's environment: `PATH`, `HOME`, the locale, the proxy
-and certificate variables and the like, never an API key. A key it needs goes in its `env`, where
+and certificate variables, the settings of npm, uv and pip (a registry mirror reaches `npx` and
+`uvx`) and the like, never an API key. A key it needs goes in its `env`, where
 `${NAME}` takes the value from the environment (or the home's `.env`):
 
 ```json

@@ -50,8 +50,11 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 # What a stdio server inherits from MISAKA's environment, which holds API keys (the home's .env is
 # loaded into it). Hermes' ``_SAFE_ENV_KEYS`` and its Windows list (tools/mcp_tool_config.py; the MCP
 # SDK's ``get_default_environment`` is the same idea), plus what a networked server needs to reach
-# the network where MISAKA does: the proxy and certificate variables. Anything else a server needs
-# goes in its ``env``, where ``${VAR}`` takes the value from the environment.
+# the network where MISAKA does: the proxy and certificate variables, and the package managers' own
+# settings -- an `npx -y` or `uvx` server fetches itself at start, through the registry mirror and
+# proxy the user set for npm, uv or pip (0.18.9 dropped them, and such a server timed out behind a
+# mirror). Anything else a server needs goes in its ``env``, where ``${VAR}`` takes the value from
+# the environment.
 _SAFE_ENV_KEYS = frozenset({"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR", "MISAKA_HOME"})
 _SAFE_ENV_KEYS_CASE_INSENSITIVE = frozenset({
     "ALLUSERSPROFILE", "APPDATA", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
@@ -59,24 +62,27 @@ _SAFE_ENV_KEYS_CASE_INSENSITIVE = frozenset({
     "PATHEXT", "PROCESSOR_ARCHITECTURE", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
     "PUBLIC", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERDOMAIN", "USERNAME", "USERPROFILE", "WINDIR",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"})
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS", "PYTHONUTF8", "PYTHONIOENCODING", "LOGNAME", "SSH_AUTH_SOCK", "JAVA_HOME"})
+_PACKAGE_MANAGER_PREFIXES = ("NPM_CONFIG_", "YARN_", "PNPM_", "COREPACK_", "UV_", "PIP_")
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
 def inherited_env(environ=None):
-    """What a stdio server takes from MISAKA's environment: the safe names, ``LC_*`` and ``XDG_*``."""
+    """What a stdio server takes from MISAKA's environment: the safe names, ``LC_*``, ``XDG_*`` and
+    the package managers' settings."""
     environ = os.environ if environ is None else environ
     return {key: value for key, value in environ.items()
             if key in _SAFE_ENV_KEYS or key.upper() in _SAFE_ENV_KEYS_CASE_INSENSITIVE
-            or key.startswith(("XDG_", "LC_"))}
+            or key.startswith(("XDG_", "LC_")) or key.upper().startswith(_PACKAGE_MANAGER_PREFIXES)}
 
 
 def configured_env(configured, environ=None):
     """A server's own ``env`` with ``${VAR}`` resolved from the environment; an unset variable keeps
-    its placeholder, as in Hermes."""
+    its placeholder, as in Hermes. A null value is no value (it read "None")."""
     environ = os.environ if environ is None else environ
     return {str(key): _ENV_VAR_PATTERN.sub(lambda m: environ.get(m.group(1).strip(), m.group(0)), str(value))
-            for key, value in (configured or {}).items()}
+            for key, value in (configured or {}).items() if value is not None}
 
 
 

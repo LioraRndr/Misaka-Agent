@@ -7,16 +7,21 @@ because noticing needs the loop. ``faulthandler``'s watchdog is a C thread that 
 loop nor the GIL: the running loop re-arms it every ``STALL_SECONDS / 4``, and if no loop re-arms
 it, it writes every thread's stack to ``logs/stalls/<label>-<pid>.log`` -- and, in a process that
 exits on a stall (an unattended card, node or sub-agent), ends it with status 1, which every
-supervisor already treats as a crashed attempt and retries.
+supervisor already treats as a crashed attempt and retries. A log with no stall in it is removed
+when its process ends, and logs older than ``KEEP_DAYS`` when the next process starts.
 
 Nothing happens until a process entry calls :func:`configure`; library code and tests are
 untouched. Whichever loop is running re-arms the one timer, so ``run_coro``'s nested loop (whose
 caller's loop is waiting on it) keeps the watch going. Known limit: with two loops alive in two
-threads, the live one keeps re-arming while the other is frozen.
+threads, the live one keeps re-arming while the other is frozen. A process stopped from outside
+(SIGSTOP, a debugger) for longer than the limit is taken for stalled when it continues: the C timer
+counts the stopped time and fires before any Python code runs. The TUI's own Ctrl+Z disarms first
+(:func:`suspend`).
 """
 from __future__ import annotations
 
 import asyncio
+import atexit
 import faulthandler
 import os
 import re
@@ -25,6 +30,7 @@ import sysconfig
 import time
 
 STALL_SECONDS = 300.0
+KEEP_DAYS = 14
 _settings: dict | None = None
 _file = None
 _depth = 0
@@ -53,17 +59,61 @@ def _open():
     if _file is None:
         path = log_path(_settings["label"], os.getpid())
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        _prune(os.path.dirname(path))
         _file = open(path, "a", encoding="utf-8")  # noqa: SIM115 - faulthandler needs it open for the process's life
+        before = _file.tell()
         _file.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {_settings['label']} pid {os.getpid()} "
                     f"stall {_seconds():g} s exit {_settings['exit']} argv {sys.argv!r}\n")
         _file.flush()
+        atexit.register(_drop_if_clean, _file, path, before, _file.tell())
     return _file
+
+
+def _drop_if_clean(file, path: str, before: int, after: int) -> None:
+    """At a normal exit: take this process's header back out when nothing followed it (a stall
+    exits through faulthandler, never through here, so its stack stays)."""
+    try:
+        if os.path.getsize(path) != after:
+            return
+        file.close()
+        if before == 0:
+            os.remove(path)
+        else:
+            os.truncate(path, before)
+    except OSError:
+        pass
+
+
+def _prune(folder: str) -> None:
+    cutoff = time.time() - KEEP_DAYS * 86400
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.name.endswith(".log") and entry.stat().st_mtime < cutoff:
+                os.remove(entry.path)
+        except OSError:
+            continue
+
+
+def _arm(seconds: float) -> None:
+    faulthandler.dump_traceback_later(seconds, repeat=not _settings["exit"], file=_open(), exit=_settings["exit"])
 
 
 async def _rearm(seconds: float) -> None:
     while True:
-        faulthandler.dump_traceback_later(seconds, repeat=not _settings["exit"], file=_open(), exit=_settings["exit"])
+        _arm(seconds)
         await asyncio.sleep(seconds / 4)
+
+
+def suspend() -> None:
+    """Disarm before this process stops itself (the TUI's Ctrl+Z): the C timer would count the
+    stopped time and fire the moment the process continued -- an exit, in an unattended window.
+    The loop re-arms itself on its first turn after it continues."""
+    if _settings is not None:
+        faulthandler.cancel_dump_traceback_later()
 
 
 async def watched(coro):
@@ -71,6 +121,9 @@ async def watched(coro):
     global _depth
     if _settings is None:
         return await coro
+    # Armed now, not on the re-arm task's first turn: a coroutine that blocks before its first
+    # suspension (a session being built) would otherwise run unwatched.
+    _arm(_seconds())
     rearm = asyncio.ensure_future(_rearm(_seconds()))
     _depth += 1
     try:
@@ -83,6 +136,7 @@ async def watched(coro):
 
 
 _FRAME = re.compile(r'File "([^"]+)", line (\d+) in (\S+)')
+_HEADER = re.compile(r"^--- .* stall ([0-9.]+) s exit ", re.MULTILINE)
 
 
 def report(label: str, pid: int | None = None, *, since: float | None = None) -> str | None:
@@ -105,8 +159,14 @@ def report(label: str, pid: int | None = None, *, since: float | None = None) ->
             text = f.read()
     except OSError:
         return None
+    # Only the last process's section: a reused PID appends to an earlier process's log, and that
+    # process's stall is not this one's. Its own header says the limit it ran with.
+    headers = list(_HEADER.finditer(text))
+    if headers:
+        text = text[headers[-1].start():]
     if "Timeout (" not in text:
         return None
+    seconds = float(headers[-1].group(1)) if headers else _seconds()
     last = text[text.rindex("Timeout ("):]
     # The loop's thread is the one inside asyncio's run loop; its first frame is where it is stuck.
     for block in re.split(r"\n(?=(?:Current thread|Thread) 0x)", last):
@@ -120,5 +180,5 @@ def report(label: str, pid: int | None = None, *, since: float | None = None) ->
             if own is not None and own != frames[0]:
                 shown.append(own)
             where = " <- ".join(f"{os.path.basename(file)}:{line} in {func}" for file, line, func in shown)
-            return f"the event loop was blocked for over {_seconds():g} s at {where}; full stack in {path}"
-    return f"the event loop was blocked for over {_seconds():g} s; stack in {path}"
+            return f"the event loop was blocked for over {seconds:g} s at {where}; full stack in {path}"
+    return f"the event loop was blocked for over {seconds:g} s; stack in {path}"

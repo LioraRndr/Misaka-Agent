@@ -117,6 +117,8 @@ fit in what is left. Raise the cap, or set it to `0` for no cap, and resume the 
 Every MISAKA process writes the stack of an event loop stuck for over five minutes to
 `~/.misaka/logs/stalls/`. A card, node or sub-agent nobody is watching then exits, and is
 retried; its failure reason names the line it was stuck at. Attach that log to a bug report.
+Logs are kept for 14 days. A process stopped from outside for longer than five minutes (SIGSTOP, a
+debugger) is taken for stuck when it continues; the TUI's own Ctrl+Z is not.
 
 **A resumed run can't find a Sister.**
 A card was given to a Sister you have since removed. Create her again with the same number

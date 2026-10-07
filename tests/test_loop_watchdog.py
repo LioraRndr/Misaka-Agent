@@ -11,7 +11,7 @@ import pytest
 from misaka.utils import loop_watchdog
 
 SCRIPT = textwrap.dedent('''
-    import asyncio, re, sys, time
+    import asyncio, os, re, signal, sys, time
     from misaka.utils import loop_watchdog
 
     def spin_forever():
@@ -22,8 +22,14 @@ SCRIPT = textwrap.dedent('''
         re.match(r"(a+)+$", "a" * 40 + "!")
 
     async def body(kind):
+        if kind == "early":
+            spin_forever()              # before the coroutine first yields
         await asyncio.sleep(0.2)
-        if kind == "python":
+        if kind == "suspended":
+            loop_watchdog.suspend()     # as the TUI's Ctrl+Z does
+            os.kill(os.getpid(), signal.SIGSTOP)
+            await asyncio.sleep(0.5)
+        elif kind == "python":
             spin_forever()
         elif kind == "regex":
             backtrack_forever()
@@ -62,9 +68,52 @@ def test_an_attended_process_writes_the_stack_and_goes_on(tmp_path):
     assert code == 0 and "Timeout (" in log
 
 
-def test_a_healthy_loop_writes_no_stack(tmp_path):
-    code, log, _logs = _run(tmp_path, "healthy")
-    assert code == 0 and "Timeout (" not in log
+def test_a_healthy_loop_writes_no_stack_and_leaves_no_log(tmp_path):
+    code, _log, logs = _run(tmp_path, "healthy")
+    assert code == 0 and logs == []
+
+
+def test_a_coroutine_stuck_before_it_first_yields_is_caught(tmp_path):
+    code, log, _logs = _run(tmp_path, "early")
+    assert code == 1 and "spin_forever" in log
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SIGSTOP is POSIX")
+def test_a_process_that_suspends_itself_is_not_taken_for_stalled(tmp_path):
+    import signal
+    import time
+    env = {**os.environ, "MISAKA_HOME": str(tmp_path), "MISAKA_LOOP_STALL_SECONDS": "1"}
+    child = subprocess.Popen([sys.executable, "-c", SCRIPT, "suspended", "1", "1"], env=env)
+    time.sleep(3)                    # stopped for longer than the limit
+    child.send_signal(signal.SIGCONT)
+    assert child.wait(timeout=30) == 0
+
+
+def test_a_report_reads_only_the_last_process_of_a_reused_pid(tmp_path, monkeypatch):
+    monkeypatch.setenv("MISAKA_HOME", str(tmp_path))
+    path = loop_watchdog.log_path("card-t_test", 4242)
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("--- 2026-10-01 10:00:00 card-t_test pid 4242 stall 1 s exit True argv []\n"
+                "Timeout (0:00:01)!\nThread 0x1 (most recent call first):\n"
+                '  File "/x/body.py", line 3 in spin_forever\n'
+                "--- 2026-10-08 10:00:00 card-t_test pid 4242 stall 300 s exit True argv []\n")
+    assert loop_watchdog.report("card-t_test", 4242) is None, "the earlier process's stall is not this one's"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write('Timeout (0:05:00)!\nCurrent thread 0x2 (most recent call first):\n  File "/x/a.py", line 9 in hang\n')
+    assert "over 300 s" in loop_watchdog.report("card-t_test", 4242)
+
+
+def test_old_logs_are_pruned_when_a_process_starts(tmp_path):
+    folder = tmp_path / "logs" / "stalls"
+    folder.mkdir(parents=True)
+    old, recent = folder / "card-old-1.log", folder / "card-recent-2.log"
+    for path in (old, recent):
+        path.write_text("--- header\nTimeout (\n", encoding="utf-8")
+    month_ago = os.path.getmtime(old) - 30 * 86400
+    os.utime(old, (month_ago, month_ago))
+    _run(tmp_path, "healthy")
+    assert not old.exists() and recent.exists()
 
 
 def test_an_unconfigured_process_is_not_watched(tmp_path):
