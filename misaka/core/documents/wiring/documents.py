@@ -658,6 +658,10 @@ def register(harn):
     class VerifyParams(BaseModel):
         doc_id: str = Field(description="Document ID.")
         quote: str = Field(description="Exact quotation to verify.")
+        page: int = Field(0, description=(
+            "The page you cite it on (the file's page, as doc_read numbers it). Given, the "
+            "quotation is looked for there first, and found only elsewhere it is reported with "
+            "the page it is on. 0 looks through the whole document."))
 
     @_register(
         harn, name="doc_verify", label="Locate quotation",
@@ -667,17 +671,23 @@ def register(harn):
         parameters=VerifyParams)
     async def doc_verify(tool_call_id, params, signal, on_update, ctx):
         root = await _off_loop(_owning_root, params.doc_id, ctx)
-        v = None if root is None else await _off_loop(
-            corpus.verify_quote, params.doc_id, params.quote, workspace=root)
+        found = None if root is None else await _off_loop(
+            corpus.locate_quote, params.doc_id, params.quote, params.page or None, workspace=root)
         if signal_aborted(signal):
             return _text("Cancelled.")
         if root is None:
             return _text("Document not found. Use doc_list to find its document ID.")
-        if not v:
-            return _text("No literal match in the indexed text. Inspect the document or page image for context and extraction differences.")
+        if found["status"] in ("not_found", "no_document"):
+            where = f" on page {params.page} or anywhere else" if params.page else ""
+            return _text(f"No literal match{where} in the indexed text. Inspect the document or page image "
+                         f"for context and extraction differences.")
+        v = found
         lines = [f"✅ Page {v['page']}, character {v['offset']}",
                  f"claim_hash {v['claim_hash']}",
                  f"Cite as: [{params.doc_id} p{v['page']}]"]
+        if found["status"] == "elsewhere":
+            lines[0] = (f"⚠ Not on page {params.page}: the quotation is on page {v['page']}, "
+                        f"character {v['offset']}. Cite the page it is on.")
         if v.get("printed"):
             # The file's page is the locator; the printed number is what a reader looks up.
             lines[0] += f" -- printed page {v['printed']} (from {v['printed_from']})"

@@ -82,9 +82,13 @@ What reading them needs:
 Agents use the same index through their tools: `doc_list`, `doc_outline`, `doc_read` (by outline
 node or page range), `doc_find` (literal text), `doc_page_image` (a page of a PDF, a DjVu or a deck,
 or one figure or embedded picture, as an image, for figures, tables, maps, slides and scans) and `doc_add`. `doc_verify` finds the page and character offset
-where a quotation occurs and returns a hash for it. It shows where the words are; whether they
+where a quotation occurs and returns a hash for it; given the page it is cited on, it says when
+the quotation is on another page instead. It shows where the words are; whether they
 support the claim is for the red team and Last Order to judge. On an OCR page, a
-match means the quotation matches what OCR read.
+match means the quotation matches what OCR read. In a research run, every quotation a finding
+cites from a document is looked for on its page whenever Last Order, the red team or the
+bundle reads it: one on another page, or not in the indexed text at all, is marked there (and
+listed in `SOURCES.md` under "Quotations not where they are cited"), never refused.
 
 What joins the index by itself:
 

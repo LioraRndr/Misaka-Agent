@@ -197,6 +197,7 @@ class _Collector:
         self.con, self.run, self.index = con, run, index
         self.sources = {}          # real path -> Source
         self.unresolved = []       # (locator, reason, by)
+        self.unlocated = []        # (locator, where the quotation is instead, by)
         self.consulted = set()
         self.seen = set()
         self.cards = {}            # real output dir -> task row
@@ -281,6 +282,9 @@ class _Collector:
                 if claim["source_file"]:
                     quote = f' — "{_clip(claim["quote"], 100)}"' if claim["quote"] else ""
                     self.cite(claim["source_file"], by + quote, bases)
+                    where = ledger.locate(claim, self.index.workspace)
+                    if where and not where.startswith("located"):
+                        self.unlocated.append((claim["source_file"], where, by + quote))
         for row in runs.artifacts(self.con, self.run["id"], task_id=task["id"]):
             self.scan(row["path"], f"in `{posix_relpath(row['path'], self.index.workspace)}`", bases)
         self.consulted |= self.consulted_by(task)
@@ -484,6 +488,10 @@ def _build(collector, *, folder, manifest, sources_dir, title, products, cards=(
     lines += ["", "## Consulted but not cited (left where they are)", ""]
     lines += [f"- `{r}`" + (f" — {provenance(os.path.join(index.workspace, r))}"
                             if provenance(os.path.join(index.workspace, r)) else "") for r in consulted] or ["- (none)"]
+    # Looked for again as the bundle is made: the page a quotation is cited on is compared with
+    # the page it is on. A mark for the reader, not a judgment on the claim (ledger.locate).
+    lines += ["", "## Quotations not where they are cited", ""]
+    lines += [f"- `{loc}` — {where} ({by})" for loc, where, by in collector.unlocated] or ["- (none)"]
     lines += ["", "## Unresolved locators", ""]
     lines += [f"- `{loc}` — {reason}" + (f" ({by})" if by else "") for loc, reason, by in collector.unresolved] or ["- (none)"]
     text = "\n".join(lines) + "\n"

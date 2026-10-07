@@ -436,6 +436,10 @@ my-research/
     └── <run>-SOURCES.md, <run>-sources/
 ```
 
+A `SOURCES.md` also lists the quotations that are not on the page a finding cites them on, with
+the page they are on, or that the document's indexed text does not contain (see
+[Documents and the web](sources.md)).
+
 `NODE.md`, the graph files, the paths list and every `SOURCES.md` and `sources/` are rebuilt from
 the run's records whenever something changes, so leave them unedited; the run itself is kept in
 `~/.misaka/`. Each file in `sources/` links to the original in the project, which is the one to

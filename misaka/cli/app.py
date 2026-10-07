@@ -197,6 +197,7 @@ def _parser(extension_commands=None):
     dc.add_argument("arg", nargs="?", help="File path (add), folder (scan; default: this folder), "
                                            "query (find), quote (verify), or document ID (tree)")
     dc.add_argument("--doc", help="Restrict to one document ID")
+    dc.add_argument("--page", type=int, help="verify: the page the quotation is cited on")
     dc.add_argument("--no-tree", action="store_true", help="Skip PageIndex structure extraction")
 
 
@@ -717,9 +718,12 @@ def _cmd_doc(args):
     elif args.action == "verify":
         if not args.arg or not args.doc:
             sys.exit("Usage: misaka doc verify <quote> --doc <doc-id>")
-        v = corpus.verify_quote(args.doc, args.arg, workspace=db.canonical_workspace())
-        if not v:
+        found = corpus.locate_quote(args.doc, args.arg, args.page, workspace=db.canonical_workspace())
+        if found["status"] in ("not_found", "no_document"):
             sys.exit("❌ Quote not found in that document.")
+        v = found
+        if found["status"] == "elsewhere":
+            print(f"⚠ Not on page {args.page}: it is on page {v['page']}.")
         printed = f" (printed p. {v['printed']}, from {v['printed_from']})" if v.get("printed") else ""
         print(f"✅ p{v['page']}{printed} offset {v['offset']}\n   claim_hash {v['claim_hash']}")
     elif args.action == "tree":

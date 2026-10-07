@@ -3,11 +3,18 @@
 Sources and quotations are optional locators. Artifact digests identify saved files;
 they do not certify a claim. Corrections remain alongside earlier declarations so
 Last Order and the red team can inspect the history themselves.
+
+A quotation cited on a page of a corpus document is looked for there whenever the claim is
+shown (``locate``), so a quotation on another page, or nowhere in the indexed text, is marked
+where Last Order, the red team and the bundle read it. It is a mark, never a refusal: OCR and
+typography make true quotations miss (GitHub issue #9: the page a quotation was cited on had
+never been compared with anything).
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,6 +40,25 @@ def findings(con, run_id, *, branch_id=None, task_id=None, limit=None, offset=0)
             args.append(value)
     return con.execute(q + " ORDER BY created_at,rowid LIMIT ? OFFSET ?",
                        [*args, -1 if limit is None else int(limit), int(offset)]).fetchall()
+
+
+_DOC_LOCATOR = re.compile(r"^doc:([0-9a-f]{12})(?:#p(\d+))?$")
+
+
+def locate(claim, workspace):
+    """Where a claim's quotation is in the corpus document it cites, as one line -- or None for a
+    claim that cites no corpus document or quotes nothing."""
+    match = _DOC_LOCATOR.match(str(claim["source_file"] or ""))
+    if not match or not str(claim["quote"] or "").strip():
+        return None
+    from misaka.core.documents import index as corpus
+    doc_id, cited = match.group(1), int(match.group(2)) if match.group(2) else None
+    found = corpus.locate_quote(doc_id, claim["quote"], cited, workspace=workspace)
+    printed = f" (printed p. {found['printed']})" if found.get("printed") else ""
+    return {"on_page": f"located on p{found.get('page')}{printed}",
+            "elsewhere": f"NOT on the cited p{cited}: the quotation is on p{found.get('page')}{printed}",
+            "not_found": "NOT FOUND in the document's indexed text (OCR or typography may differ; check the page)",
+            "no_document": "the cited document is not in this project's corpus"}[found["status"]]
 
 
 def claims(con, finding_id):

@@ -55,7 +55,8 @@ def build(con, run, *, node):
     findings = []
     for finding in ledger.findings(con, run["id"]):
         evidence = [{"source_file": claim["source_file"], "quote": claim["quote"],
-                     "evidence_sha": claim["evidence_sha"]}
+                     "evidence_sha": claim["evidence_sha"],
+                     **({"located": where} if (where := ledger.locate(claim, run["workspace"])) else {})}
                     for claim in ledger.claims(con, finding["id"])]
         findings.append({"id": finding["id"], "text": finding["text"],
                          "task_id": finding["task_id"],

@@ -2364,6 +2364,27 @@ def verify_quote(doc_id, quote, page=None, workspace=None):
     return None
 
 
+def locate_quote(doc_id, quote, page=None, workspace=None):
+    """Where a quotation cited on ``page`` actually is: ``{"status": ...}`` with ``status`` one of
+    ``"on_page"`` (where it was cited, or anywhere when no page was given), ``"elsewhere"`` (not
+    on the cited page; ``page`` says where it is), ``"not_found"``, or ``"no_document"``.
+
+    A locator, never a verdict (prompt.QUOTATION_LOCATOR_GUIDELINE): OCR and typography make
+    a true quotation miss. What it rules out is the quiet case GitHub issue #9 found, where a
+    quotation matched somewhere in a book and the page cited for it was never compared.
+    """
+    if not resolve_doc(doc_id, workspace=workspace):
+        return {"status": "no_document", "cited_page": page}
+    found = verify_quote(doc_id, quote, page=page, workspace=workspace)
+    if found:
+        return {"status": "on_page", "cited_page": page, **found}
+    if page is not None:
+        found = verify_quote(doc_id, quote, workspace=workspace)
+        if found:
+            return {"status": "elsewhere", "cited_page": page, **found}
+    return {"status": "not_found", "cited_page": page}
+
+
 def tree_outline(doc_id, max_nodes=120, workspace=None):
     tree = _tree(doc_id, workspace=workspace)
     m = _meta(doc_id, workspace=workspace)

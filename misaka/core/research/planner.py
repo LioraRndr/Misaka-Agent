@@ -93,7 +93,8 @@ Rules:
 
 OPTIONAL_MATERIAL_TOOLS = ("x_search", "browser_navigate", "browser_snapshot", "browser_get_images", "browser_vision")
 MATERIAL_TOOLS = ("read", "misaka_research_view", "web_search", "web_fetch", "web_extract", "download_file",
-                  "doc_list", "doc_outline", "doc_read", "doc_find", "doc_page_image", "doc_add", *OPTIONAL_MATERIAL_TOOLS)
+                  "doc_list", "doc_outline", "doc_read", "doc_find", "doc_verify", "doc_page_image", "doc_add",
+                  *OPTIONAL_MATERIAL_TOOLS)
 RESEARCH_TOOLS = (*MATERIAL_TOOLS, "skills_list", "skill_view")
 
 # A research Sister's working rules, appended once to her system prompt (worker.card_session_setup)
@@ -935,7 +936,7 @@ def task_sources(con, run, rows):
         finds = []
         for finding in ledger.findings(con, run["id"], task_id=row["id"]):
             finds.append({"text": finding["text"], "claim_type": finding["claim_type"],
-                          "claims": [dict(claim) for claim in ledger.claims(con, finding["id"])]})
+                          "claims": [_located(claim, run) for claim in ledger.claims(con, finding["id"])]})
         # The ledger already holds what it accepted; only a submitted finding it does not hold
         # (rejected, or never ingested) is worth a second listing.
         recorded = {item["text"] for item in finds}
@@ -949,12 +950,21 @@ def task_sources(con, run, rows):
     return parts
 
 
+def _located(claim, run):
+    """A claim as Last Order and the red team read it: where its quotation actually is, if anywhere."""
+    out = dict(claim)
+    where = ledger.locate(claim, run["workspace"])
+    if where:
+        out["located"] = where
+    return out
+
+
 def evidence_block(con, run, node):
     """The node's declarations and source locators, wrapped as untrusted data."""
     findings = []
     for finding in ledger.findings(con, run["id"], branch_id=node["id"]):
         findings.append({**dict(finding),
-                         "claims": [dict(row) for row in ledger.claims(con, finding["id"])]})
+                         "claims": [_located(row, run) for row in ledger.claims(con, finding["id"])]})
     return prompt_guard.untrusted("evidence-ledger", json.dumps(findings, ensure_ascii=False, indent=2))
 
 
