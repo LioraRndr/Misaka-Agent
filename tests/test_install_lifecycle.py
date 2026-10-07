@@ -84,7 +84,8 @@ def test_a_release_archive_is_known_for_what_it_is(tmp_path, monkeypatch):
     assert update._install_commands(install) is None and update.adding_extras(install, ["browser"]) is None
 
 
-@pytest.mark.parametrize("latest, says", [("v0.18.6", "is the latest release"), ("v0.18.7", "v0.18.7 is out")])
+@pytest.mark.parametrize("latest, says", [("v0.18.6", "is the latest release"), ("v0.18.7", "v0.18.7 is out"),
+                                          ("v0.18.5", "newer than the latest release (v0.18.5)")])
 def test_a_release_archive_is_updated_by_the_installer(tmp_path, monkeypatch, capsys, latest, says):
     monkeypatch.setattr(sys, "prefix", str(_archive(tmp_path) / "python"))
     monkeypatch.setattr(update, "describe", lambda: update.Install("bundle", False, "", tmp_path, None, "0.18.6"))
@@ -93,7 +94,8 @@ def test_a_release_archive_is_updated_by_the_installer(tmp_path, monkeypatch, ca
     assert update.run(apply=True) == 0
     out = capsys.readouterr().out
     assert says in out
-    assert ("install.sh | sh" in out) == (latest != "v0.18.6") and "pip install" not in out
+    assert ("install.sh | sh" in out) == (latest == "v0.18.7") and "pip install" not in out
+    assert "Tracking the main branch" not in out and "could not be compared" not in out
 
 
 def test_installed_extras_are_named_the_widest_way(monkeypatch):

@@ -272,13 +272,21 @@ def _bundle_update(install: Install) -> int:
 
     Running pip here, as the advice for a built package says, would install into whatever
     Python is on PATH and leave this archive exactly as it was."""
+    import re
     _report(install, None, None)
     latest, failure = _api("/releases/latest")
     tag = str((latest or {}).get("tag_name") or "").lstrip("v")
+
+    def order(version):
+        return tuple(int(part) for part in re.findall(r"\d+", version)[:3])
     if failure or not tag:
         ui.print_info("", f"Could not ask GitHub for the latest release ({failure or 'no tag'}).")
-    elif tag == install.version:
+    elif order(tag) == order(install.version):
         ui.print_success(f"v{install.version} is the latest release.")
+        return 0
+    elif order(tag) < order(install.version):
+        # A pre-release is not "latest" on GitHub until it is published.
+        ui.print_success(f"v{install.version} is newer than the latest release (v{tag}).")
         return 0
     else:
         ui.print_info("", f"v{tag} is out; this is v{install.version}.")
@@ -498,6 +506,8 @@ def _report(install: Install, state: dict | None, behind: int | None) -> None:
         _token, source = github_token()
         ui.print_check(bool(_token) or None, "github token",
                        f"from {source}" if source else "none found; only a public repository can be checked")
+    if install.kind == "bundle":
+        return                              # a release, compared with releases (_bundle_update)
     if behind is None:
         ui.print_check(None, BRANCH, "could not be compared" + (f": {state['reason']}" if state and state.get("reason") else ""))
     elif behind == 0:
@@ -509,11 +519,11 @@ def _report(install: Install, state: dict | None, behind: int | None) -> None:
 def run(*, apply: bool = False) -> int:
     ui.print_header("Update")
     install = describe()
+    if install.kind == "bundle":
+        return _bundle_update(install)
     ui.print_info(f"Tracking the {BRANCH} branch of {REPO}, the way Hermes tracks its own:",
                   "a fast-forward or nothing. Releases are cut rarely; the branch is the product.", "")
 
-    if install.kind == "bundle":
-        return _bundle_update(install)
     state = _checkout_state(install) if install.kind == "checkout" else None
     if state is not None:
         behind = state.get("behind")
