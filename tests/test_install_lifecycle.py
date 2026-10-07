@@ -323,3 +323,24 @@ def test_an_archive_unpacked_in_a_folder_named_cellar_is_ours(tmp_path, monkeypa
     """Any path part "Cellar" read as Homebrew: uninstall would have run `brew uninstall misaka`."""
     monkeypatch.setattr(sys, "prefix", str(_archive(tmp_path / "Cellar" / "downloads") / "python"))
     assert update.describe().installer == ""
+
+
+def test_a_run_whose_driver_died_does_not_hold_up_an_update(tmp_path, monkeypatch):
+    """Killed mid-run, its driver's lease ran out; stopping it from a window leaves it "stopping"
+    with nobody to finish the stop, and every update refused until it was resumed."""
+    import time
+    from contextlib import closing
+
+    from misaka.core.platform import repo, tasks
+    from misaka.core.research import runs
+    monkeypatch.setattr(repo, "enabled", lambda *a, **k: False)
+    with closing(tasks.connect(str(home.path("db")))) as con:
+        runs.init(con)
+        live = runs.create(con, workspace=str(tmp_path), question="Live")
+        dead = runs.create(con, workspace=str(tmp_path), question="Dead")
+        con.execute("UPDATE research_runs SET driver_lock='d1', driver_expires=? WHERE id=?",
+                    (int(time.time()) + 600, live["id"]))
+        con.execute("UPDATE research_runs SET driver_lock='d2', driver_expires=? WHERE id=?",
+                    (int(time.time()) - 600, dead["id"]))
+    found = update.active_runs()
+    assert [line.split()[0] for line in found] == [live["id"]]

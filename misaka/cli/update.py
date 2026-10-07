@@ -142,9 +142,13 @@ def installed_extras() -> list[str]:
 
 
 def active_runs() -> list[str]:
-    """Research runs in flight, as ``<run id>  <project>``, read without taking a write lock.
-    A board that cannot be read reports none: this is a courtesy check, not the board's guard."""
+    """Research runs in flight, as ``<run id>  <project>``, read without taking a write lock: a run
+    whose driver holds a live lease. One whose driver died is paused, not in flight -- it resumes
+    as well after the update -- and it used to block every update until resumed, since stopping
+    it from a window leaves it "stopping" with no driver to finish the stop. A board that cannot
+    be read reports none: this is a courtesy check, not the board's guard."""
     import sqlite3
+    import time
     from contextlib import closing
 
     from misaka.config import home
@@ -154,8 +158,9 @@ def active_runs() -> list[str]:
         return []
     try:
         with closing(sqlite3.connect(board.resolve().as_uri() + "?mode=ro", uri=True)) as con:
-            rows = con.execute(f"SELECT id, workspace FROM research_runs WHERE status IN ({','.join('?' * len(ACTIVE))})",
-                               ACTIVE).fetchall()
+            rows = con.execute(f"SELECT id, workspace FROM research_runs WHERE status IN ({','.join('?' * len(ACTIVE))}) "
+                               "AND driver_lock IS NOT NULL AND (driver_expires IS NULL OR driver_expires>=?)",
+                               (*ACTIVE, int(time.time()))).fetchall()
     except sqlite3.Error:
         return []
     return [f"{run_id}  {home.display(workspace)}" for run_id, workspace in rows]
