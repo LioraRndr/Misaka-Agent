@@ -1122,11 +1122,17 @@ def _command_touches(command, workspace, live_roots, *, shell="bash", unattended
             # A token that is itself a command line -- `bash -c "..."`, `eval "..."`, a
             # `find -exec` payload -- hides its paths one level down.
             try:
-                pending.extend(shlex.split(item))
+                words = shlex.split(item)
             except ValueError:
                 if unattended:
                     return "dynamic"
-            continue
+                continue
+            if words != [item]:
+                pending.extend(words)
+                continue
+            # Only whitespace shlex does not split on is left (U+3000, U+00A0, ...). Bash does not
+            # split on it either, so this is one word: check it as a path. Re-queueing it unchanged
+            # never ended -- the guard spun on the session's event loop forever (GitHub issue #10).
         candidate = os.path.expanduser(item)
         if not os.path.isabs(candidate):
             candidate = os.path.join(workspace, candidate)
