@@ -33,6 +33,8 @@ def test_the_reported_command():
     assert _touches('cat "　x"') is None
 
 
-def test_an_unsplit_word_is_still_checked_as_a_path():
-    assert _touches('cat "live　skills/S.md"', workspace="/tmp/ws", roots={"/tmp/ws/live　skills"}) == "path"
-    assert _touches("bash -c 'grep \"a　b\" /tmp/live-skills/S.md'") == "path"
+def test_an_unsplit_word_is_still_checked_as_a_path(tmp_path):
+    live = str(tmp_path / "live　skills")
+    assert _touches('cat "live　skills/S.md"', workspace=str(tmp_path), roots={live}) == "path"
+    nested = str(tmp_path / "live-skills")
+    assert _touches(f"bash -c 'grep \"a　b\" {nested}/S.md'", roots={nested}) == "path"

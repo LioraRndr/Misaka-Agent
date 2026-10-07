@@ -17,11 +17,9 @@ permissions:
 
 jobs:
   checks:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [windows-2025, windows-11-arm]
-    runs-on: ${{ matrix.runner }}
+    # x64 only: on windows-11-arm, `uv sync` builds cryptography from source and fails (the
+    # release build installs a prebuilt arm64 wheel instead; see scripts/build_release.py).
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
         with:

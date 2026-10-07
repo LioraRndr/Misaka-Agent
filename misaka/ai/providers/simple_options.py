@@ -141,10 +141,11 @@ def thinking_allowance(model: Model, options: SimpleStreamOptions | None) -> int
     Mistral -- counts thinking inside ``maxTokens``. The one place these rules are written down:
     the token-cap meter (``misaka.core.platform.metering``) budgets a request from it.
     """
-    reasoning = getattr(options, "reasoning", None) if options is not None else None
+    from misaka.utils.values import read_field
+    reasoning = read_field(options, "reasoning") if options is not None else None
     if not reasoning or reasoning == "off" or not getattr(model, "reasoning", False):
         return 0
-    budgets = getattr(options, "thinkingBudgets", None)
+    budgets = read_field(options, "thinkingBudgets")
     if model.api == "anthropic-messages":
         from misaka.ai.providers.anthropic import _force_adaptive_thinking
         return 0 if _force_adaptive_thinking(model) is True else thinking_budget_for_level(reasoning, budgets)
