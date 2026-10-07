@@ -64,6 +64,7 @@ setting; `misaka setup`, `update` and `uninstall` still run so you can fix it.
 | `defaultProvider` / `defaultModel` | none | the model every role uses unless she has her own; `misaka setup model` writes these. Without them, a chat takes a signed-in provider's own default model, and Sisters' cards fall back to `anthropic` / `claude-sonnet-4-5`. |
 | `defaultThinkingLevel` | `medium` | the thinking level a new session starts at, for every role without her own |
 | `modelThinkingLevels` | none | a thinking level per `provider/model` |
+| `vision.model` | `browser.vision_model`, if set | one vision model (`provider/model`) for the whole home, not per role: it reads every image a request carries to a model that cannot see, and a model that can see is sent the image itself |
 
 In a role's own `settings.json`, `defaultProvider` / `defaultModel` pin that role's model and
 `defaultThinkingLevel` sets her thinking level. In her window, `/model` with Ctrl+S and
@@ -122,7 +123,6 @@ see [the team guide](../guide/team.md#a-sisters-profile).
 | Setting | Default | Meaning |
 |---|---|---|
 | `documents.ocr_langs` | `eng+chi_sim+jpn` | languages for reading scanned PDFs, joined with `+` (needs `ocrmypdf` and each language's data) |
-| `documents.vision_model` | `browser.vision_model`, if set | a vision model (`provider/model`) that reads pages and figures to a model without vision, which `doc_page_image` otherwise could not show anything to |
 | `web.*` | search works with no setup | set with `misaka web`; see [Documents and the web](../guide/sources.md#the-web) |
 | `web.allow_private_urls` | `false` | let web tools reach private and loopback addresses; cloud metadata addresses stay blocked |
 

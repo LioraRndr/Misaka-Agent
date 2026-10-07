@@ -4,7 +4,8 @@
 map, a chart or a plate, so it looked only when the prose happened to say "see figure 3". And a
 model without vision got nothing at all: the image is dropped from its request. FrontierAgent's
 reader names a page's figures as it reads ("figure not read: embedded image (covers 35% of
-page)"), and hands a model without vision what a vision model reads off the picture."""
+page)"); a model without vision is read the picture by the vision extension
+(tests/test_vision_extension.py)."""
 import base64
 import ctypes
 import io
@@ -168,48 +169,22 @@ async def test_a_figure_is_rendered_alone_at_the_resolution_its_labels_need(inde
         await _call("doc_page_image", {"doc_id": doc_id, "page": 2, "figure": 2, "_cwd": workspace})
 
 
-async def test_a_model_without_vision_is_given_what_a_vision_model_reads(indexed, monkeypatch):
+async def test_a_model_without_vision_gets_the_image_for_the_vision_extension_to_read(indexed, monkeypatch):
+    """The page tool reads nothing to a model itself: the vision extension does, for every image."""
     doc_id, workspace = indexed
-    asked = []
-
-    async def describe(image, question, ctx, selected, **kw):
-        asked.append((question, selected, kw["setting"]))
-        assert base64.b64decode(image["data"]) and image["mimeType"].startswith("image/")
-        return "A map: SMOLENSK."
-
     from misaka.core.web import vision
-    monkeypatch.setattr(vision, "describe", describe)
-    monkeypatch.setattr(documents, "_vision_model", lambda: ("openai/gpt-4o", "documents.vision_model"))
-    text_only = NS(input=["text"])
-    for _ in range(2):
-        result = await _call("doc_page_image", {"doc_id": doc_id, "page": 2, "figure": 1, "_cwd": workspace}, text_only)
-        text = result["content"][0]["text"]
-        assert "A map: SMOLENSK." in text and "doc_verify cannot locate it" in text
-        assert not any(getattr(part, "mimeType", None) for part in result["content"])
-    assert len(asked) == 1, "the same picture is read once and kept"
-    assert asked[0][0] == documents.VISION_PROMPT and asked[0][2] == "documents.vision_model"
-    await _call("doc_page_image", {"doc_id": doc_id, "page": 1, "_cwd": workspace}, text_only)
-    assert asked[1][0] == documents.VISION_FIGURE_PROMPT, "a page whose text doc_read has: figures only"
-
-
-async def test_no_figure_is_said_plainly(indexed, monkeypatch):
-    doc_id, workspace = indexed
-
-    async def describe(*a, **kw):
-        return documents.NO_FIGURE
-
-    from misaka.core.web import vision
-    monkeypatch.setattr(vision, "describe", describe)
-    monkeypatch.setattr(documents, "_vision_model", lambda: ("openai/gpt-4o", "documents.vision_model"))
-    result = await _call("doc_page_image", {"doc_id": doc_id, "page": 1, "_cwd": workspace}, NS(input=["text"]))
-    assert "found no figure on this page beyond its text" in result["content"][0]["text"]
+    monkeypatch.setattr(vision, "selected_model", lambda: ("openai/gpt-4o", "vision.model"))
+    result = await _call("doc_page_image", {"doc_id": doc_id, "page": 2, "figure": 1, "_cwd": workspace}, NS(input=["text"]))
+    assert any(getattr(part, "mimeType", None) for part in result["content"])
+    assert "will be omitted" not in result["content"][0]["text"]
 
 
 async def test_without_a_vision_model_a_text_model_is_told_how_to_get_one(indexed, monkeypatch):
     doc_id, workspace = indexed
-    monkeypatch.setattr(documents, "_vision_model", lambda: (None, None))
+    from misaka.core.web import vision
+    monkeypatch.setattr(vision, "selected_model", lambda: (None, None))
     result = await _call("doc_page_image", {"doc_id": doc_id, "page": 2, "_cwd": workspace}, NS(input=["text"]))
-    assert "documents.vision_model" in result["content"][0]["text"]
+    assert "vision.model" in result["content"][0]["text"]
 
 
 async def test_a_djvu_page_is_rendered_too(tmp_path):

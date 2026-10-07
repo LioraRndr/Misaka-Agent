@@ -62,8 +62,7 @@ What reading them needs:
   pages that have them. `doc_page_image(doc_id, page, figure=N)` shows one figure alone, at the
   resolution its labels need; without `figure` it shows the whole page, of a PDF or a DjVu. A
   model without vision cannot be shown an image at all, so for it the page or the figure is read
-  by the vision model in `documents.vision_model` (or `browser.vision_model`), and what that
-  model read comes back as text, kept beside the document so the same picture is paid for once.
+  in words by the team's vision model (`vision.model`, see [Models](models.md)).
   A value read off a figure is a reading, not a quotation: `doc_verify` cannot locate it.
 - **Pages.** In a PDF or DjVu file a page is a printed page. EPUB, HTML, text and Office files
   have none, so MISAKA cuts them into pages of about 3,000 characters at paragraph breaks, and

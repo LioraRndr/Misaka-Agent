@@ -100,6 +100,7 @@ LAYOUT: dict[str, Entry] = {
     "web_cache": Entry("cache/web", "cache"),
     "web_tools": Entry("cache/web-tools", "cache"),
     "office_cache": Entry("cache/office", "cache"),
+    "vision_cache": Entry("cache/vision", "cache"),
     "skill_blobs": Entry("cache/skill-blobs", "cache"),
     "skills_index": Entry("cache/skills", "cache"),
     "mcp_schema_cache": Entry("cache/mcp-schema.json", "cache"),

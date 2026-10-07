@@ -7,10 +7,9 @@ from misaka.core.extensions.types import ToolDefinition
 from misaka.core.platform.prompt_guard import untrusted
 from misaka.core.tools._common import run_with_abort
 from misaka.core.web import config
-from misaka.core.web.browser import settings
 from misaka.core.web.evidence import save_page
 from misaka.core.web.runtime import current_runtime
-from misaka.core.web.vision import describe
+from misaka.core.web.vision import describe, selected_model
 from misaka.utils.async_lifecycle import run_in_thread
 from misaka.utils.atomic import write_bytes
 from misaka.utils.image_process import process_image
@@ -68,10 +67,10 @@ async def image_content(body, question, ctx):
     model = getattr(ctx, 'model', None)
     if model is not None and 'image' in model.input:
         return [image]
-    selected = settings.config().get('vision_model')
+    selected, knob = selected_model()
     if not selected:
-        return [{'type': 'text', 'text': 'Screenshot saved. This model has no native vision; configure browser.vision_model for image analysis.'}]
-    text = await describe(image, question, ctx, selected, setting='browser.vision_model', purpose='browser_vision')
+        return [{'type': 'text', 'text': 'Screenshot saved. This model has no native vision; set vision.model to a vision model for image analysis.'}]
+    text = await describe(image, question, ctx, selected, setting=knob, purpose='browser_vision')
     return [{'type': 'text', 'text': text}]
 
 

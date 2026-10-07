@@ -1,14 +1,40 @@
 """A picture answered in words, for a model that cannot see it.
 
-The image goes to a vision model the user named (``provider/model``) with a question, and the
-answer comes back as text. The browser's screenshots used this first (``browser.vision_model``);
-the corpus's page and figure images use it as well (``documents.vision_model``). FrontierAgent's
-reader works the same way through its READDOC_VISION_* gateway: a main model without vision is
-handed a transcription instead of pixels.
+The image goes to the vision model the user named (``provider/model``) with a question, and the
+answer comes back as text. There is one such model for the whole system, ``vision.model`` in
+settings.json -- not one per role, the way a Sister's chat model is chosen -- because the job is
+the same for every role. ``browser.vision_model``, which named it for the browser alone before,
+is read when it is not set. The browser asks it about a screenshot; the ``vision`` extension has
+it read every image in a request to a model without vision. FrontierAgent's reader works the
+same way through its READDOC_VISION_* gateway, and its transcription prompt is used here.
 """
 import time
 
 from misaka.core.web import config
+
+# FrontierAgent, plugins/tools/_reader_core.py, _VISION_PROMPT.
+TRANSCRIBE = (
+    "Reproduce ALL content of this image faithfully and completely; do not summarize or guess. "
+    "First, one line: what it is (chart/diagram/table/form/photo/screenshot). Then: transcribe text "
+    "verbatim (exact numbers/units/labels); for any table preserve rows/columns and which cell each "
+    "value belongs to; for a chart/diagram give title, axes, legend, series and the values/relationships "
+    "it conveys; for purely visual elements describe only what carries information. Keep reading order. "
+    "Use [illegible] rather than guessing."
+)
+
+
+def selected_model():
+    """``(provider/model, the setting that named it)`` for reading images, or ``(None, None)``."""
+    from misaka.config.product import setting
+    selected = setting("vision", "model", None, str)
+    if selected:
+        return selected, "vision.model"
+    try:
+        from misaka.core.web.browser import settings as browser
+        selected = browser.config().get("vision_model")
+    except (ValueError, OSError):
+        selected = None                     # an unreadable web configuration names no model
+    return (selected, "browser.vision_model") if isinstance(selected, str) and selected else (None, None)
 
 
 async def describe(image, question, ctx, selected, *, setting, purpose, max_tokens=2048):
