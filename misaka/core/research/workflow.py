@@ -91,6 +91,44 @@ async def _progress(callback, stage, message, run=None, **details):
         await result
 
 
+# How often a driver looks for Sisters added to or removed from the roster while the run goes on.
+ROSTER_CHECK_SECONDS = 30
+_rosters = {}     # run id -> (when last looked, {Sister id: description})
+
+
+async def _roster_check(cfg, run, progress):
+    """Tell the run's Last Order when Sisters join or leave the roster while she works (GitHub issue
+    #9): every plan is made with the roster as it stands, but between plans nothing said it had
+    changed. The first look is the baseline; a change is a notice in her feed, read with her next
+    request."""
+    from misaka.core.network import roster
+    now = time.monotonic()
+    seen = _rosters.get(run["id"])
+    if seen and now - seen[0] < ROSTER_CHECK_SECONDS:
+        return
+    try:
+        current = {entry["id"]: entry["description"]
+                   for entry in await asyncio.to_thread(roster.routing_catalog, cfg.get("profiles_root"))}
+    except Exception:  # noqa: BLE001 - a notice: an unreadable roster is not the run's business to fail on
+        _LOG.debug("research: the roster could not be read", exc_info=True)
+        return
+    _rosters[run["id"]] = (now, current)
+    if seen is None:
+        return
+    added, removed = sorted(set(current) - set(seen[1])), sorted(set(seen[1]) - set(current))
+    if not added and not removed:
+        return
+    said = []
+    if added:
+        said.append("added " + "; ".join(f"{sid} ({' '.join(current[sid].split())[:100] or 'no description'})"
+                                         for sid in added))
+    if removed:
+        said.append("removed " + ", ".join(removed))
+    await _progress(progress, "roster_changed",
+                    f"The Sister roster changed while the run works: {'; '.join(said)}. Plans and follow-ups "
+                    "from now on assign from the roster as it is now.", run, added=added, removed=removed)
+
+
 def _write(con, run, node, kind, title, name, content, **metadata):
     with runs.owned_txn(con, run, node):
         return runs.write_text(con, run["id"], kind, title, runs.generated_path(name, node_id=node["id"]), content,
@@ -454,6 +492,7 @@ async def _drive_tasks_inner(con, cfg, runner, run_id, *, scope, context=None,
         if check_active:
             check_active()
         run = runs.get(con, run_id)
+        await _roster_check(cfg, run, progress)
         linked = [row for row in runs.tasks(con, run_id) if row["id"] in scope]
         for row in linked:
             previous = captured.get(row["id"])
@@ -1995,6 +2034,7 @@ async def _wait_level(con, cfg, spawner, run, handles, *, poll_seconds, progress
         await asyncio.sleep(poll_seconds)
         if driver_lock and not runs.heartbeat_driver(con, run["id"], driver_lock):
             raise RuntimeError(f"Research run {run['id']}: the driver lease was taken over by another process.")
+        await _roster_check(cfg, run, progress)
         halted = (runs.stop_requested(con, run["id"])
                   or budget.exhausted(con, cfg.get("token_cap")))
         if halted:
