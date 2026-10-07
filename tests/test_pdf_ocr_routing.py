@@ -410,3 +410,23 @@ def test_real_ocr_reads_every_scanned_page_in_place(tmp_path, kinds, stamp):
         else:
             assert f"SCANNED PAGE {n}" in pages[n - 1] and "magistrate" in pages[n - 1]
     assert "unread_pages" not in meta
+
+
+def test_a_reread_without_pdfiums_answer_keeps_a_plates_ocr(tmp_path, monkeypatch):
+    """Routed by text alone (pdfium's child timed out), a plate OCR read by its image cover went
+    back to its one-line caption, stamped current for good."""
+    ddir, source = tmp_path / "doc", tmp_path / "book.pdf"
+    (ddir / "pages").mkdir(parents=True)
+    source.write_bytes(b"%PDF-1.4\n")
+    layer = [typeset(n) for n in range(1, 6)] + ["Plate three. Canton harbour, as painted"]
+    stored = layer[:5] + [layer[5] + "\n\nCanton factories, junks, the Thirteen Hongs"]
+    for number, text in enumerate(stored, 1):
+        (ddir / "pages" / f"p{number:04d}.txt").write_text(text, encoding="utf-8")
+    (ddir / "meta.json").write_text(json.dumps({"extract_version": 2, "pages": 6, "ocr": True, "ocr_pages": [6]}),
+                                    encoding="utf-8")
+    monkeypatch.setattr(corpus, "_pdf_text_layer", lambda p: list(layer))
+    monkeypatch.setattr(corpus, "_pdf_visuals", lambda p, numbers: None)
+    monkeypatch.setattr(corpus, "_ocr_pages", lambda *a, **k: None)
+    assert corpus._reread(str(ddir), str(source), 6) == 6
+    assert (ddir / "pages" / "p0006.txt").read_text(encoding="utf-8") == stored[5]
+    assert json.loads((ddir / "meta.json").read_text(encoding="utf-8"))["extract_version"] == 2

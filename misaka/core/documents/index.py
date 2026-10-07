@@ -340,11 +340,16 @@ def _pdf_visuals(p, numbers):
     return None
 
 
-def _cover_and_marked(p):
-    """``_route``'s question about a PDF: ``{page: (image_cover, marked)}``."""
+def _cover_and_marked(p, learned=None):
+    """``_route``'s question about a PDF: ``{page: (image_cover, marked)}``. When pdfium cannot
+    answer, ``learned["visuals_unread"]`` says so: the routing then went by text alone."""
     def ask(numbers):
         seen = _pdf_visuals(p, numbers)
-        return None if seen is None else {n: (s["cover"], s["marked"]) for n, s in seen.items()}
+        if seen is None:
+            if learned is not None:
+                learned["visuals_unread"] = True
+            return None
+        return {n: (s["cover"], s["marked"]) for n, s in seen.items()}
     return ask
 
 
@@ -499,6 +504,8 @@ def figures(doc_id, workspace=None):
                     listed = docx.images(source)
                 else:
                     listed = _epub_images(source)
+                    if int(meta.get("extract_version") or 1) < 3:
+                        listed = _without_framed(listed)
             except (OSError, ValueError, zipfile.BadZipFile):
                 return {}
             found = _embedded_inventory(_stored_pages(ddir, count), listed)
@@ -834,7 +841,7 @@ def _pdf_pages(p, meta=None):
             return []
         _note(meta, "ocr", True)
         return [read[number] for number in sorted(read)]
-    routed = _route(pages, _cover_and_marked(p))
+    routed = _route(pages, _cover_and_marked(p, learned))
     if not routed:
         return pages                        # a real text layer on every page: never OCR over it
     ocr = _ocr_pages(p, learned, sorted(routed), len(pages))
@@ -1411,6 +1418,17 @@ def _epub_pages(p, chars=3000, meta=None):
     return _epub_read(p, chars, [])
 
 
+def _without_framed(listed):
+    """The pictures an EPUB read before extraction version 3 marked: none framed in <svg>, and an
+    alt-less one numbered without them -- its stored pages carry those markers, and matching them
+    against today's list showed the cover as figure 1 (0.18.9 sweep)."""
+    kept = [dict(image) for image in listed if not image.get("svg")]
+    for number, image in enumerate(kept, 1):
+        if not image["alt"]:
+            image["marker"] = f"![image {number}]"
+    return kept
+
+
 def _epub_images(p):
     """The pictures behind an EPUB's ``![...]`` markers, in marker order: ``[{"marker", "alt",
     "member"}]``, ``member`` the archive member the chapter's <img src> names, or None."""
@@ -1848,6 +1866,10 @@ def _reread(ddir, p, count):
         pages = extract_pages(p, meta=learned)
         if not _has_text_layer(pages):
             return count                    # nothing better to offer; asked again next time
+        if learned.pop("visuals_unread", False):
+            # Routed by text alone, a plate OCR read by its image cover would go back to its
+            # caption for good: read again when pdfium answers (0.18.9 sweep).
+            return count
     unread = {int(n): why for n, why in (learned.get("unread_pages") or {}).items()}
     ocr_missing = any(why.endswith(OCR_MISSING) for why in unread.values())
     was_ocr, now_ocr = _ocr_set(meta, count), _ocr_set(learned, len(pages or ()))
@@ -2069,6 +2091,7 @@ def ingest(p, title=None, with_tree=True, task_id=None, workspace=None):
     if not _has_text_layer(pages):
         raise _no_text_error(p, pages, extracted.pop("ocr_error", None))
     extracted.pop("ocr_error", None)        # the pages it cost are in unread_pages, with the reason
+    extracted.pop("visuals_unread", None)   # only a re-read asks it
     tree_wanted = with_tree and len(pages) >= TREE_MIN_PAGES
     tree_reason = {}
     tree = _outline_for(p, os.path.splitext(p)[1].lower(), pages, tree_reason) if tree_wanted else None

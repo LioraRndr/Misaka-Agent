@@ -138,3 +138,32 @@ def test_a_node_window_a_person_reads_is_left_open_on_a_stall(monkeypatch, pane,
     monkeypatch.setattr(node, "run_headless", lambda *a, **k: "headless")
     node.main("r_1", "b_1", runner_key="k")
     assert loop_watchdog._settings == {"label": "node-b_1", "exit": exits}
+
+
+TUI_SHUTDOWN = textwrap.dedent('''
+    import asyncio, os, signal
+    from misaka.utils import loop_watchdog
+
+    async def interactive():          # InteractiveMode: its own SIGTERM handler shuts it down in order
+        loop = asyncio.get_running_loop()
+        done = loop.create_future()
+        async def shutdown():
+            await asyncio.sleep(0.2)
+            print("shut down in order", flush=True)
+            done.set_result(0)
+        signal.signal(signal.SIGTERM, lambda *_: loop.create_task(shutdown()))
+        loop.call_later(0.1, os.kill, os.getpid(), signal.SIGTERM)
+        return await done
+
+    loop_watchdog.configure("chat", exit_on_stall=False)
+    raise SystemExit(asyncio.run(loop_watchdog.watched(interactive())))
+''')
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SIGTERM is POSIX")
+def test_a_window_that_takes_sigterm_itself_shuts_down_in_its_own_order(tmp_path):
+    """The watchdog's SIGTERM cancelled the window's task mid-shutdown: the terminal stayed raw."""
+    env = {**os.environ, "MISAKA_HOME": str(tmp_path)}
+    done = subprocess.run([sys.executable, "-c", TUI_SHUTDOWN], text=True, encoding="utf-8",
+                          env=env, capture_output=True, timeout=30, check=False)
+    assert done.returncode == 0 and "shut down in order" in done.stdout

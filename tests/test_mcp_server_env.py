@@ -41,6 +41,9 @@ def test_a_null_value_in_a_servers_env_is_no_value():
 def test_a_registrys_credentials_stay_behind_with_the_ssh_agent():
     secrets = {"npm_config_//registry.npmjs.org/:_authToken": "npm-secret", "NPM_CONFIG__AUTH": "b64",
                "UV_INDEX_1_PASSWORD": "pw", "YARN_NPM_AUTH_TOKEN": "y", "UV_PUBLISH_TOKEN": "t",
-               "PIP_CLIENT_CERT": "/c.pem", "SSH_AUTH_SOCK": "/tmp/agent.sock"}
-    env = mcp.inherited_env({**ENVIRON, **secrets, "npm_config_registry": "https://r"})
-    assert not set(secrets) & set(env) and env["npm_config_registry"] == "https://r"
+               "PIP_CLIENT_CERT": "/c.pem", "SSH_AUTH_SOCK": "/tmp/agent.sock", "NPM_CONFIG_KEY": "-----BEGIN",
+               "PIP_INDEX_URL": "https://user:pw@mirror.example/simple"}
+    kept = {"npm_config_registry": "https://r", "UV_KEYRING_PROVIDER": "subprocess", "PIP_TRUSTED_HOST": "m",
+            "npm_config_strict_ssl": "false", "UV_INDEX_STRATEGY": "unsafe-best-match"}
+    env = mcp.inherited_env({**ENVIRON, **secrets, **kept})
+    assert not set(secrets) & set(env) and kept.items() <= env.items()

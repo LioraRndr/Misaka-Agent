@@ -270,9 +270,6 @@ class Container:
 
 class TUI(Container):
     MIN_RENDER_INTERVAL_MS = 16
-    # A frame's cost is wall time, the terminal write included: one blocked for seconds (a Windows
-    # console with text selected, a stalled ssh link) would hold the next frame back as long.
-    MAX_RENDER_WAIT_MS = 250
     SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
     def __init__(self, terminal: Terminal, showHardwareCursor: bool | None = None) -> None:
@@ -609,8 +606,7 @@ class TUI(Container):
         # event per frame, fell minutes behind the provider and was cut off ("Connection
         # error.", GitHub issue #6). So a frame also waits as long as the last one took: painting
         # gets at most half the loop.
-        delay_ms = max(0.0, self.MIN_RENDER_INTERVAL_MS - elapsed,
-                       min(2 * self.lastRenderCostMs, self.MAX_RENDER_WAIT_MS) - elapsed)
+        delay_ms = max(0.0, self.MIN_RENDER_INTERVAL_MS - elapsed, 2 * self.lastRenderCostMs - elapsed)
         callback = lambda: self._run_scheduled_render(timer)
         if self._loop is not None:
             if self._loop.is_closed():
@@ -1039,11 +1035,14 @@ class TUI(Container):
             self._schedule_next_tick(self._scheduleRender)
             return
 
-        started = time.perf_counter()
+        # The frame's cost is the CPU this thread spent laying it out: a terminal write held up for
+        # seconds (a Windows console with text selected, a stalled ssh link) is not work the loop
+        # must be left time for, and counted it held the next frame back as long again.
+        started = time.thread_time()
         try:
             self._doRenderInner()
         finally:
-            self.lastRenderCostMs = (time.perf_counter() - started) * 1000
+            self.lastRenderCostMs = (time.thread_time() - started) * 1000
             self._renderLock.release()
 
     def _doRenderInner(self) -> None:

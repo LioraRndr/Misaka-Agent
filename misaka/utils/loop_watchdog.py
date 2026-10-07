@@ -131,10 +131,19 @@ def _end_on_sigterm():
     if os.name != "posix":
         return asked, lambda: None
     loop, task = asyncio.get_running_loop(), asyncio.current_task()
+
+    def ended():
+        # A window's TUI takes SIGTERM for its own clean shutdown (terminal restored, runtime
+        # disposed): once its handler stands in asyncio's place, the signal is the TUI's.
+        if signal.getsignal(signal.SIGTERM) is ours:
+            asked.append(True)
+            task.cancel()
+
     try:
-        loop.add_signal_handler(signal.SIGTERM, lambda: (asked.append(True), task.cancel()))  # windows-footgun: ok - POSIX only, returned early above
+        loop.add_signal_handler(signal.SIGTERM, ended)  # windows-footgun: ok - POSIX only, returned early above
     except (NotImplementedError, RuntimeError, ValueError):     # a loop off the main thread
         return asked, lambda: None
+    ours = signal.getsignal(signal.SIGTERM)
     return asked, lambda: loop.remove_signal_handler(signal.SIGTERM)
 
 

@@ -89,6 +89,7 @@ def _where_from(message: Any) -> str:
 
 async def read_images(event: dict, ctx: Any) -> dict | None:
     """The ``context`` handler: the request's images read into words for a model without vision."""
+    from misaka.core.web import vision
     from misaka.core.web.vision import TRANSCRIBE, describe, selected_model
 
     model = read_field(ctx, "model")
@@ -121,11 +122,16 @@ async def read_images(event: dict, ctx: Any) -> dict | None:
                 try:
                     text = await describe(image, question, ctx, selected, setting=knob,
                                           purpose="vision_bridge", max_tokens=4096)
+                    if not text.strip() or text.strip() == vision.CUT_OFF:
+                        raise ValueError("it returned no text")
                 except Exception as error:  # noqa: BLE001 - one unreadable image must not stop the turn
                     logger.warning("vision: %s could not read an image: %s", selected, error)
                     return (f"[An image that {selected} ({knob}) could not read for this model, which "
                             f"cannot see images: {error}]")
-            await asyncio.to_thread(_keep, key, text)
+            # A reading cut short is shown, never kept: the next turn reads the image again (a
+            # reasoning model that spent its output thinking used to leave such a reading for good).
+            if not text.endswith(vision.CUT_OFF):
+                await asyncio.to_thread(_keep, key, text)
         return (f"[An image, read to this model by {selected} ({knob}) because "
                 f"{read_field(model, 'id') or 'it'} cannot see images. What follows is that model's "
                 f"transcription, not the image itself: a quotation located in it is a reading.]\n"

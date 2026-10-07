@@ -68,11 +68,11 @@ async def describe(image, question, ctx, selected, *, setting, purpose, max_toke
     if stop in {'error', 'aborted'}:
         raise ValueError(getattr(result, 'errorMessage', None) or f'The vision model {setting} names failed')
     text = config.redact_secrets(''.join(getattr(item, 'text', '') for item in result.content))
-    # An empty or cut-off reading is not one to keep: the vision bridge caches what this returns
-    # (a reasoning model that spent its output thinking used to leave an empty reading for good).
-    if not text.strip():
-        raise ValueError(f'The vision model {setting} names returned no text'
-                         + (' before its output limit' if stop == 'length' else ''))
     if stop == 'length':
-        text += '\n[The reading stops here: the vision model reached its output limit.]'
+        text = (text.rstrip() + '\n' if text.strip() else '') + CUT_OFF
     return text
+
+
+# Said of a reading the vision model's output limit cut short (a reasoning model can spend all of
+# it thinking); the vision bridge does not keep such a reading as the image's.
+CUT_OFF = '[The reading stops here: the vision model reached its output limit.]'

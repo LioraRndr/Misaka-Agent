@@ -6,6 +6,7 @@ the names pi's code calls them by. Product-side CFG lives in misaka/config/produ
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 from importlib import metadata as importlib_metadata
@@ -103,9 +104,10 @@ def bundle_installer(root: Path) -> str:
     """Who put a release archive where it is: Homebrew keeps it in its Cellar, winget under its
     Packages folder; "" for MISAKA's own installer. Each is updated and removed by its own tool."""
     parts = [part.casefold() for part in Path(os.path.realpath(root)).parts]
-    if "cellar" in parts:
+    pairs = set(itertools.pairwise(parts))
+    if ("cellar", "misaka") in pairs:                      # <prefix>/Cellar/misaka/<version>/libexec
         return "Homebrew"
-    if "winget" in parts and "packages" in parts:
+    if ("winget", "packages") in pairs and any(part.startswith("luciole-studio.misaka") for part in parts):
         return "winget"
     return ""
 

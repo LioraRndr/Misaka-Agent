@@ -243,3 +243,14 @@ def test_a_picture_too_large_to_decode_here_is_refused_in_a_sentence():
     Image.new("RGB", (9000, 6000), "white").save(photo, format="JPEG")
     shown = Image.open(io.BytesIO(tools._pillow_png(photo.getvalue())))
     assert shown.size[0] * shown.size[1] <= tools.PICTURE_PIXELS_AT_MOST, "a JPEG is decoded smaller"
+
+
+def test_an_epub_read_by_version_2_keeps_its_pictures_in_their_places():
+    """Its pages carry no marker for a picture framed in <svg>, and numbered the rest without it:
+    matched against today's list, figure 1 was the cover."""
+    pages = ["Text.\n\n![image 1]\n\nMore.\n\n![image 2]"]
+    listed = [{"marker": "![image 1]", "alt": "", "member": "cover.jpg", "svg": True},
+              {"marker": "![image 2]", "alt": "", "member": "map.png"},
+              {"marker": "![image 3]", "alt": "", "member": "chart.png"}]
+    found = corpus._embedded_inventory(pages, corpus._without_framed(listed))
+    assert [image["member"] for image in found[1]["embedded"]] == ["map.png", "chart.png"]

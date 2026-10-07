@@ -52,8 +52,12 @@ class Terminal(ProcessTerminal):
 
 
 class SlowContent:
+    """Laying out a long reply is work: 30 ms of this thread's CPU."""
+
     def render(self, _width):
-        time.sleep(0.03)
+        until = time.thread_time() + 0.03
+        while time.thread_time() < until:
+            pass
         return ["a long reply, laid out whole every frame"]
 
 
@@ -82,12 +86,27 @@ async def test_a_slow_frame_leaves_the_loop_as_long_as_it_took(monkeypatch):
     ui._cancel_render_timer()
     assert 0.01 <= delays[-1] <= ui.MIN_RENDER_INTERVAL_MS / 1000
 
-    # A write the terminal held up for two seconds does not hold the next frame back as long.
-    ui.lastRenderCostMs = 2000.0
-    ui.lastRenderAt = time.perf_counter() * 1000
-    ui._scheduleRender()
-    ui._cancel_render_timer()
-    assert delays[-1] <= ui.MAX_RENDER_WAIT_MS / 1000
+
+
+
+class HeldUpTerminal(Terminal):
+    """A Windows console with text selected: the write waits, the CPU does nothing."""
+
+    def write(self, data):
+        time.sleep(0.5)
+        return super().write(data)
+
+
+def test_a_terminal_write_held_up_is_not_counted_as_the_frames_work():
+    ui = TUI(HeldUpTerminal())
+    ui.addChild(Content())
+    ui.doRender()
+    assert ui.lastRenderCostMs < 100, "the next frame is not held back as long as the write was"
+
+
+class Content:
+    def render(self, _width):
+        return ["a reply"]
 
 
 class Session:

@@ -317,3 +317,9 @@ def test_a_source_checkout_is_never_removed(fresh_home, tmp_path, monkeypatch):
     monkeypatch.setattr(update, "describe", lambda: _install("checkout", "uv", tmp_path))
     assert uninstall.run(mode="full", assume_yes=True) == 0
     assert ran == [] and tmp_path.exists() and not fresh_home.exists()
+
+
+def test_an_archive_unpacked_in_a_folder_named_cellar_is_ours(tmp_path, monkeypatch):
+    """Any path part "Cellar" read as Homebrew: uninstall would have run `brew uninstall misaka`."""
+    monkeypatch.setattr(sys, "prefix", str(_archive(tmp_path / "Cellar" / "downloads") / "python"))
+    assert update.describe().installer == ""

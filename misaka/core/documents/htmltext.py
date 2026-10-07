@@ -80,7 +80,7 @@ class Readable(HTMLParser):
             # An EPUB's cover or plate is often <svg><image xlink:href=...>: the svg is a drawing
             # and stays hidden, the picture it frames does not (0.18.9 sweep).
             found = dict(attrs)
-            self._picture(found.get("xlink:href") or found.get("href"), "")
+            self._picture(found.get("xlink:href") or found.get("href"), "", framed=True)
             return
         if tag in _HIDDEN:
             self._hidden += 1
@@ -122,10 +122,11 @@ class Readable(HTMLParser):
         elif tag in _BLOCKS:
             self._parts.append("\n\n")
 
-    def _picture(self, src: str | None, alt: str | None) -> None:
+    def _picture(self, src: str | None, alt: str | None, *, framed: bool = False) -> None:
         alt = " ".join((alt or "").split())[:MAX_ALT_CHARS]
         marker = f"![{alt or f'image {len(self._images) + 1}'}]"
-        self._images.append({"marker": marker, "alt": alt, "src": (src or "").strip()})
+        self._images.append({"marker": marker, "alt": alt, "src": (src or "").strip(),
+                             **({"svg": True} if framed else {})})
         self._parts.append(f" {marker} ")
 
     def handle_endtag(self, tag: str) -> None:

@@ -112,15 +112,14 @@ def test_every_session_of_every_role_gets_it(tmp_path):
         assert "vision" in names, kind
 
 
-@pytest.mark.parametrize("stop, texts, outcome", [("length", [], "no text before its output limit"),
-                                                  ("stop", [""], "no text"),
-                                                  ("length", ["a map of the"], "reached its output limit")])
-async def test_an_empty_or_cut_off_reading_is_said_and_never_kept_empty(monkeypatch, stop, texts, outcome):
+@pytest.mark.parametrize("stop, texts, kept", [("length", [], False), ("stop", [""], False),
+                                               ("length", ["a map of the"], False), ("stop", ["a map"], True)])
+async def test_an_empty_or_cut_off_reading_is_never_kept(monkeypatch, tmp_path, stop, texts, kept):
     """A reasoning vision model that spent its output thinking returned nothing, and the bridge
-    kept that empty reading for good."""
+    kept that empty reading for good. describe() itself still returns what came back: the browser
+    shows an action's result with whatever the reading was."""
     import importlib
     import sys
-    from types import SimpleNamespace as NS
 
     from misaka.ai.types import Model
     importlib.import_module("misaka.ai.stream")
@@ -130,14 +129,16 @@ async def test_an_empty_or_cut_off_reading_is_said_and_never_kept_empty(monkeypa
         return NS(content=[NS(type="text", text=text) for text in texts], stopReason=stop, usage=None)
 
     monkeypatch.setattr(stream, "complete_simple", complete_simple)
+    monkeypatch.setattr(vision, "selected_model", lambda: ("p/m", "vision.model"))
+    monkeypatch.setattr(extension, "_kept", {})
     model = Model(id="m", name="m", api="openai-completions", provider="p", baseUrl="https://x", reasoning=True,
                   input=["text", "image"], cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                   contextWindow=1000, maxTokens=1000)
-    ctx = NS(modelRegistry=NS(find=lambda p, m: model, getAuth=lambda m: asyncio.sleep(
+    ctx = NS(model=TEXT_ONLY, modelRegistry=NS(find=lambda p, m: model, getAuth=lambda m: asyncio.sleep(
         0, NS(auth=NS(baseUrl="", apiKey="k", headers={}), env={}))))
-    image = {"type": "image", "data": "", "mimeType": "image/png"}
-    if texts and texts[0]:
-        assert outcome in await vision.describe(image, "q", ctx, "p/m", setting="vision.model", purpose="t")
-    else:
-        with pytest.raises(ValueError, match=outcome):
-            await vision.describe(image, "q", ctx, "p/m", setting="vision.model", purpose="t")
+    said = await vision.describe({"type": "image", "data": PNG, "mimeType": "image/png"}, "q", ctx, "p/m",
+                                 setting="vision.model", purpose="t")
+    assert (vision.CUT_OFF in said) == (stop == "length")
+    messages = [UserMessage(content=[ImageContent(data=PNG, mimeType="image/png")], timestamp=1)]
+    await extension.read_images({"messages": messages}, ctx)
+    assert bool(extension._kept) == kept
