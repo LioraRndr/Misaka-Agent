@@ -221,7 +221,7 @@ MISAKA 仅在你要求时提交。若项目为 git 仓库，可使用 `/commit` 
 
 MISAKA 的全部数据均保存在本地：设置、凭据与历史位于 `~/.misaka/`，研究产出位于项目文件夹。提示词仅发送至你配置的模型服务商。网页搜索发送至你配置的搜索服务；未配置或服务出错时，改用 Exa、Parallel、Firecrawl 与 Keenable 的免费公共接口（可通过 `misaka web set keyless_fallback false` 关闭）。文献扫描会将检索词发送至 OpenAlex。MISAKA 不发送任何遥测数据。
 
-一次研究的调用规模可能相当可观：默认最多同时运行四个分支，每个分支最多四位 Sister 并行工作（以机器内存为限），深度研究因此会产生大量模型调用。如需控制成本，可选择较小的研究深度；如需为所有研究设定硬性上限，可在 `~/.misaka/settings.json` 中设置 `research.token_cap`。
+一次研究的调用规模可能相当可观：默认最多同时运行四个分支，每个分支最多四位 Sister 并行工作（以机器内存为限），深度研究因此会产生大量模型调用。如需控制成本，可选择较小的研究深度；如需为每次研究设定硬性的 token 上限，可在 `~/.misaka/settings.json` 中设置 `research.token_cap`。
 
 ## 名字的由来
 

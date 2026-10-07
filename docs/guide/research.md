@@ -429,8 +429,16 @@ recent runs, and `/research status` gives the total. Money is what the model cat
 each call at; a call to a model with no price there is counted apart.
 
 For a hard limit on spending, set `research.token_cap` in `~/.misaka/settings.json` to a number
-of tokens for everything on the board (`0`, the default, means no limit). A run that reaches it
-stops with a partial report.
+of tokens for one research run (`0`, the default, means no limit). It counts everything the run
+spends: its Last Orders, every card, the sub-agents its cards start, and the calls around them
+(compaction, reading images to a model that cannot see, MoA). Each model request reserves what it
+could cost before it is sent and is recorded when it ends, so several nodes and cards working at
+once cannot go past the cap together. Reasoning stays on; it is paid for out of the cap.
+
+A run whose next request no longer fits stops with a partial report, and its cards wait, ready.
+Raise the cap and resume it to go on. Cards outside a research run are recorded but never capped.
+One model API, Codex, takes no output limit: its requests reserve their model's whole output and
+cannot be cut short.
 
 ## What a run writes
 

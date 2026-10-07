@@ -328,8 +328,8 @@ terms to OpenAlex. MISAKA sends no telemetry.
 
 A research run operates at scale: by default up to four branches run at once, each with up to four
 Sisters working in parallel as memory allows, so a deep run makes many model calls. A smaller
-depth reduces cost, and `research.token_cap` in `~/.misaka/settings.json` sets a hard budget
-across all runs.
+depth reduces cost, and `research.token_cap` in `~/.misaka/settings.json` sets a hard token
+budget for each run.
 
 ## About the name
 

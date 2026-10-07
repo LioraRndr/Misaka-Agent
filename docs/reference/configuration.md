@@ -81,7 +81,7 @@ the model supports.
 | Setting | Default | Meaning |
 |---|---|---|
 | `research.plan_approval` | `true` | every research plan waits for your go-ahead; `false` for unattended runs (a plan that changes the question still waits) |
-| `research.token_cap` | `0` (no cap) | token budget for everything on the board, all runs together; a run that reaches it stops with a partial report |
+| `research.token_cap` | `0` (no cap) | token budget of one research run, its cards and sub-agents included; a run that reaches it stops with a partial report and goes on when resumed under a higher cap |
 | `research.beast_at` | `0.85` | share of the cap at which a card is told to wrap up |
 | `network.max_concurrent_sisters` | free memory ÷ 256 MiB, between 4 and 12 | cards running at once on this machine |
 | `network.max_concurrent_per_sister` | the machine limit | cards one Sister runs at once |
