@@ -227,8 +227,9 @@ window can hold. MISAKA addresses the following problems by design.
   hierarchical table of contents giving the page range of each section.
 - An agent first consults the outline (`doc_outline`) and then reads by section node or page
   range (`doc_read`), so that only the required text enters the context.
-- For PDF and DjVu a page is the printed page; other formats are divided at paragraph boundaries
-  into pages of about 3,000 characters, to which page citations refer.
+- For PDF and DjVu a page is a page of the file, counted from 1, which is not always the number
+  printed on it; other formats are divided at paragraph boundaries into pages of about 3,000
+  characters, to which page citations refer.
 - `doc_find` performs literal search; `doc_verify` returns the page, character offset and
   checksum of a quotation.
 - Scanned pages are found one by one and read by OCR, so a book that mixes typeset and scanned

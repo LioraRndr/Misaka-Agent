@@ -1270,16 +1270,23 @@ def parse_chunk_usage(raw_usage: Mapping[str, Any], model: Model) -> Usage:
     prompt_tokens = int(raw_usage.get("prompt_tokens") or 0)
     prompt_details = raw_usage.get("prompt_tokens_details")
     prompt_details = prompt_details if isinstance(prompt_details, Mapping) else {}
-    cache_read_tokens = int(prompt_details.get("cached_tokens") or raw_usage.get("prompt_cache_hit_tokens") or 0)
+    # Where providers put cache hits (pi parseChunkUsage): OpenAI/OpenRouter in
+    # prompt_tokens_details, DeepSeek as prompt_cache_hit_tokens, Kimi at the top level.
+    cache_read_tokens = int(prompt_details.get("cached_tokens") or raw_usage.get("prompt_cache_hit_tokens")
+                            or raw_usage.get("cached_tokens") or 0)
     cache_write_tokens = int(prompt_details.get("cache_write_tokens") or 0)
     input_tokens = max(0, prompt_tokens - cache_read_tokens - cache_write_tokens)
+    # completion_tokens already includes the reasoning tokens; the breakdown is reported apart.
     output_tokens = int(raw_usage.get("completion_tokens") or 0)
+    completion_details = raw_usage.get("completion_tokens_details")
+    completion_details = completion_details if isinstance(completion_details, Mapping) else {}
 
     usage = Usage(
         input=input_tokens,
         output=output_tokens,
         cacheRead=cache_read_tokens,
         cacheWrite=cache_write_tokens,
+        reasoning=int(completion_details.get("reasoning_tokens") or 0),
         totalTokens=input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
         cost=UsageCost(input=0, output=0, cacheRead=0, cacheWrite=0, total=0),
     )

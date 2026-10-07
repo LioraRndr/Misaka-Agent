@@ -475,7 +475,7 @@ def register(harn):
             return _text("Cancelled.")
         notes = _page_notes(await _off_loop(_row, params.doc_id, workspace), start, end,
                             await _off_loop(corpus.figures, params.doc_id, workspace=workspace))
-        if not txt:
+        if not txt or not await _off_loop(corpus.pages_have_text, params.doc_id, start, end, workspace=workspace):
             return _text(notes + f"No text was extracted from p{start}-{end}; the pages may contain only "
                          f"images. Use doc_page_image(doc_id, page) to see a page as it is printed.")
         return _text(notes + untrusted(f"{params.doc_id} p{start}-{end}", txt))

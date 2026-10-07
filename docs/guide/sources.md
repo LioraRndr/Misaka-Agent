@@ -70,7 +70,9 @@ What reading them needs:
   model without vision cannot be shown an image at all, so for it the page or the figure is read
   in words by the team's vision model (`vision.model`, see [Models](models.md)).
   A value read off a figure is a reading, not a quotation: `doc_verify` cannot locate it.
-- **Pages.** In a PDF or DjVu file a page is a printed page. EPUB, HTML, text and Office files
+- **Pages.** In a PDF or DjVu file a page is a page of the file, counted from 1 -- not always the
+  number printed on it (front matter in Roman numerals, a scanned cover, an article whose journal
+  pagination starts at 1361). EPUB, HTML, text and Office files
   have none, so MISAKA cuts them into pages of about 3,000 characters at paragraph breaks, and
   a citation such as `p12` points into that cut.
 

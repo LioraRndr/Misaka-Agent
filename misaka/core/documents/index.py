@@ -1472,7 +1472,8 @@ _EXTRACTORS = {
 # spend minutes converting files nobody asked for. Named one by one they are read.
 _NOT_SWEPT = frozenset({".json", ".jsonl", ".ndjson", ".log", ".yaml", ".yml",
                         ".doc", ".xls", ".ppt"})
-SCAN_SUFFIXES = frozenset(_EXTRACTORS) - _NOT_SWEPT
+READABLE_SUFFIXES = frozenset(_EXTRACTORS)       # what ingest reads when a file is named
+SCAN_SUFFIXES = READABLE_SUFFIXES - _NOT_SWEPT
 
 
 def _extractor(p):
@@ -2279,6 +2280,12 @@ def node_pages(doc_id, node_id, workspace=None):
     return found[0] if found and found[0][0] else None
 
 
+def pages_have_text(doc_id, start, end, workspace=None):
+    """Whether any page from ``start`` to ``end`` carries text. ``read_pages`` is never empty --
+    each page has its ``--- pN ---`` line -- so it cannot answer this itself."""
+    return any(text.strip() for _page, text in _iter_pages(doc_id, lo=start, hi=end, workspace=workspace))
+
+
 def read_pages(doc_id, start, end, max_chars=12000, offset=0, workspace=None):
     """The pages' text as one window: ``offset`` characters in, ``max_chars`` long, with a note
     on how to continue when there is more -- so a single page longer than the window is read
@@ -2287,7 +2294,7 @@ def read_pages(doc_id, start, end, max_chars=12000, offset=0, workspace=None):
     stop = offset + max_chars
     pieces, seen, more = [], 0, False
     for page, t in _iter_pages(doc_id, lo=start, hi=end, workspace=workspace):
-        chunk = f"\n--- p{page} ---\n{t}"
+        chunk = f"\n--- p{page} ---\n{t}" if t.strip() else f"\n--- p{page} --- (no text on this page)\n"
         if seen + len(chunk) > offset:
             pieces.append(chunk[max(0, offset - seen):stop - seen])
         seen += len(chunk)
