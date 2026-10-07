@@ -32,7 +32,7 @@ def test_a_colon_in_the_description_no_longer_breaks_the_profile(tmp_path):
 def test_a_profile_written_unquoted_before_the_fix_still_reads(tmp_path):
     (tmp_path / "10032").mkdir()
     (tmp_path / "10032" / "DESCRIBE.md").write_text(f"---\ndescription: {SPECIALTY}\n---\n# body\n", encoding="utf-8")
-    assert roster.describe("10032", root=str(tmp_path))[0] == SPECIALTY
+    assert roster.describe("10032", root=str(tmp_path)) == (SPECIALTY, "# body"), "her profile comes with it"
 
 
 def test_a_profile_that_does_not_read_back_is_not_reported_created(tmp_path, monkeypatch):

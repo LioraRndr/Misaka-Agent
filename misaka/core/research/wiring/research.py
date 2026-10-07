@@ -100,7 +100,9 @@ USAGE = (
     "                                          depth and nodes at the next reconciliation, follow-ups and revisions\n"
     "                                          at each node's next decision\n"
     "       /research resume [RUN_ID] [ANSWER] resume a paused run, optionally answering its clarification questions\n"
-    "       /research resume RUN_ID --here     adopt this window as the run's Last Order (it will not remember earlier turns)"
+    "       /research resume RUN_ID --here     adopt this window as the run's Last Order (it will not remember earlier turns)\n"
+    "       /research start QUESTION           start research on a question that begins with one of these words\n"
+    "                                          (\"/research start tell me why the Song dynasty fell\")"
 )
 
 
@@ -157,8 +159,10 @@ def parse_command(raw):
     if head in {"help", "-h", "--help", "status", "stop", "limits"}:
         try:
             tokens = shlex.split(line)
-        except ValueError as error:
-            raise ValueError(f"Unclosed quote in arguments: {error}") from error
+        except ValueError:
+            tokens = []                 # an apostrophe: "status of women's ..." is a question
+        if not _fits_subcommand(tokens):
+            tokens = []                 # "/research limits of state capacity ..." is a question too
     if tokens and tokens[0] in {"help", "-h", "--help"}:
         return {"action": "help"}
     if tokens and tokens[0] == "status":
@@ -218,6 +222,20 @@ def _parse_tell(rest):
     if not rest.strip():
         raise ValueError(f"Say what to tell the run.\n{USAGE}")
     return {"action": "tell", "run_id": run_id, "node_id": node_id, "text": rest.strip()}
+
+
+def _fits_subcommand(tokens):
+    """Whether these words are the subcommand their first word names, not a question that starts
+    with it: help alone, status/stop with at most a run, limits with a run or options. 0.18.7 took
+    "/research limits of state capacity in Qing China" for a limits change and refused it."""
+    if not tokens:
+        return False
+    head, rest = tokens[0], tokens[1:]
+    if head in {"help", "-h", "--help"}:
+        return not rest
+    if head in {"status", "stop"}:
+        return len(rest) <= 1
+    return not rest or rest[0].startswith(("r_", "--"))
 
 
 def _parse_limits(tokens):

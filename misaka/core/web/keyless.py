@@ -101,6 +101,12 @@ _VENDOR_REFUSAL_RE = re.compile(
 )
 
 
+# MISAKA's, not Hermes': a vendor this machine cannot reach (a blocked host, a reset connection)
+# fails here the way a refusal does, while another vendor may well be reachable. The transports
+# write it "request failed: <error>"; Hermes stops the walk on it.
+_UNREACHABLE_RE = re.compile(r"\s*(?:keyless\s+\w+\s+search\s+failed:\s*)?request\s+failed:", re.IGNORECASE)
+
+
 def is_search_failover_eligible(message: str) -> bool:
     """Return whether another anonymous vendor may serve the search.
 
@@ -108,12 +114,15 @@ def is_search_failover_eligible(message: str) -> bool:
     one free search endpoint. Free-text markers are deliberately ignored:
     vendors may echo the query in an otherwise terminal error.
     """
-    return is_rate_limitish(message) or bool(_VENDOR_REFUSAL_RE.match(message or ""))
+    return (is_rate_limitish(message) or bool(_VENDOR_REFUSAL_RE.match(message or ""))
+            or bool(_UNREACHABLE_RE.match(message or "")))
 
 
 def _short_reason(message: str) -> str:
     if is_rate_limitish(message):
         return "throttled"
+    if _UNREACHABLE_RE.match(message or ""):
+        return "unreachable"
     status = re.search(r"\b([45]\d\d)\b", message or "")
     return f"HTTP {status.group(1)}" if status else "failed"
 
@@ -477,14 +486,18 @@ async def firecrawl_search_keyless(query: str, limit: int = 5) -> dict[str, Any]
                     json={"query": query, "limit": limit},
                     headers={"Content-Type": "application/json"},
                 )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                # Hermes' shape (plugins/web/firecrawl/provider.py, _post): the walk reads ``HTTP
+                # <code>``; httpx's own "Server error '503 ...'" matched no failover (0.18.9 sweep).
+                raise KeylessError(f"HTTP {response.status_code}: {response.text.strip()[:300]}")
             payload = response.json()
         return {"success": True, "data": {"web": normalize_search_results(payload)}}
     except Exception as exc:  # noqa: BLE001 - normalized below, as in Hermes
+        detail = f"request failed: {exc}" if isinstance(exc, httpx.TransportError) else exc
         return {
             "success": False,
             "error": (
-                f"Keyless Firecrawl search failed: {exc}. "
+                f"Keyless Firecrawl search failed: {detail}. "
                 "Set FIRECRAWL_API_KEY (https://firecrawl.dev) or another web "
                 f"backend via `{config_label()}` for reliable service."
             ),
@@ -527,9 +540,7 @@ async def keenable_search_keyless(query: str, limit: int = 5) -> dict[str, Any]:
                 },
             )
         if response.status_code >= 400:
-            raise KeylessError(
-                (response.text or "").strip() or f"HTTP {response.status_code}"
-            )
+            raise KeylessError(f"HTTP {response.status_code}: {(response.text or '').strip()[:300]}")
         data = check_response(response.json())
     except KeylessError as exc:
         return {
@@ -541,7 +552,8 @@ async def keenable_search_keyless(query: str, limit: int = 5) -> dict[str, Any]:
             ),
         }
     except Exception as exc:  # noqa: BLE001 - transport/JSON errors, as in Hermes
-        return {"success": False, "error": f"Keyless Keenable search failed: {exc}."}
+        detail = f"request failed: {exc}" if isinstance(exc, httpx.TransportError) else exc
+        return {"success": False, "error": f"Keyless Keenable search failed: {detail}."}
     web_results = []
     for i, result in enumerate(data.get("results") or []):
         web_results.append(
@@ -579,9 +591,7 @@ async def keenable_extract_keyless(urls: list[str]) -> list[dict[str, Any]]:
                     headers={"X-Keenable-Title": CLIENT_NAME},
                 )
             if response.status_code >= 400:
-                raise KeylessError(
-                    (response.text or "").strip() or f"HTTP {response.status_code}"
-                )
+                raise KeylessError(f"HTTP {response.status_code}: {(response.text or '').strip()[:300]}")
             data = check_response(response.json())
             if not isinstance(data, dict):
                 raise TypeError(f"expected a JSON object, got {type(data).__name__}")

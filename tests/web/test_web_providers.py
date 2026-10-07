@@ -812,6 +812,30 @@ async def test_a_vendor_refusing_this_client_is_walked_past_and_the_rest_said_in
     assert "FIRECRAWL_API_KEY" in caplog.text, "the vendors' own messages go to the log"
 
 
+async def test_the_real_searchers_word_a_refusal_as_the_walk_reads_it(monkeypatch):
+    """The test above wrote Keenable's error as "HTTP 401: no", a shape the searcher never produced:
+    Firecrawl's 5xx read "Server error '503 ...'" and Keenable put the body where the status goes,
+    so both stopped the walk. A vendor this machine cannot reach is walked past too."""
+    import httpx
+
+    def answer(request):
+        if "firecrawl" in request.url.host:
+            return httpx.Response(503, text="upstream unavailable")
+        if "keenable" in request.url.host:
+            return httpx.Response(403, json={"detail": "Forbidden: anonymous access disabled"})
+        raise httpx.ConnectError("[Errno 54] Connection reset by peer", request=request)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: real(**{**kw, "transport": httpx.MockTransport(answer), "proxy": None}))
+    for name, searcher in (("firecrawl", keyless.firecrawl_search_keyless),
+                           ("keenable", keyless.keenable_search_keyless),
+                           ("exa", keyless._KEYLESS_SEARCHERS["exa"])):
+        error = (await searcher("q", 5))["error"]
+        assert keyless.is_search_failover_eligible(error), (name, error)
+    assert keyless._short_reason("Keyless Exa search failed: request failed: [Errno 54] reset") == "unreachable"
+
+
 def test_a_query_echoed_in_an_error_is_not_a_refusal():
     assert keyless.is_search_failover_eligible("Keyless Exa search failed: HTTP 403: forbidden")
     assert not keyless.is_search_failover_eligible("HTTP 400: invalid query 'http 503'")

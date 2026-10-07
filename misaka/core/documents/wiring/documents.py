@@ -692,6 +692,8 @@ def register(harn):
             # The file's page is the locator; the printed number is what a reader looks up.
             lines[0] += f" -- printed page {v['printed']} (from {v['printed_from']})"
             lines[2] = f"Cite as: [{params.doc_id} p{v['page']}; printed p. {v['printed']}]"
+        if v.get("continues_on"):
+            lines[0] += f"; it runs on to page {v['continues_on']}"
         row = await _off_loop(_row, params.doc_id, root)
         # OCR is a transcription; locating text in it does not establish what the page says.
         if _page_from_ocr(row, v["page"]):

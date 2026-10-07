@@ -393,10 +393,12 @@ def _task_add(con, title, args):
     body = args.body
     if args.body_file:
         try:
-            with open(args.body_file, encoding="utf-8") as f:
+            with open(args.body_file, encoding="utf-8-sig") as f:   # Notepad's BOM is not the body's
                 body = f.read()
         except OSError as error:
             return f"Cannot read {args.body_file}: {error}"
+        except UnicodeDecodeError:
+            return f"{args.body_file} is not UTF-8 text; save it as UTF-8 (Notepad: Save as, Encoding: UTF-8)."
     cards, errors = validate.validate_cards(
         [{"title": title, "body": body, "assignee": args.to, "priority": args.priority, "model": args.model}],
         roster.executors())

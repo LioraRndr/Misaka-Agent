@@ -145,24 +145,27 @@ def create_sister(sid, root=None, specialty=None, model=None, thinking=None):
     )
 
 
-def _description_line(path):
-    """The ``description:`` line of a frontmatter YAML could not parse, read as plain text."""
+def _read_by_hand(path):
+    """``(description, body)`` of a DESCRIBE.md whose frontmatter YAML could not parse, read as
+    plain text: the ``description:`` line, and everything after the closing ``---``. 0.18.7 kept
+    the description and dropped the body, so Last Order routed the Sister without her profile."""
     try:
         with open(path, encoding="utf-8-sig") as f:
             lines = f.read().split("\n")
     except OSError:
-        return None
+        return None, None
     if not lines or lines[0].strip() != "---":
-        return None
-    for line in lines[1:]:
+        return None, None
+    description = None
+    for number, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
-            return None
-        if line.startswith("description:"):
+            return description, "\n".join(lines[number + 1:]).strip() or None
+        if description is None and line.startswith("description:"):
             value = line[len("description:"):].strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
-            return value or None
-    return None
+            description = value or None
+    return None, None
 
 
 def describe(sid, root=None):
@@ -182,8 +185,8 @@ def describe(sid, root=None):
         # read as written first: `misaka create --desc` wrote it unquoted before 0.18.7, so any
         # description with a colon in it is in exactly this state. Only when that line is not
         # there either is the file named: whoever sees the roster is the person who can fix it.
-        return _description_line(path) or (
-            f"DESCRIBE.md could not be read ({' '.join(str(error).split())})"), None
+        description, body = _read_by_hand(path)
+        return description or f"DESCRIBE.md could not be read ({' '.join(str(error).split())})", body
     desc = str(parsed.frontmatter.get("description") or "").strip()
     return desc or None, parsed.body.strip() or None
 

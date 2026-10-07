@@ -89,3 +89,13 @@ def test_the_cli_changes_a_running_run(board, tmp_path, monkeypatch, capsys):
     app._cmd_research(args)
     assert "sister_parallel 4 → 1 (at once)" in capsys.readouterr().out
     assert runs.limits(runs.get(board, run["id"]))["sister_parallel"] == 1
+
+
+@pytest.mark.parametrize("line", ["limits of state capacity in Qing China", "status of women in Tang China",
+                                  "status of women's work in Song China", "stop the war: 1914 and after",
+                                  "help me compare two land reforms", "start tell me why the Song dynasty fell"])
+def test_a_question_that_starts_with_a_subcommand_word_is_a_question(line):
+    """0.18.7 took these for a limits change, a status with too many words, ... and refused them."""
+    from misaka.core.research.wiring.research import parse_command
+    parsed = parse_command(line)
+    assert parsed["action"] == "activate" and parsed["question"] == line.removeprefix("start ")

@@ -75,3 +75,27 @@ def test_misaka_usage_prints_the_run_and_the_list(spent_run, monkeypatch, capsys
     assert f"card {tid} (Sister 10032)" in out and "$3.25" in out and "By model:" in out
     app._cmd_usage(SimpleNamespace(run=None, limit=10))
     assert run["id"] in capsys.readouterr().out
+
+
+def test_a_window_is_charged_to_a_run_only_until_it_ended_or_the_next_run_began(tmp_path, monkeypatch):
+    """0.18.7 bounded only a done run: a stopped run in the same window was charged for everything
+    said there afterwards, the next run's Last Order included."""
+    monkeypatch.setattr(repo, "enabled", lambda *a: False)
+    monkeypatch.setattr(tasks, "task_state_dir", lambda tid: str(tmp_path / "state" / tid))
+    monkeypatch.setattr(sessions, "sessions_root", lambda: str(tmp_path / "sessions"))
+    with closing(tasks.connect(str(tmp_path / "board.db"))) as con:
+        runs.init(con)
+        first = runs.create(con, workspace=str(tmp_path), question="Run A")
+        second = runs.create(con, workspace=str(tmp_path), question="Run B")
+        window = _session(tmp_path / "sessions" / "last-order" / "window.jsonl",
+                          _call("big", 100, 1.0, 1_050_000),      # run A, before it stopped
+                          _call("big", 300, 3.0, 2_000_000),      # unrelated talk after it stopped
+                          _call("big", 5000, 50.0, 5_050_000))    # run B
+        for run, status, created, updated in ((first, "stopped", 1000, 1100), (second, "active", 5000, 5100)):
+            runs.set_state(con, run["id"], root_session=str(window))
+            con.execute("UPDATE research_runs SET status=?, created_at=?, updated_at=? WHERE id=?",
+                        (status, created, updated, run["id"]))
+        assert usage.run_usage(con, runs.get(con, first["id"]))["total"]["cost"] == 1.0
+        assert usage.run_usage(con, runs.get(con, second["id"]))["total"]["cost"] == 50.0
+        con.execute("UPDATE research_runs SET status='failed', updated_at=99999 WHERE id=?", (first["id"],))
+        assert usage.run_usage(con, runs.get(con, first["id"]))["total"]["cost"] == 4.0, "never past run B's start"

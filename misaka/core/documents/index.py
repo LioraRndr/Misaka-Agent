@@ -2364,6 +2364,26 @@ def verify_quote(doc_id, quote, page=None, workspace=None):
     return None
 
 
+def _across_page_break(doc_id, quote, page, workspace):
+    """A quotation that begins on the cited ``page`` and runs onto the next: the two pages read as
+    one text (0.18.9 sweep: it was marked "not found" and listed as not where it was cited). A
+    running head or folio printed between the two pages still breaks it -- a locator, not a verdict."""
+    needle = normalize_for_quote_match(quote)
+    if page is None or not needle:
+        return None
+    pages = list(_iter_pages(doc_id, lo=page, hi=page + 1, workspace=workspace))
+    if len(pages) != 2:
+        return None
+    (first, head), (_second, tail) = pages
+    span = _locate(head + "\n" + tail, needle)
+    if not span or span[0] >= len(head):
+        return None
+    labels, where = page_labels(doc_id, workspace=workspace)
+    return {"page": first, "offset": span[0], "claim_hash": claim_hash(doc_id, first, span[0], quote),
+            "printed": labels.get(first, ""), "printed_from": where if first in labels else None,
+            "continues_on": page + 1}
+
+
 def locate_quote(doc_id, quote, page=None, workspace=None):
     """Where a quotation cited on ``page`` actually is: ``{"status": ...}`` with ``status`` one of
     ``"on_page"`` (where it was cited, or anywhere when no page was given), ``"elsewhere"`` (not
@@ -2376,6 +2396,9 @@ def locate_quote(doc_id, quote, page=None, workspace=None):
     if not resolve_doc(doc_id, workspace=workspace):
         return {"status": "no_document", "cited_page": page}
     found = verify_quote(doc_id, quote, page=page, workspace=workspace)
+    if found:
+        return {"status": "on_page", "cited_page": page, **found}
+    found = _across_page_break(doc_id, quote, page, workspace)
     if found:
         return {"status": "on_page", "cited_page": page, **found}
     if page is not None:

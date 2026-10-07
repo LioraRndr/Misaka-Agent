@@ -55,7 +55,8 @@ def locate(claim, workspace):
     doc_id, cited = match.group(1), int(match.group(2)) if match.group(2) else None
     found = corpus.locate_quote(doc_id, claim["quote"], cited, workspace=workspace)
     printed = f" (printed p. {found['printed']})" if found.get("printed") else ""
-    return {"on_page": f"located on p{found.get('page')}{printed}",
+    across = f", running on to p{found['continues_on']}" if found.get("continues_on") else ""
+    return {"on_page": f"located on p{found.get('page')}{printed}{across}",
             "elsewhere": f"NOT on the cited p{cited}: the quotation is on p{found.get('page')}{printed}",
             "not_found": "NOT FOUND in the document's indexed text (OCR or typography may differ; check the page)",
             "no_document": "the cited document is not in this project's corpus"}[found["status"]]

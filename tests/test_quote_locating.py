@@ -66,3 +66,21 @@ def test_the_ledger_marks_a_quotation_cited_on_the_wrong_page(tmp_path, monkeypa
     assert ledger.locate(missing, workspace).startswith("NOT FOUND")
     assert ledger.locate({"source_file": "notes.md", "quote": QUOTE}, workspace) is None
     assert "located" not in planner._located({"source_file": f"doc:{doc_id}#p2", "quote": ""}, run)
+
+
+def test_a_quotation_that_runs_onto_the_next_page_is_on_its_cited_page(tmp_path, monkeypatch):
+    """Marked "not found" in 0.18.7-0.18.9, and listed as not where it was cited."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "march.pdf").write_bytes(b"%PDF-1.4\n% stand-in\n")
+    pages = ["The bridge at the Berezina was built by the pontonniers of", "General Eblé, who stood in the river.",
+             "The retreat went on towards Vilna."]
+    monkeypatch.setattr(corpus, "extract_pages", lambda p, meta=None: list(pages))
+    monkeypatch.setattr(corpus, "_pdf_page_labels", lambda p: None)
+    doc_id, _ = corpus.ingest(str(workspace / "march.pdf"), workspace=str(workspace), with_tree=False)
+    found = corpus.locate_quote(doc_id, QUOTE, 1, workspace=str(workspace))
+    assert (found["status"], found["page"], found["continues_on"]) == ("on_page", 1, 2)
+    assert corpus.locate_quote(doc_id, QUOTE, 2, workspace=str(workspace))["status"] == "not_found", \
+        "a quotation is located from the page it begins on"
+    assert corpus.locate_quote(doc_id, "Eblé, who stood in the river. The retreat", 2,
+                               workspace=str(workspace))["status"] == "on_page"

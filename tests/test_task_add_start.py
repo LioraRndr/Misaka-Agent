@@ -60,3 +60,18 @@ def test_what_is_wrong_is_said(board, argv, said):
         _task(*argv)
     assert said in str(refused.value.code)
     assert tasks.by_status(board, "ready") == []
+
+
+def test_a_body_file_from_notepad_is_read_or_refused_in_a_sentence(board, tmp_path):
+    """Notepad saves "UTF-8 with BOM", or "ANSI" (GBK on a Chinese Windows): the BOM is not the body,
+    and a GBK file is refused in a sentence rather than a traceback."""
+    (tmp_path / "bom.md").write_bytes(b"\xef\xbb\xbf" + CONTRACT.encode("utf-8"))
+    with pytest.raises(SystemExit) as done:
+        _task("add", "Salt", "--to", "10032", "--body-file", "bom.md")
+    assert done.value.code == 0
+    [row] = tasks.by_status(board, "ready")
+    assert row["body"].startswith("## goal")
+    (tmp_path / "gbk.md").write_bytes("## goal\n列出盐场。\n".encode("gbk"))
+    with pytest.raises(SystemExit) as refused:
+        _task("add", "Salt", "--to", "10032", "--body-file", "gbk.md")
+    assert "not UTF-8" in str(refused.value.code)
