@@ -277,6 +277,9 @@ def run(*, mode: str | None = None, assume_yes: bool = False, dry_run: bool = Fa
         ui.print_info(f"    removed with: {' '.join(remover)}")
     elif install.kind == "checkout" and install.path:
         ui.print_info(f"    a source checkout ({ui.tilde(str(install.path))}): yours to delete, never removed here")
+    elif install.kind == "bundle" and install.path:
+        ui.print_info(f"    a release archive: delete {ui.tilde(str(install.path))}, and the `misaka` link the",
+                      "    installer made (~/.local/bin/misaka), or on Windows its bin folder on your PATH")
     else:
         ui.print_info("    removed with the tool that installed it: `pip uninstall misaka`, `uv tool uninstall misaka`",
                       "    or `pipx uninstall misaka`")

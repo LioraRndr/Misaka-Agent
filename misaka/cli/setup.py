@@ -688,6 +688,11 @@ class Wizard:
         process is theirs to do after it exits, so their command is printed, not run."""
         from misaka.cli import update
         install = update.describe()
+        if install.kind == "bundle":
+            # A release archive carries what it was built with (misaka[providers]) and no pip.
+            ui.print_info(f"This MISAKA is a release archive, built without {', '.join(extras)}. To add it,",
+                          "install MISAKA from the repository instead (README: Install).")
+            return
         command = update.adding_extras(install, extras)
         if command is None:
             ui.print_info("Install it with:", f"  pip install 'misaka[{','.join(extras)}] @ git+{update.REPO_URL}'")

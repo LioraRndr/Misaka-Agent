@@ -230,7 +230,14 @@ window can hold. MISAKA addresses the following problems by design.
 - For PDF and DjVu a page is the printed page; other formats are divided at paragraph boundaries
   into pages of about 3,000 characters, to which page citations refer.
 - `doc_find` performs literal search; `doc_verify` returns the page, character offset and
-  checksum of a quotation; `doc_page_image` reads a page as an image, for figures, maps and scans.
+  checksum of a quotation.
+- Scanned pages are found one by one and read by OCR, so a book that mixes typeset and scanned
+  pages loses neither.
+- `doc_read` names the figures its text does not carry: images and drawings on a PDF page, a
+  scanned page that is likely a map or a plate, a slide whose meaning is in a picture, a picture
+  a Word document or an EPUB embeds. `doc_page_image` shows the page, the slide or the one
+  figure. For a model without vision, every image is read to it in words by one vision model
+  (`vision.model`).
 - Texts produced during the research are indexed on completion. The final report retrieves each
   node's conclusion as a document, without loading everything into the context at once.
 

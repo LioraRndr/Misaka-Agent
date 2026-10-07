@@ -65,6 +65,37 @@ def test_the_owning_tool_is_read_from_its_receipt(tmp_path, monkeypatch):
     assert update._manager("uv") == "uv tool"
 
 
+def _archive(tmp_path):
+    """The layout of a release archive (scripts/build_release.py): its own CPython beside bin/."""
+    root = tmp_path / "misaka-0.18.6-darwin-arm64"
+    (root / "python" / "bin").mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "BUNDLED.txt").write_text("uv git rg fd pdftotext\n", encoding="utf-8")
+    return root
+
+
+def test_a_release_archive_is_known_for_what_it_is(tmp_path, monkeypatch):
+    """2026-10-07: an archive read as "a built package" and was told to pip install, which would
+    have installed into whatever Python was on PATH and left the archive as it was."""
+    root = _archive(tmp_path)
+    monkeypatch.setattr(sys, "prefix", str(root / "python"))
+    install = update.describe()
+    assert install.kind == "bundle" and install.path == root
+    assert update._install_commands(install) is None and update.adding_extras(install, ["browser"]) is None
+
+
+@pytest.mark.parametrize("latest, says", [("v0.18.6", "is the latest release"), ("v0.18.7", "v0.18.7 is out")])
+def test_a_release_archive_is_updated_by_the_installer(tmp_path, monkeypatch, capsys, latest, says):
+    monkeypatch.setattr(sys, "prefix", str(_archive(tmp_path) / "python"))
+    monkeypatch.setattr(update, "describe", lambda: update.Install("bundle", False, "", tmp_path, None, "0.18.6"))
+    monkeypatch.setattr(update, "_api", lambda path: ({"tag_name": latest}, None))
+    monkeypatch.setattr(update, "_run_all", lambda *a: pytest.fail("an archive is not updated in place"))
+    assert update.run(apply=True) == 0
+    out = capsys.readouterr().out
+    assert says in out
+    assert ("install.sh | sh" in out) == (latest != "v0.18.6") and "pip install" not in out
+
+
 def test_installed_extras_are_named_the_widest_way(monkeypatch):
     import importlib.metadata
     requires = ["anthropic>=0.45; extra == 'anthropic'", "openai>=1.60; extra == 'openai'",

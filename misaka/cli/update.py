@@ -46,7 +46,7 @@ TIMEOUT = 10
 class Install:
     """Where this install's code comes from, and what would update it."""
 
-    kind: str                 # "checkout" | "git" | "wheel"
+    kind: str                 # "checkout" | "git" | "wheel" | "bundle" (a release archive)
     editable: bool
     installer: str            # "uv tool" | "pipx" | "uv" (uv pip) | "pip" | ""
     path: Path | None         # the checkout, when there is one
@@ -66,10 +66,26 @@ def _manager(installer: str) -> str:
     return installer
 
 
+# What a release archive's installer is run with; a new one is the way to update it.
+INSTALL_SH = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/scripts/install.sh | sh"
+INSTALL_PS1 = f"irm https://raw.githubusercontent.com/{REPO}/main/scripts/install.ps1 | iex"
+
+
+def _bundle_root() -> Path | None:
+    """The release archive this interpreter runs from, or None. An archive carries its own
+    CPython at ``python/`` beside ``bin/misaka`` and ``BUNDLED.txt`` (scripts/build_release.py);
+    pip and git have nothing to do with it, and a new archive is how it is updated."""
+    root = Path(sys.prefix).parent
+    return root if (root / "BUNDLED.txt").is_file() and (root / "bin").is_dir() else None
+
+
 def describe() -> Install:
     from importlib.metadata import PackageNotFoundError, distribution
 
     from misaka.config import VERSION
+    bundle = _bundle_root()
+    if bundle is not None:
+        return Install("bundle", False, "", bundle, None, VERSION)
     try:
         dist = distribution("misaka")
     except PackageNotFoundError:
@@ -249,6 +265,27 @@ def _api(path: str) -> tuple[dict | None, str | None]:
         # Offline or the host is unreachable. An update check is never a reason to fail the
         # command that asked for it.
         return None, "the network is unreachable"
+
+
+def _bundle_update(install: Install) -> int:
+    """A release archive is not on the branch: it is a release, replaced by the next one.
+
+    Running pip here, as the advice for a built package says, would install into whatever
+    Python is on PATH and leave this archive exactly as it was."""
+    _report(install, None, None)
+    latest, failure = _api("/releases/latest")
+    tag = str((latest or {}).get("tag_name") or "").lstrip("v")
+    if failure or not tag:
+        ui.print_info("", f"Could not ask GitHub for the latest release ({failure or 'no tag'}).")
+    elif tag == install.version:
+        ui.print_success(f"v{install.version} is the latest release.")
+        return 0
+    else:
+        ui.print_info("", f"v{tag} is out; this is v{install.version}.")
+    ui.print_info("", "A release archive is updated by installing the new one -- the installer replaces it:",
+                  f"  {INSTALL_PS1 if os.name == 'nt' else INSTALL_SH}",
+                  "Settings, credentials and research stay where they are.")
+    return 0
 
 
 def _behind(base: str) -> tuple[int | None, str | None]:
@@ -446,7 +483,8 @@ def _restore_command(install: Install) -> str:
 def _report(install: Install, state: dict | None, behind: int | None) -> None:
     shape = {"checkout": "a git checkout" + (" (editable)" if install.editable else ""),
              "git": f"installed from {REPO_URL}",
-             "wheel": "installed from a built package"}[install.kind]
+             "wheel": "installed from a built package",
+             "bundle": "installed from a release archive"}[install.kind]
     ui.print_check(True, "installed", f"v{install.version}   {shape}"
                    + (f", by {install.installer}" if install.installer else ""))
     if install.path:
@@ -474,6 +512,8 @@ def run(*, apply: bool = False) -> int:
     ui.print_info(f"Tracking the {BRANCH} branch of {REPO}, the way Hermes tracks its own:",
                   "a fast-forward or nothing. Releases are cut rarely; the branch is the product.", "")
 
+    if install.kind == "bundle":
+        return _bundle_update(install)
     state = _checkout_state(install) if install.kind == "checkout" else None
     if state is not None:
         behind = state.get("behind")
