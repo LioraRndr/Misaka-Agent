@@ -37,7 +37,8 @@ def _parser(extension_commands=None):
     sub.add_parser("board", help="Show the task board")
     sub.add_parser("allies", help="List the enabled allies and whether each can take a card (spends no quota)")
 
-    dmp = sub.add_parser("dm", help="Deliver a message to an agent's contact session and run one turn")
+    dmp = sub.add_parser("dm", help="Deliver a message to an agent's contact session and run one turn "
+                         "(a running research node is told with misaka research --tell)")
     dmp.add_argument("to", help="Recipient: last-order or a Sister ID")
     dmp.add_argument("message", nargs="?", help="Message body (omitted: deliver what is already queued)")
     dmp.add_argument("--from", dest="sender", help="Sender role (default: the user)")
@@ -114,6 +115,9 @@ def _parser(extension_commands=None):
     rs = sub.add_parser("research", help="Run the Research Workflow on a question")
     rs.add_argument("goal", nargs="?", help="Research question for a new run")
     rs.add_argument("--resume", metavar="RUN_ID", help="Resume an existing research run")
+    rs.add_argument("--tell", metavar="RUN_ID",
+                    help="Say GOAL (the message) to a running node's Last Order, the root's unless --to names a node")
+    rs.add_argument("--to", metavar="NODE_ID", help="With --tell: the node whose Last Order hears it")
     rs.add_argument("--limits", metavar="RUN_ID",
                     help="Change the limits of a running run to the options given with it (--sister-parallel 2 ...)")
     rs.add_argument("--depth", type=int, help="Maximum branch depth (default: 3)")
@@ -385,6 +389,18 @@ def _cmd_research(args):
                   "max_followups": args.followups, "max_revisions": args.revisions, "max_nodes": args.max_nodes}
         return {key: value for key, value in chosen.items() if value is not None}
 
+    if args.tell:
+        from misaka.core.research import window
+        run = runs.get(con, args.tell)
+        if not run:
+            sys.exit(f"Research run not found: {args.tell}")
+        try:
+            path = _asyncio.run(window.tell(con, run, args.goal, node_id=args.to))
+        except ValueError as error:
+            sys.exit(str(error))
+        print(f"Told the Last Order of {args.to or 'the root'} ({run['id']}). Her answer is written to her "
+              f"conversation; follow it with: misaka chat --attach --session {path}")
+        return
     if args.limits:
         chosen = chosen_limits()
         if not chosen:

@@ -84,7 +84,7 @@ def test_the_cli_changes_a_running_run(board, tmp_path, monkeypatch, capsys):
     run = _run(board, tmp_path)
     monkeypatch.setattr(app, "current_config", lambda: {"db": "board.db", "profiles_root": str(tmp_path)})
     monkeypatch.setattr(app.db, "connect", lambda path: board)
-    args = SimpleNamespace(node=None, runner_key=None, limits=run["id"], resume=None, goal=None, depth=None,
+    args = SimpleNamespace(node=None, runner_key=None, tell=None, limits=run["id"], resume=None, goal=None, depth=None,
                            parallel=None, sister_parallel=1, followups=None, revisions=None, max_nodes=None)
     app._cmd_research(args)
     assert "sister_parallel 4 → 1 (at once)" in capsys.readouterr().out

@@ -13,7 +13,7 @@ from misaka.core.moments import CoreCommand
 from misaka.core.platform import budget
 from misaka.core.platform import tasks as task_store
 from misaka.core.research import node as research_node
-from misaka.core.research import planner, runs, workflow
+from misaka.core.research import planner, runs, window, workflow
 from misaka.ui.tui.interactive.components.ask_user_question import (
     AskUserQuestionComponent,
 )
@@ -93,6 +93,8 @@ USAGE = (
     f"       --max-nodes N: how many nodes the research graph may hold, the root included (1-{runs.MAX_NODES_CEILING}).\n"
     "       /research status [RUN_ID]          show the latest run of this folder, or the run you name\n"
     "       /research stop [RUN_ID]            ask the latest active run (or RUN_ID) to stop\n"
+    "       /research tell [RUN_ID] [--to NODE_ID] MESSAGE  say MESSAGE to a running node's Last Order (the root's\n"
+    "                                          when no node is named), as if typed in her window\n"
     "       /research limits [RUN_ID] --sister-parallel N ...  change a running run's limits (the options above);\n"
     "                                          Sister parallelism at once, LO parallelism from the next level,\n"
     "                                          depth and nodes at the next reconciliation, follow-ups and revisions\n"
@@ -150,6 +152,8 @@ def parse_command(raw):
         if here:
             rest = rest[len("--here"):].strip()
         return {"action": "resume", "run_id": run_id, "clarification": rest, "here": here}
+    if head == "tell":
+        return _parse_tell(line[len("tell"):].strip())
     if head in {"help", "-h", "--help", "status", "stop", "limits"}:
         try:
             tokens = shlex.split(line)
@@ -197,6 +201,23 @@ def parse_command(raw):
     limits = runs.normalize_limits(selected)
     return {"action": "activate", "limits": {key: limits[key] for key in _OPTIONS.values()},
             "explicit": explicit, "question": line}
+
+
+def _parse_tell(rest):
+    """`tell [RUN_ID] [--to NODE_ID] MESSAGE`: the message is free text, taken from the raw line."""
+    run_id = node_id = None
+    words = rest.split(None, 1)
+    if words and words[0].startswith("r_"):
+        run_id, rest = words[0], (words[1] if len(words) > 1 else "")
+        words = rest.split(None, 1)
+    if words and words[0] == "--to":
+        words = (words[1] if len(words) > 1 else "").split(None, 1)
+        if not words:
+            raise ValueError(f"--to requires a node id.\n{USAGE}")
+        node_id, rest = words[0], (words[1] if len(words) > 1 else "")
+    if not rest.strip():
+        raise ValueError(f"Say what to tell the run.\n{USAGE}")
+    return {"action": "tell", "run_id": run_id, "node_id": node_id, "text": rest.strip()}
 
 
 def _parse_limits(tokens):
@@ -451,6 +472,20 @@ class ResearchPart:
                         f"Stop request recorded for {run['id']}. Running tasks will stop or drain.",
                         "info",
                     )
+                    return
+                if spec["action"] == "tell":
+                    run = _find_run(con, spec["run_id"], _workspace(ctx), active=True)
+                    if not run:
+                        raise ValueError("No active research run.")
+                    here = getattr(getattr(ctx, "sessionManager", None), "sessionFile", None)
+                    root = runs.root(con, run["id"])
+                    if (not spec["node_id"] or spec["node_id"] == root["id"]) and here and run["root_session"] \
+                            and os.path.realpath(here) == os.path.realpath(run["root_session"]):
+                        ctx.ui.notify("This window is the root's Last Order: say it here.", "info")
+                        return
+                    await window.tell(con, run, spec["text"], node_id=spec["node_id"])
+                    ctx.ui.notify(f"Told the Last Order of {spec['node_id'] or 'the root'} ({run['id']}); "
+                                  "her answer is in her window.", "info")
                     return
                 if spec["action"] == "limits":
                     run = _find_run(con, spec["run_id"], _workspace(ctx), active=True)

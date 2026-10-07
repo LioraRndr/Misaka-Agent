@@ -144,6 +144,7 @@ MISAKAがコミットするのは、あなたが指示したときだけです�
 | MISAKAを起動する | `misaka` |
 | 研究を開始する | `/research`に続けて問いを入力 |
 | 研究の確認・中断・再開 | `/research status`、`/research stop`、`/research resume` |
+| 実行中のノードに話しかける | `/research tell [--to ノードID] メッセージ` |
 | 実行中の研究のパラメータ変更 | `/research limits --sister-parallel 2` |
 | 特定のSisterと対話する | `/sister 10032` |
 | Sisterを作成する | `misaka create 10036 --desc "計量経済学と因果推論"` |

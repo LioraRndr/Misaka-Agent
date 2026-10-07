@@ -26,6 +26,49 @@ def node_description(con, node_id):
             "run_phase": run["phase"], "run_status": run["status"], "node_phase": node["status"]}
 
 
+def _listening(con, run, node):
+    """The catalog record of the live session a node's Last Order is running in, or None."""
+    from misaka.core import session_catalog
+    from misaka.core.research import planner
+
+    path = planner.lo_session_file(run, node)
+    record = session_catalog.owner_record(path) if path else {}
+    live = session_catalog.live_session(record.get("id")) if record.get("control") else None
+    return live if live and live.get("control") else None
+
+
+async def tell(con, run, text, *, node_id=None):
+    """Say something to a node's Last Order while the run goes on -- the root's when no node is
+    named -- as if it were typed in her window: through the input socket every live session opens
+    (``misaka chat --attach``), a steer while she is mid-turn, a turn of its own while she waits on
+    her cards. Returns the session file her answer is written to. Raises ValueError naming who can
+    hear when the node named cannot."""
+    from misaka.core.research import runs
+    from misaka.core.session_control import request
+
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Say what to tell the run.")
+    every = runs.nodes(con, run["id"])
+    node = next((row for row in every if (row["id"] == node_id if node_id else runs.is_root(row))), None)
+    listening = [(row, _listening(con, run, row)) for row in every]
+    listening = [(row, record) for row, record in listening if record]
+    who = "; ".join(f"{row['id']} (depth {row['depth']}): {' '.join(row['question'].split())[:60]}"
+                    for row, _record in listening) or "none"
+    if node is None:
+        raise ValueError(f"Research run {run['id']} has no node {node_id}. Listening now: {who}")
+    record = next((record for row, record in listening if row["id"] == node["id"]), None)
+    if record is None:
+        raise ValueError(f"The Last Order of node {node['id']} is not running now ({node['status']}). "
+                         f"Listening now: {who}")
+    try:
+        await request(record, "input", text=text)
+    except (OSError, KeyError, TimeoutError) as error:
+        raise ValueError(f"Delivery to node {node['id']} is unconfirmed: {error or 'no answer'}. "
+                         "Not sent again automatically.") from error
+    return record.get("path")
+
+
 class WindowLO:
     """The synchronous planner calls back onto the window's own event loop and session.
 

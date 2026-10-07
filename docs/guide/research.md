@@ -355,12 +355,18 @@ explains the tabs, panes and keys.
 | stop a run and get a partial report | `/research stop [RUN_ID]` | Ctrl+C in the running command |
 | resume a stopped or failed run | `/research resume [RUN_ID] [ANSWER]` | `misaka research --resume RUN_ID` |
 | resume in a different window | `/research resume RUN_ID --here` | |
+| say something to a running node's Last Order (the root's by default) | `/research tell [RUN_ID] [--to NODE_ID] MESSAGE` | `misaka research --tell RUN_ID [--to NODE_ID] "MESSAGE"` |
 | change a running run's limits | `/research limits [RUN_ID] --sister-parallel 2 …` | `misaka research --limits RUN_ID --sister-parallel 2 …` |
 
 Resume a run in the Last Order conversation that started it; from any other window,
 `/research resume` names the conversation to open (the sidebar lists it under sessions).
 `--here` resumes in the current window, whose Last Order starts without the run's earlier
 conversation.
+
+`tell` reaches a node's Last Order as if you typed in her window: while she is mid-turn it steers
+that turn, while she waits on her cards it is a turn of its own. Her answer goes into her
+conversation; from the shell, `misaka chat --attach --session PATH` (the path `tell` prints)
+follows it. A node that is not running cannot hear; `tell` names the nodes that can.
 
 A resumed run needs the Sisters its cards went to. If you removed one, create her again with the
 same number first.
