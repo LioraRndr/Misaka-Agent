@@ -233,6 +233,16 @@ def _figure_box(record, figure):
 
 def _figure_line(page, record):
     """One page's figures in doc_page_image's numbering: its images first, then its drawing."""
+    if "slide" in record:
+        return (f"Page {page} is slide {record['slide']}, which carries pictures or shapes its text cannot "
+                f"(needs_vlm): doc_page_image(doc_id, {page}) shows the slide.")
+    if "embedded" in record:
+        # The alt text is the document's own words and is already on the page as ``![...]``;
+        # repeating it here would let a document speak in this tool's voice.
+        count = len(record["embedded"])
+        pick = "figure=1" if count == 1 else f"figure=1..{count}, in the order of its ![...] markers"
+        return (f"Page {page} holds {'a picture' if count == 1 else f'{count} pictures'} the document embeds "
+                f"({pick}): doc_page_image(doc_id, {page}, figure=N) shows one.")
     if "sparse" in record:
         return (f"Page {page} is a scanned page with little text ({record['sparse']:.0%} of this book's "
                 f"usual): if it holds a map, a plate or a table, doc_page_image(doc_id, {page}) shows it.")
@@ -273,6 +283,70 @@ def _render_page(pdf_path, page, scale, box=None):
         raise RuntimeError(f"PDF renderer exited with code {result.returncode}: {reason}")
     value = json.loads(result.stdout)
     return (base64.b64decode(value["png"], validate=True) if value["png"] else None), value["pages"]
+
+
+# What doc_page_image can show: a page of a PDF, a DjVu or a deck; a picture a Word document or
+# an EPUB embeds. A deck goes the way FrontierAgent sends one to its vision reader: exported to
+# PDF by LibreOffice, then one page rendered.
+_RENDERABLE = (".pdf", ".djvu", ".pptx", ".ppt", ".docx", ".epub")
+
+
+def _picture_png(data, member):
+    """An embedded picture as PNG bytes. What Pillow cannot open -- EMF and WMF, the vector
+    formats Word pastes charts in -- goes through LibreOffice when the machine has it."""
+    picture = _pillow_png(data)
+    if picture is not None:
+        return picture
+    from misaka.core.documents.office import soffice
+    with tempfile.TemporaryDirectory(prefix="misaka-picture-") as tmp:
+        original = os.path.join(tmp, "picture" + (os.path.splitext(member)[1].lower() or ".bin"))
+        with open(original, "wb") as f:
+            f.write(data)
+        meta = {}
+        converted = soffice.convert(original, "png", into=os.path.join(tmp, "out"), meta=meta)
+        if converted is None:
+            why = meta.get("soffice_error") or "LibreOffice is not installed"
+            raise ValueError(f"{os.path.basename(member)} is in a format that needs LibreOffice to show ({why}).")
+        with open(converted, "rb") as f:
+            return f.read()
+
+
+def _pillow_png(data):
+    """PNG bytes of an image Pillow can open, or None."""
+    from PIL import Image
+    try:
+        with Image.open(BytesIO(data)) as image:
+            buffer = BytesIO()
+            image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB").save(buffer, format="PNG")
+            return buffer.getvalue()
+    except Exception:  # noqa: BLE001 - not a format Pillow reads
+        return None
+
+
+def _render_slide(doc_id, source, page, scale, root):
+    """The slide on corpus page ``page``, rendered: ``(png, the deck's page count, slide number)``.
+
+    The deck is exported to PDF once, beside the document (``rendered.pdf``), and the export's
+    page is the slide's number less the hidden slides before it, which LibreOffice leaves out.
+    """
+    from misaka.core.documents.office import pptx, soffice
+    text = corpus.read_page(doc_id, page, workspace=root)
+    heading = corpus._SLIDE_HEADING.search(text or "")
+    if not heading:
+        raise ValueError(f"Page {page} of {doc_id} holds no slide (no '## Slide N' heading on it).")
+    slide = int(heading.group(1))
+    hidden = pptx.hidden_slides(source) if source.lower().endswith(".pptx") else set()
+    if slide in hidden:
+        raise ValueError(f"Slide {slide} is hidden in the deck, and LibreOffice does not render hidden slides.")
+    rendered = os.path.join(os.path.dirname(source), "rendered.pdf")
+    if not os.path.isfile(rendered):
+        meta = {}
+        if not soffice.export_pdf(source, rendered, meta=meta):
+            raise ValueError("Rendering a slide needs LibreOffice "
+                             f"({meta.get('soffice_error') or 'it is not installed: brew install --cask libreoffice'}).")
+    png, _ = _render_page(rendered, slide - sum(1 for n in hidden if n < slide), scale)
+    count = int((corpus._read_meta_at(os.path.dirname(source)) or {}).get("pages") or page)
+    return png, count, slide
 
 
 def _render_djvu(djvu_path, page, scale):
@@ -413,13 +487,14 @@ def register(harn):
             "Render scale over the page's printed size; 2.0 is legible for most typefaces and is the "
             f"maximum (larger values are clamped to it). Neither side exceeds {PAGE_IMAGE_MAX_SIDE} pixels."))
         figure: int = Field(0, description=(
-            "A figure on the page, numbered as doc_read lists them: renders that figure alone, at the "
-            "resolution its labels need. 0 (the default) renders the whole page."))
+            "A figure on the page, numbered as doc_read lists them: shows that figure alone, at the "
+            "resolution its labels need. 0 (the default) renders the whole page -- which a Word "
+            "document or an EPUB does not have: for those, figure is required."))
 
     @_register(
         harn, name="doc_page_image", label="View document page",
-        description="Render one page of a PDF or DjVu document as an image, or one figure on a PDF page, so figures, tables, maps, and scanned pages can be read directly.",
-        snippet="See a page, or one figure on it, as an image when its text is not enough",
+        description="Show a page of a PDF, a DjVu or a deck as an image, or one figure on it -- a figure on a PDF page, or a picture a Word document or an EPUB embeds -- so figures, tables, maps, slides and scanned pages can be read directly.",
+        snippet="See a page, a slide, or one figure as an image when the text is not enough",
         guidelines=[
             "doc_read names the figures on each page that its text does not carry; when a claim rests on one -- a chart, a map, a table's layout -- look at it with `doc_page_image(doc_id, page, figure=N)` rather than the whole page.",
             "When doc_read returns no text for a page, look at the page with `doc_page_image`.",
@@ -431,39 +506,64 @@ def register(harn):
         if root is None:
             raise ValueError("Document not found. Use doc_list to find its document ID.")
         kind = os.path.splitext(source)[1].lower() if source else ""
-        if kind not in (".pdf", ".djvu"):
-            raise ValueError(f"{params.doc_id} was not indexed from a PDF or a DjVu "
-                             f"({kind.lstrip('.') or 'no stored source'}), and only their pages can be "
-                             f"rendered. Use doc_read for its text.")
+        if kind not in _RENDERABLE:
+            raise ValueError(f"{params.doc_id} was indexed from {kind.lstrip('.') or 'no stored source'}, "
+                             f"which has no page to show: pages render from a PDF, a DjVu or a deck, and "
+                             f"pictures from a PDF, a Word document or an EPUB. Use doc_read for its text.")
         if not math.isfinite(params.scale) or params.scale <= 0:
             raise ValueError("scale must be finite and greater than 0.")
-        box, record = None, None
-        if params.figure:
-            if kind != ".pdf":
-                raise ValueError("Figures are numbered on PDF pages only; render the whole page (figure=0).")
-            record = (await _off_loop(corpus.figures, params.doc_id, workspace=root)).get(params.page)
-            count = len(record["boxes"]) if record else 0
-            if not 1 <= params.figure <= count:
-                raise ValueError(f"Page {params.page} has {count or 'no'} figure{'' if count == 1 else 's'} "
-                                 f"its text does not carry{f' (1..{count})' if count else ''}; doc_read lists "
-                                 f"them page by page. figure=0 renders the whole page.")
-            if not record.get("rotation"):
-                box = _figure_box(record, params.figure)
-        # A page at scale 3 came back as a 1.7 MB PNG and a Sister asked for the same pages
-        # again and again (2026-09-23, card t_9f10b6: 26 renders, ~25k provider tokens each on
-        # Codex); the transcript and every LCM checkpoint carried each copy. Scale 2 reads the
-        # same, and a byte cap under the PNG size of a text page makes the resize pick JPEG.
-        scale = min(params.scale, PAGE_IMAGE_MAX_SCALE)
-        if box:
-            scale = min(FIGURE_MAX_SCALE, PAGE_IMAGE_MAX_SIDE / max(box[2] - box[0], box[3] - box[1], 1))
-        try:
-            if kind == ".djvu":
-                png, count = await _off_loop(_render_djvu, source, params.page, scale)
-            else:
-                png, count = await _off_loop(_render_page, source, params.page, scale, *([box] if box else []))
-        except Exception as e:
-            # Child failures/timeouts are tool errors, with the requested locator attached.
-            raise RuntimeError(f"Could not render {params.doc_id} p{params.page}: {e}") from e
+        box, record, extra = None, None, ""
+        if kind in (".docx", ".epub"):
+            # Not a printed page: a Word document or an EPUB is paged at its headings and every
+            # 3,000 characters, so there is no page to render -- only the pictures it embeds.
+            if not params.figure:
+                raise ValueError("A Word document or an EPUB has no printed page to show; doc_read names "
+                                 "the pictures each page holds, and figure=N shows one of them.")
+            data, member = await _off_loop(corpus.embedded_image, params.doc_id, params.page,
+                                           params.figure, workspace=root)
+            try:
+                png = await _off_loop(_picture_png, data, member)
+            except Exception as e:
+                raise RuntimeError(f"Could not show {params.doc_id} p{params.page} figure {params.figure}: {e}") from e
+            count = (await _off_loop(_row, params.doc_id, root)).get("pages") or params.page
+        elif kind in (".pptx", ".ppt"):
+            if params.figure:
+                raise ValueError("A slide is shown whole: leave figure out.")
+            try:
+                png, count, slide = await _off_loop(_render_slide, params.doc_id, source, params.page,
+                                                    min(params.scale, PAGE_IMAGE_MAX_SCALE), root)
+            except ValueError:
+                raise                       # said in the tool's own words already
+            except Exception as e:
+                raise RuntimeError(f"Could not render {params.doc_id} p{params.page}: {e}") from e
+            extra = f" (slide {slide})"
+        else:
+            if params.figure:
+                if kind != ".pdf":
+                    raise ValueError("Figures are numbered on PDF pages only; render the whole page (figure=0).")
+                record = (await _off_loop(corpus.figures, params.doc_id, workspace=root)).get(params.page)
+                count = len(record.get("boxes", [])) if record else 0
+                if not 1 <= params.figure <= count:
+                    raise ValueError(f"Page {params.page} has {count or 'no'} figure{'' if count == 1 else 's'} "
+                                     f"its text does not carry{f' (1..{count})' if count else ''}; doc_read lists "
+                                     f"them page by page. figure=0 renders the whole page.")
+                if not record.get("rotation"):
+                    box = _figure_box(record, params.figure)
+            # A page at scale 3 came back as a 1.7 MB PNG and a Sister asked for the same pages
+            # again and again (2026-09-23, card t_9f10b6: 26 renders, ~25k provider tokens each on
+            # Codex); the transcript and every LCM checkpoint carried each copy. Scale 2 reads the
+            # same, and a byte cap under the PNG size of a text page makes the resize pick JPEG.
+            scale = min(params.scale, PAGE_IMAGE_MAX_SCALE)
+            if box:
+                scale = min(FIGURE_MAX_SCALE, PAGE_IMAGE_MAX_SIDE / max(box[2] - box[0], box[3] - box[1], 1))
+            try:
+                if kind == ".djvu":
+                    png, count = await _off_loop(_render_djvu, source, params.page, scale)
+                else:
+                    png, count = await _off_loop(_render_page, source, params.page, scale, *([box] if box else []))
+            except Exception as e:
+                # Child failures/timeouts are tool errors, with the requested locator attached.
+                raise RuntimeError(f"Could not render {params.doc_id} p{params.page}: {e}") from e
         if signal_aborted(signal):
             return _text("Cancelled.")
         if png is None:
@@ -480,7 +580,7 @@ def register(harn):
         # fenced rather than spoken inside a sentence of ours -- the same rule doc_list,
         # doc_outline and doc_find follow. What is left is ours: an id, a page number, pixels.
         titled = untrusted(f"{params.doc_id} title", title)
-        caption = f"[{params.doc_id}] page {params.page} of {count}"
+        caption = f"[{params.doc_id}] page {params.page} of {count}{extra}"
         if params.figure:
             caption += f", figure {params.figure}" + (" (a rotated page: shown whole)" if box is None else "")
         if note and vision.selected_model()[0]:

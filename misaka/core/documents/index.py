@@ -407,20 +407,69 @@ def _figure_inventory(signals, count, texts=None):
     return dict(sorted(out.items()))
 
 
-def figures(doc_id, workspace=None):
-    """The figures of a PDF that its text does not carry, ``{page: record}``; ``{}`` for any other
-    format, or when the file cannot be read.
+_SLIDE_HEADING = re.compile(r"^## Slide (\d+)\b", re.MULTILINE)
 
-    Read once from the stored source -- so a document indexed before this existed has them too --
-    and kept in ``figures.json``. Pages read by OCR, or left unread, are left out when asked: the
-    whole page is the picture there, and doc_read already says so of them.
+
+def _slide_figures(pages):
+    """The pages of a deck holding a slide the reader marked ``needs_vlm: true`` -- a picture, a
+    grouped drawing, an arrow tied to nothing: meaning its text cannot carry (office/pptx.py,
+    after FrontierAgent's "needs VLM"). ``{page: {"slide": N}}``."""
+    out = {}
+    for number, text in enumerate(pages, 1):
+        heading = _SLIDE_HEADING.search(text)
+        if heading and "needs_vlm: true" in text:
+            out[number] = {"slide": int(heading.group(1))}
+    return out
+
+
+def _embedded_inventory(pages, listed):
+    """``{page: {"embedded": [{"alt", "member"}]}}``: each picture a Word document or an EPUB
+    embeds, put on the page its ``![...]`` marker is on, in marker order. Where the pages stop
+    agreeing with the list -- a marker cut in two by a page break -- the rest is left out rather
+    than put on the wrong page."""
+    out, page, position = {}, 0, 0
+    for image in listed:
+        while page < len(pages):
+            found = pages[page].find(image["marker"], position)
+            if found >= 0:
+                out.setdefault(page + 1, {"embedded": []})["embedded"].append(
+                    {"alt": image["alt"], "member": image["member"]})
+                position = found + len(image["marker"])
+                break
+            page, position = page + 1, 0
+        else:
+            break
+    return out
+
+
+def _stored_source(ddir):
+    """The original file ingest copied beside the pages (``source`` and its suffix), or None."""
+    for name in sorted(os.listdir(ddir)):
+        if name.startswith("source.") and _real_file(os.path.join(ddir, name), ddir):
+            return os.path.join(ddir, name)
+    return None
+
+
+def figures(doc_id, workspace=None):
+    """What a document holds that its text does not carry, by page: ``{page: record}``.
+
+    A PDF: its images and drawings (``_figure_inventory``), read once from the stored source --
+    so a document indexed before this existed has them too -- and kept in ``figures.json``;
+    pages read by OCR, or left unread, are left out when asked, since the whole page is the
+    picture there and doc_read already says so of them. A deck: its slides marked as needing a
+    vision model. A Word document or an EPUB: the pictures it embeds. Anything else: ``{}``.
     """
     ddir = resolve_doc(doc_id, workspace=workspace)
-    source = os.path.join(ddir, "source.pdf") if ddir else None
-    if not source or not _real_file(source, ddir):
+    source = _stored_source(ddir) if ddir else None
+    if not source:
         return {}
+    kind = os.path.splitext(source)[1].lower()
     meta = _read_meta_at(ddir) or {}
     count = int(meta.get("pages") or 0)
+    if kind in (".pptx", ".ppt"):
+        return _slide_figures(_stored_pages(ddir, count))
+    if kind not in (".pdf", ".docx", ".epub"):
+        return {}
     path = os.path.join(ddir, "figures.json")
     data = None
     if _real_file(path, ddir):
@@ -430,14 +479,51 @@ def figures(doc_id, workspace=None):
         except (OSError, ValueError):
             data = None
     if not isinstance(data, dict) or data.get("version") != FIGURES_VERSION:
-        signals = _pdf_visuals(source, list(range(1, count + 1)))
-        if signals is None:
-            return {}
-        found = _figure_inventory(signals, count, _stored_pages(ddir, count))
+        if kind == ".pdf":
+            signals = _pdf_visuals(source, list(range(1, count + 1)))
+            if signals is None:
+                return {}
+            found = _figure_inventory(signals, count, _stored_pages(ddir, count))
+        else:
+            try:
+                if kind == ".docx":
+                    from misaka.core.documents.office import docx
+                    listed = docx.images(source)
+                else:
+                    listed = _epub_images(source)
+            except (OSError, ValueError, zipfile.BadZipFile):
+                return {}
+            found = _embedded_inventory(_stored_pages(ddir, count), listed)
         data = {"version": FIGURES_VERSION, "pages": {str(page): v for page, v in found.items()}}
         atomic.write_text(path, json.dumps(data, ensure_ascii=False))
-    pictured = _ocr_set(meta, count) | {int(n) for n in (meta.get("unread_pages") or {}) if str(n).isdigit()}
+    pictured = set()
+    if kind == ".pdf":
+        pictured = _ocr_set(meta, count) | {int(n) for n in (meta.get("unread_pages") or {}) if str(n).isdigit()}
     return {int(n): v for n, v in data.get("pages", {}).items() if str(n).isdigit() and int(n) not in pictured}
+
+
+def embedded_image(doc_id, page, figure, workspace=None):
+    """``(bytes, the archive member)`` of picture ``figure`` (1-based) on ``page`` of a Word
+    document or an EPUB, read out of the stored source; raises ValueError saying why not."""
+    ddir = resolve_doc(doc_id, workspace=workspace)
+    source = _stored_source(ddir) if ddir else None
+    record = figures(doc_id, workspace=workspace).get(page) or {}
+    listed = record.get("embedded") or []
+    if not 1 <= figure <= len(listed):
+        raise ValueError(f"Page {page} has {len(listed) or 'no'} picture{'' if len(listed) == 1 else 's'} "
+                         f"the document embeds{f' (1..{len(listed)})' if listed else ''}; doc_read lists them.")
+    member = listed[figure - 1]["member"]
+    if not member:
+        raise ValueError(f"Picture {figure} on page {page} is not stored as an image in the file "
+                         f"(a chart or a shape the program draws, or a picture linked from outside).")
+    try:
+        with zipfile.ZipFile(source) as archive:
+            data = _zip_read(archive, member, limit=64 * 1024 * 1024)
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError(f"Cannot read {member} from the stored file: {error}") from error
+    if data is None:
+        raise ValueError(f"{member} is missing from the stored file, or larger than 64 MiB.")
+    return data, member
 
 
 # -- OCR: an optional external binary, fail-closed ------------------------------------------------
@@ -1190,10 +1276,23 @@ def _epub_spine(archive):
 
 
 def _epub_pages(p, chars=3000, meta=None):
-    """An EPUB read as the book it is: chapter after chapter, in spine order.
+    """An EPUB read as the book it is: chapter after chapter, in spine order, its pictures
+    marked where they stand (``![alt]``) so doc_read can name them and doc_page_image show them.
 
     ``meta`` goes unused: EPUB content is UTF-8 or UTF-16 by specification, so there is no
     encoding here that had to be guessed and recorded."""
+    return _epub_read(p, chars, [])
+
+
+def _epub_images(p):
+    """The pictures behind an EPUB's ``![...]`` markers, in marker order: ``[{"marker", "alt",
+    "member"}]``, ``member`` the archive member the chapter's <img src> names, or None."""
+    images = []
+    _epub_read(p, 3000, images)
+    return images
+
+
+def _epub_read(p, chars, images):
     try:
         with zipfile.ZipFile(p) as archive:
             _title, members = _epub_spine(archive)
@@ -1211,7 +1310,12 @@ def _epub_pages(p, chars=3000, meta=None):
                     raise ValueError(
                         f"Refused {os.path.basename(p)}: its spine expands past "
                         f"{_EPUB_BOOK_CHARS // (1024 * 1024)} MiB of markup, larger than any book")
-                pages.extend(_paginate(htmltext.readable(markup)[0], chars))
+                start = len(images)                  # one list for the book: "image N" counts book-wide
+                pages.extend(_paginate(htmltext.readable(markup, images=images)[0], chars))
+                for image in images[start:]:
+                    src = urllib.parse.unquote(image.pop("src").split("#")[0].split("?")[0])
+                    inside = src and not src.startswith(("data:", "http:", "https:"))
+                    image["member"] = posixpath.normpath(posixpath.join(posixpath.dirname(name), src)) if inside else None
     except zipfile.BadZipFile as error:
         raise ValueError(f"Not a readable EPUB: the file is not a zip archive ({error})") from error
     return pages

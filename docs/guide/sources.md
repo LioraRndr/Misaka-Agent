@@ -60,7 +60,13 @@ What reading them needs:
   logo), a drawing of more than 100 strokes (a chart, a map or a ruled table), and, in a scanned
   book, a page with far less text than the book's pages usually carry. `doc_outline` lists the
   pages that have them. `doc_page_image(doc_id, page, figure=N)` shows one figure alone, at the
-  resolution its labels need; without `figure` it shows the whole page, of a PDF or a DjVu. A
+  resolution its labels need; without `figure` it shows the whole page, of a PDF or a DjVu.
+  In a deck, the slides whose meaning is in a picture or a drawing are named, and
+  `doc_page_image(doc_id, page)` shows the slide (LibreOffice renders it; hidden slides have no
+  image). A Word document or an EPUB marks each picture where it stands, `![alt]`, and
+  `doc_page_image(doc_id, page, figure=N)` shows the N-th picture on that page as the file
+  stores it (a Word chart pasted as EMF or WMF needs LibreOffice). An EPUB indexed by an
+  earlier version has no markers in its text, so its pictures are not named. A
   model without vision cannot be shown an image at all, so for it the page or the figure is read
   in words by the team's vision model (`vision.model`, see [Models](models.md)).
   A value read off a figure is a reading, not a quotation: `doc_verify` cannot locate it.
@@ -69,8 +75,8 @@ What reading them needs:
   a citation such as `p12` points into that cut.
 
 Agents use the same index through their tools: `doc_list`, `doc_outline`, `doc_read` (by outline
-node or page range), `doc_find` (literal text), `doc_page_image` (a PDF or DjVu page, or one figure on
-a PDF page, as an image, for figures, tables, maps and scans) and `doc_add`. `doc_verify` finds the page and character offset
+node or page range), `doc_find` (literal text), `doc_page_image` (a page of a PDF, a DjVu or a deck,
+or one figure or embedded picture, as an image, for figures, tables, maps, slides and scans) and `doc_add`. `doc_verify` finds the page and character offset
 where a quotation occurs and returns a hash for it. It shows where the words are; whether they
 support the claim is for the red team and Last Order to judge. On an OCR page, a
 match means the quotation matches what OCR read.

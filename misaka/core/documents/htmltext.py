@@ -26,6 +26,9 @@ MAX_LINK_CHARS = 500
 # document cannot decide how much of a turn -- or of a database column -- it occupies; a 2 MiB
 # <title> is as easy to serve as a 2 MiB body.
 MAX_TITLE_CHARS = 200
+# An image's alt text as a marker carries it: enough to say what the picture is, clipped like
+# the alt text the Word reader writes (office/docx.py).
+MAX_ALT_CHARS = 120
 
 _BLANK_RUN = re.compile(r"\n{3,}")
 
@@ -52,8 +55,13 @@ class Readable(HTMLParser):
     to guess the URL of whatever it wants to read next.
     """
 
-    def __init__(self, base_url: str = "") -> None:
+    def __init__(self, base_url: str = "", images: list | None = None) -> None:
         super().__init__(convert_charrefs=True)
+        # Given a list, an <img> is written where it stands as ``![alt]`` (``![image N]`` with no
+        # alt) and its src added to the list in the same order, so a reader can be shown the
+        # picture behind each marker. The corpus asks this for an EPUB; a web page is not asked,
+        # because its icons and trackers would bury the text.
+        self._images = images
         try:
             # No base -- a file on disk, an EPUB chapter -- means no absolute target exists,
             # so links render as the words they show rather than as a URL nobody can follow.
@@ -102,6 +110,12 @@ class Readable(HTMLParser):
             self._parts.append("\n- ")
         elif tag == "br":
             self._parts.append("\n")
+        elif tag == "img" and self._images is not None:
+            found = dict(attrs)
+            alt = " ".join((found.get("alt") or "").split())[:MAX_ALT_CHARS]
+            marker = f"![{alt or f'image {len(self._images) + 1}'}]"
+            self._images.append({"marker": marker, "alt": alt, "src": (found.get("src") or "").strip()})
+            self._parts.append(f" {marker} ")
         elif tag in _BLOCKS:
             self._parts.append("\n\n")
 
@@ -168,9 +182,10 @@ def clip(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[:limit] + "…"
 
 
-def readable(markup: str, base_url: str = "") -> tuple[str, str]:
-    """``(text, title)`` for a markup document. ``base_url`` resolves relative links."""
-    parser = Readable(base_url)
+def readable(markup: str, base_url: str = "", images: list | None = None) -> tuple[str, str]:
+    """``(text, title)`` for a markup document. ``base_url`` resolves relative links; ``images``,
+    when given, collects the pictures the text marks (see ``Readable``)."""
+    parser = Readable(base_url, images)
     try:
         parser.feed(markup)
         parser.close()
