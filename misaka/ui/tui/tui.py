@@ -293,6 +293,7 @@ class TUI(Container):
         self._capture_loop()
         self.lastRenderAt = 0.0
         self.lastRenderCostMs = 0.0
+        self.lastRenderWallMs = 0.0
         self._renderLock = threading.Lock()
         self.cursorRow = 0
         self.hardwareCursorRow = 0
@@ -605,8 +606,11 @@ class TUI(Container):
         # every frame) then made frames run back to back, a streaming reply advanced about one
         # event per frame, fell minutes behind the provider and was cut off ("Connection
         # error.", GitHub issue #6). So a frame also waits as long as the last one took: painting
-        # gets at most half the loop.
-        delay_ms = max(0.0, self.MIN_RENDER_INTERVAL_MS - elapsed, 2 * self.lastRenderCostMs - elapsed)
+        # gets at most half the loop. ``elapsed`` runs from the frame's start, and the wait is
+        # counted from its end: a frame that took longer than its CPU (a write held up, threads
+        # contending for the GIL) still leaves the loop as long as its CPU took.
+        delay_ms = max(0.0, self.MIN_RENDER_INTERVAL_MS - elapsed,
+                       self.lastRenderWallMs + self.lastRenderCostMs - elapsed)
         callback = lambda: self._run_scheduled_render(timer)
         if self._loop is not None:
             if self._loop.is_closed():
@@ -1038,11 +1042,12 @@ class TUI(Container):
         # The frame's cost is the CPU this thread spent laying it out: a terminal write held up for
         # seconds (a Windows console with text selected, a stalled ssh link) is not work the loop
         # must be left time for, and counted it held the next frame back as long again.
-        started = time.thread_time()
+        started, wall = time.thread_time(), time.perf_counter()
         try:
             self._doRenderInner()
         finally:
             self.lastRenderCostMs = (time.thread_time() - started) * 1000
+            self.lastRenderWallMs = (time.perf_counter() - wall) * 1000
             self._renderLock.release()
 
     def _doRenderInner(self) -> None:

@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 SESSION_KINDS = KINDS
 
 # Bumped when the question changes, so a reading made under another one is not reused.
-READING_VERSION = 1
+# 2: readings kept before 0.18.10 may be empty or cut short, with nothing to tell them by.
+READING_VERSION = 2
 # Images read at once, as FrontierAgent's batch reader does (READDOC_VISION_CONCURRENCY).
 CONCURRENCY = 4
 CONTEXT_CHARS = 800
@@ -66,6 +67,8 @@ def _cached(key: str) -> str | None:
             text = f.read()
     except OSError:
         return None
+    if not text.strip():
+        return None                         # no reading: the image is read again
     _kept[key] = text
     return text
 

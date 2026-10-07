@@ -142,3 +142,13 @@ async def test_an_empty_or_cut_off_reading_is_never_kept(monkeypatch, tmp_path, 
     messages = [UserMessage(content=[ImageContent(data=PNG, mimeType="image/png")], timestamp=1)]
     await extension.read_images({"messages": messages}, ctx)
     assert bool(extension._kept) == kept
+
+
+async def test_an_empty_reading_on_disk_is_read_again(reader, monkeypatch):
+    """0.18.9 kept empty readings, and served them for good."""
+    from misaka.config import home
+    key = extension._key(PNG, "openai/gpt-4o")
+    folder = home.path("vision_cache")
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{key}.md").write_text("  \n", encoding="utf-8")
+    assert extension._cached(key) is None

@@ -65,28 +65,36 @@ class SlowContent:
 async def test_a_slow_frame_leaves_the_loop_as_long_as_it_took(monkeypatch):
     ui = TUI(Terminal())
     ui.addChild(SlowContent())
-    ui.doRender()
-    assert ui.lastRenderCostMs >= 30
-
     loop = asyncio.get_running_loop()
     delays = []
     real_call_later = loop.call_later
     monkeypatch.setattr(loop, "call_later", lambda delay, *args: delays.append(delay) or real_call_later(delay, *args))
 
-    ui.lastRenderAt = time.perf_counter() * 1000
-    ui.renderRequested = True
+    def frame_then_schedule():
+        ui.lastRenderAt = time.perf_counter() * 1000          # as the render runners stamp it
+        ui.doRender()
+        ui.renderRequested = True
+        ui._scheduleRender()
+        ui._cancel_render_timer()
+
+    frame_then_schedule()
+    assert ui.lastRenderCostMs >= 30
+    # pi's 16 ms from the frame's start would have rendered again at once.
+    assert delays[-1] >= ui.lastRenderCostMs / 1000 - 0.005
+
+    # A frame that waited beyond its CPU (threads contending for the GIL, a loaded machine) still
+    # leaves the loop its CPU's worth: counted from the frame's start, the wait came to nothing.
+    ui.lastRenderCostMs, ui.lastRenderWallMs = 30.0, 60.0
+    ui.lastRenderAt = time.perf_counter() * 1000 - 60
     ui._scheduleRender()
     ui._cancel_render_timer()
-    # pi's 16 ms from the frame's start would have rendered again at once.
-    assert delays[-1] >= 2 * ui.lastRenderCostMs / 1000 - 0.01
+    assert delays[-1] >= 0.029
 
-    ui.lastRenderCostMs = 1.0
+    ui.lastRenderCostMs = ui.lastRenderWallMs = 1.0
     ui.lastRenderAt = time.perf_counter() * 1000
     ui._scheduleRender()
     ui._cancel_render_timer()
     assert 0.01 <= delays[-1] <= ui.MIN_RENDER_INTERVAL_MS / 1000
-
-
 
 
 class HeldUpTerminal(Terminal):

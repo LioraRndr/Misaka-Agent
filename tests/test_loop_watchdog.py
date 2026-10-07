@@ -148,10 +148,11 @@ TUI_SHUTDOWN = textwrap.dedent('''
         loop = asyncio.get_running_loop()
         done = loop.create_future()
         async def shutdown():
-            await asyncio.sleep(0.2)
+            signal.signal(signal.SIGTERM, previous)     # unregisterSignalHandlers(), first thing
+            await asyncio.sleep(0.2)                    # drain input, stop the TUI, dispose
             print("shut down in order", flush=True)
             done.set_result(0)
-        signal.signal(signal.SIGTERM, lambda *_: loop.create_task(shutdown()))
+        previous = signal.signal(signal.SIGTERM, lambda *_: loop.create_task(shutdown()))
         loop.call_later(0.1, os.kill, os.getpid(), signal.SIGTERM)
         return await done
 

@@ -430,3 +430,9 @@ def test_a_reread_without_pdfiums_answer_keeps_a_plates_ocr(tmp_path, monkeypatc
     assert corpus._reread(str(ddir), str(source), 6) == 6
     assert (ddir / "pages" / "p0006.txt").read_text(encoding="utf-8") == stored[5]
     assert json.loads((ddir / "meta.json").read_text(encoding="utf-8"))["extract_version"] == 2
+    # A file pdfium never reads is not re-extracted, OCR and all, on every ingest for ever.
+    for _ in range(corpus.REREAD_TRIES - 1):
+        corpus._reread(str(ddir), str(source), 6)
+    meta = json.loads((ddir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["extract_version"] == corpus.EXTRACT_VERSION and "reread_put_off" not in meta
+    assert (ddir / "pages" / "p0006.txt").read_text(encoding="utf-8") == stored[5], "what was stored stands"

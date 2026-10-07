@@ -126,25 +126,32 @@ def _end_on_sigterm():
     """On POSIX, a SIGTERM -- how a halted run stops its cards and nodes -- cancels this coroutine
     instead of killing the process outright, so what it holds is let go on the way out: a model
     request's token lease is settled, not left to expire and be charged in full (0.18.9 sweep).
-    Returns ``(was it asked, undo)``; Windows ends a process outright and has nothing to catch."""
+    A Python-level handler, as a window's TUI installs its own: the TUI's, installed later, takes
+    the signal over whole for its orderly shutdown (an asyncio handler fired beside it and cut
+    that shutdown short). Returns ``(was it asked, undo)``; Windows ends a process outright."""
     asked = []
     if os.name != "posix":
         return asked, lambda: None
     loop, task = asyncio.get_running_loop(), asyncio.current_task()
 
-    def ended():
-        # A window's TUI takes SIGTERM for its own clean shutdown (terminal restored, runtime
-        # disposed): once its handler stands in asyncio's place, the signal is the TUI's.
-        if signal.getsignal(signal.SIGTERM) is ours:
-            asked.append(True)
-            task.cancel()
+    def ended(_signum, _frame):
+        asked.append(True)
+        loop.call_soon_threadsafe(task.cancel)
 
+    original = signal.getsignal(signal.SIGTERM)
     try:
-        loop.add_signal_handler(signal.SIGTERM, ended)  # windows-footgun: ok - POSIX only, returned early above
+        # asyncio's registration only wakes the loop on the signal (its wakeup fd), so whichever
+        # Python handler runs -- this one, or the TUI's scheduling its shutdown -- is acted on at once.
+        loop.add_signal_handler(signal.SIGTERM, lambda: None)  # windows-footgun: ok - POSIX only, returned early above
+        signal.signal(signal.SIGTERM, ended)
     except (NotImplementedError, RuntimeError, ValueError):     # a loop off the main thread
         return asked, lambda: None
-    ours = signal.getsignal(signal.SIGTERM)
-    return asked, lambda: loop.remove_signal_handler(signal.SIGTERM)
+
+    def undo():
+        if signal.getsignal(signal.SIGTERM) is ended:
+            loop.remove_signal_handler(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, original)
+    return asked, undo
 
 
 async def watched(coro):
