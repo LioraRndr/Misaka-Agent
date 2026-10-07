@@ -168,6 +168,7 @@ MISAKAがコミットするのは、あなたが指示したときだけです�
 | サインイン、モデル選択、ローカルモデル | [モデル](docs/guide/models.md) |
 | 文書とウェブの利用 | [文書とウェブ](docs/guide/sources.md) |
 | トラブルシューティング | [トラブルシューティング](docs/guide/troubleshooting.md) |
+| MISAKAが守るもの・守らないもの | [安全に使う（英語）](docs/guide/security.md) |
 | コマンドと設定のリファレンス | [コマンド](docs/reference/commands.md)、[設定](docs/reference/configuration.md) |
 
 [docs/README.md](docs/README.md)はすべてのドキュメントの索引で、MISAKAの用語も解説しています。「はじめに」以外のドキュメントは現在英語版のみです。

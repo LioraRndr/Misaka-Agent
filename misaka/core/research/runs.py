@@ -391,7 +391,11 @@ SETTLED_TASK_STATUSES = frozenset({"running", "review", "done", "failed", "stopp
 
 def node_dir(node_id):
     """The folder a node owns: ``nodes/<node id>``, the root included. Flat on purpose: a node
-    with several parents has no single place in a nested tree."""
+    with several parents has no single place in a nested tree. A node id is a name, as
+    ``session_dir`` and ``_artifact_name`` already insist."""
+    node_id = str(node_id or "")
+    if not node_id or Path(node_id).name != node_id or node_id in {".", ".."} or "\\" in node_id:
+        raise ValueError(f"A node id is a name, not a path: {node_id!r}")
     return os.path.join("nodes", node_id)
 
 
@@ -479,15 +483,23 @@ def prepare_runner(con, table, row_id):
     return key
 
 
+def _own_identity(pid):
+    """This process's identity, or ``host:pid`` where neither psutil nor ``ps`` can read one (a
+    container with an empty /proc: every node failed to start there, issue #10 audit, H5). Only
+    for the process's own claim -- its PID cannot be reused while it runs. ``processes.identity``
+    itself keeps answering None for an unreadable process: everywhere else that None is what keeps
+    a reused PID from passing for the recorded one."""
+    from misaka.core.platform import processes
+    return processes.identity(pid) or f"{socket.gethostname()}:{pid}"
+
+
 def claim_runner(con, table, row_id, key):
     """Fence delayed/duplicate spawns, including a lost pane.create reply."""
     from misaka.core.platform import processes
     if not key:
         return False
     pid = os.getpid()
-    identity = processes.identity(pid)
-    if identity is None:
-        raise RuntimeError("Research runner process identity is unreadable")
+    identity = _own_identity(pid)
     # The parent recorded this process's identity from its own psutil, whose start times can
     # sit a whole second from what this process reads (processes.IDENTITY_TOLERANCE_SECONDS),
     # so the fence compares in Python and the row then carries this process's own reading.
@@ -516,7 +528,7 @@ def note_claim_failure(con, table, row_id, key):
     row = con.execute(f'SELECT runner_key, runner_pid, runner_identity FROM "{table}" WHERE id=?',
                       (row_id,)).fetchone()
     pid = os.getpid()
-    identity = processes.identity(pid)
+    identity = _own_identity(pid)
     if row is None:
         reason = f"row {row_id} no longer exists"
     elif not key:

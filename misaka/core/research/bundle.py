@@ -24,6 +24,7 @@ import re
 import shutil
 import stat
 import tempfile
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -43,7 +44,10 @@ _RUN_SEEDS = ("final", "partial")       # the run's delivered document (partial 
 _STOP = r'''[^\s`'"<>\[\]()]'''         # a locator runs until whitespace or Markdown/quote punctuation
 _SEG = r'''[^\s`'"<>\[\]()/]'''
 _LOCATOR = re.compile(
-    rf"doc:[0-9a-f]{{8,64}}(?:#p\d+)?"
+    # A path set in backticks or <> is taken whole: real file names hold spaces, brackets and
+    # parentheses ("downloads/my paper 2024.pdf" used to end at "downloads/my"; issue #10 audit, M6).
+    rf"(?<=[`<])(?:{DOWNLOAD_DIR_NAME}|nodes|final|cards)/[^`<>\n]+(?=[`>])"
+    rf"|doc:[0-9a-f]{{8,64}}(?:#p\d+)?"
     rf"|https?://{_STOP}+"
     rf"|(?<![\w/.\-])(?:{DOWNLOAD_DIR_NAME}|nodes|final|cards)/{_STOP}+"
     rf"|(?<![\w:.])/(?:{_SEG}+/)+{_SEG}+"
@@ -233,6 +237,8 @@ class _Collector:
         if locator.startswith(("http://", "https://")):
             real = self.index.pages.get(_url_key(locator))
             return real, "" if real else f"no saved copy under {DOWNLOAD_DIR_NAME}/"
+        if "%" in locator:
+            locator = urllib.parse.unquote(locator)     # a Markdown link's path: downloads/my%20paper.pdf
         for base in ([""] if os.path.isabs(locator) else bases):
             candidate = os.path.join(base, locator)
             real = self.index.file_inside(candidate)
