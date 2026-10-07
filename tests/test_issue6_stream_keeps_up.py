@@ -82,6 +82,13 @@ async def test_a_slow_frame_leaves_the_loop_as_long_as_it_took(monkeypatch):
     ui._cancel_render_timer()
     assert 0.01 <= delays[-1] <= ui.MIN_RENDER_INTERVAL_MS / 1000
 
+    # A write the terminal held up for two seconds does not hold the next frame back as long.
+    ui.lastRenderCostMs = 2000.0
+    ui.lastRenderAt = time.perf_counter() * 1000
+    ui._scheduleRender()
+    ui._cancel_render_timer()
+    assert delays[-1] <= ui.MAX_RENDER_WAIT_MS / 1000
+
 
 class Session:
     def __init__(self, cwd):
@@ -149,3 +156,42 @@ def test_connection_error_names_the_transport_failure():
     assert message == "Connection error. (ReadError: [WinError 10054] An existing connection was forcibly closed)"
     assert RETRYABLE_PROVIDER_ERROR_PATTERN.search(message)
     assert openai_completions._format_completion_error(RuntimeError("boom")) == "boom"
+
+
+def test_a_request_refused_before_it_was_sent_does_not_quote_the_key():
+    """h11 refuses a header with a trailing space and quotes the whole value: the API key came back
+    in the error message, shown in the window and kept in the session."""
+    import h11
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    try:
+        try:
+            raise h11.LocalProtocolError("Illegal header value b'Bearer sk-ABCSECRETKEY123 '")
+        except h11.LocalProtocolError as local:
+            raise openai.APIConnectionError(request=request) from local
+    except openai.APIConnectionError as error:
+        message = openai_completions._format_completion_error(error)
+    assert "SECRETKEY" not in message and "API key" in message
+    assert RETRYABLE_PROVIDER_ERROR_PATTERN.search(message)
+
+
+@pytest.mark.parametrize("said", [
+    "peer closed connection without sending complete message body (incomplete chunked read) (RemoteProtocolError)",
+    "(ConnectionResetError: [Errno 54] Connection reset by peer)",
+    "Connection error. (ReadError: [WinError 10054] An existing connection was forcibly closed by the remote host)",
+])
+def test_a_reply_dropped_mid_stream_is_retried(said):
+    """The issue #6 failure itself: the provider gave up on a slow reader mid-reply, and none of
+    these words was in the pattern, so the turn ended with no retry."""
+    assert RETRYABLE_PROVIDER_ERROR_PATTERN.search(said)
+
+
+def test_the_token_cap_stop_is_never_retried_whatever_its_numbers():
+    from misaka.ai.providers._common import _empty_usage
+    from misaka.ai.types import AssistantMessage
+    from misaka.ai.utils.retry import is_retryable_assistant_error
+    from misaka.core.platform import budget
+    said = (f"{budget.EXHAUSTED_MESSAGE}: the next request needs up to 500,000 tokens and this research run "
+            f"has 429,000 of its 5,000,000 left.")
+    message = AssistantMessage(content=[], api="a", provider="p", model="m", usage=_empty_usage(),
+                               stopReason="error", errorMessage=said, timestamp=0)
+    assert not is_retryable_assistant_error(message)

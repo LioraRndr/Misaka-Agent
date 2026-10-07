@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -253,6 +254,7 @@ def stream_openai_completions(
             timestamp=time.time_ns() // 1_000_000,
         )
 
+        chunks = None
         try:
             compat = get_compat(model)
             client = _option(options, "client")
@@ -360,7 +362,8 @@ def stream_openai_completions(
                     tool_call_index_by_id[tool_call["id"]] = existing_index
                 return existing_index, block
 
-            async for raw_chunk in _iterate_stream(openai_stream, _option(options, "signal")):
+            chunks = _iterate_stream(openai_stream, _option(options, "signal"))
+            async for raw_chunk in chunks:
                 if not isinstance(raw_chunk, Mapping):
                     continue
 
@@ -536,6 +539,9 @@ def stream_openai_completions(
                 output.errorMessage = f"{output.errorMessage}\n{raw_metadata['raw']}"
             stream.push(ErrorEvent(reason=output.stopReason, error=output), cause=error)
         finally:
+            if chunks is not None:          # closed now, its abort task with it, not when GC finds it
+                with contextlib.suppress(Exception):
+                    await chunks.aclose()
             stream.end()
 
     spawn_stream_task(run(), stream=stream)
@@ -1506,16 +1512,20 @@ async def _iterate_stream(stream_obj: Any, signal: Any = None) -> AsyncIterator[
     # One abort task for the whole stream (_iterate_async_iterable), not one per SSE item: a task
     # per item cost several loop turns per event, which a busy TUI turned into a stream that fell
     # minutes behind the provider (GitHub issue #6).
-    async for chunk in _iterate_async_iterable(stream_obj, signal, on_abort=lambda: _close_stream(stream_obj)):
-        if hasattr(chunk, "model_dump"):
-            dumped = chunk.model_dump()
-            if isinstance(dumped, dict):
-                yield dumped
+    # Closed with this generator, so its abort task goes with it (a turn that ended in an
+    # error left a pending signal.wait() behind until the cyclic GC destroyed it).
+    async with contextlib.aclosing(
+            _iterate_async_iterable(stream_obj, signal, on_abort=lambda: _close_stream(stream_obj))) as items:
+        async for chunk in items:
+            if hasattr(chunk, "model_dump"):
+                dumped = chunk.model_dump()
+                if isinstance(dumped, dict):
+                    yield dumped
+                    continue
+            if isinstance(chunk, dict):
+                yield chunk
                 continue
-        if isinstance(chunk, dict):
-            yield chunk
-            continue
-        yield json.loads(json.dumps(chunk, default=lambda value: value.__dict__))
+            yield json.loads(json.dumps(chunk, default=lambda value: value.__dict__))
 
 
 def _format_completion_error(error: Any) -> str:
@@ -1533,8 +1543,15 @@ def _format_completion_error(error: Any) -> str:
         cause = cause.__cause__
     if cause is None:
         return message
-    detail = str(cause)
-    return f"{message} ({type(cause).__name__}: {detail})" if detail and detail != message else f"{message} ({type(cause).__name__})"
+    name = type(cause).__name__
+    if name == "LocalProtocolError":
+        # The request this side built was refused before it was sent, and the refusal quotes it:
+        # an API key with a trailing space or line break came back whole (0.18.9 sweep).
+        return f"{message} ({name}: the request could not be sent -- does the API key end in a space or a line break?)"
+    from misaka.utils.redact import redact
+    detail = redact(str(cause)).strip()
+    said = f"({name}: {detail})" if detail and detail != message.strip() else f"({name})"
+    return f"{message} {said}" if message.strip() else said
 
 
 streamOpenAICompletions = stream_openai_completions

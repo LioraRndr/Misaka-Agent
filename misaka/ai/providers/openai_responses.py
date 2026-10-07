@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -299,13 +300,17 @@ async def _iterate_stream(stream_obj: Any, signal: Any = None) -> AsyncIterator[
     # One abort task for the whole stream (_iterate_async_iterable), not one per SSE item: a task
     # per item cost several loop turns per event, which a busy TUI turned into a stream that fell
     # minutes behind the provider (GitHub issue #6).
-    async for event in _iterate_async_iterable(stream_obj, signal, on_abort=lambda: _close_stream(stream_obj)):
-        if hasattr(event, "model_dump"):
-            yield event.model_dump()
-        elif isinstance(event, dict):
-            yield event
-        else:
-            yield json.loads(json.dumps(event, default=lambda value: value.__dict__))
+    # Closed with this generator, so its abort task goes with it (a turn that ended in an
+    # error left a pending signal.wait() behind until the cyclic GC destroyed it).
+    async with contextlib.aclosing(
+            _iterate_async_iterable(stream_obj, signal, on_abort=lambda: _close_stream(stream_obj))) as items:
+        async for event in items:
+            if hasattr(event, "model_dump"):
+                yield event.model_dump()
+            elif isinstance(event, dict):
+                yield event
+            else:
+                yield json.loads(json.dumps(event, default=lambda value: value.__dict__))
 
 
 async def _create_responses_stream(client: Any, params: dict[str, Any], options: Any, model: Model) -> Any:
@@ -386,20 +391,22 @@ def stream_openai_responses(
             )
             stream.push(StartEvent(partial=output))
             signal = _option(options, "signal")
-            await process_responses_stream(
-                _iterate_stream(openai_stream, signal),
-                output,
-                stream,
-                model,
-                {
-                    "grammarToolInputProperties": create_grammar_tool_input_properties(
-                        get_declared_tools(normalized_context.messages),
-                        bool(getattr(getattr(model, "compat", None), "supportsOpenAIGrammarTools", None)),
-                    ),
-                    "serviceTier": _option(options, "serviceTier"),
-                    "applyServiceTierPricing": lambda usage, tier: apply_service_tier_pricing(usage, tier, model),
-                },
-            )
+            events = _iterate_stream(openai_stream, signal)
+            async with contextlib.aclosing(events):
+                await process_responses_stream(
+                    events,
+                    output,
+                    stream,
+                    model,
+                    {
+                        "grammarToolInputProperties": create_grammar_tool_input_properties(
+                            get_declared_tools(normalized_context.messages),
+                            bool(getattr(getattr(model, "compat", None), "supportsOpenAIGrammarTools", None)),
+                        ),
+                        "serviceTier": _option(options, "serviceTier"),
+                        "applyServiceTierPricing": lambda usage, tier: apply_service_tier_pricing(usage, tier, model),
+                    },
+                )
 
             if signal_aborted(signal):
                 raise RuntimeError("Request was aborted")

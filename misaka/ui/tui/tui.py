@@ -270,6 +270,9 @@ class Container:
 
 class TUI(Container):
     MIN_RENDER_INTERVAL_MS = 16
+    # A frame's cost is wall time, the terminal write included: one blocked for seconds (a Windows
+    # console with text selected, a stalled ssh link) would hold the next frame back as long.
+    MAX_RENDER_WAIT_MS = 250
     SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 
     def __init__(self, terminal: Terminal, showHardwareCursor: bool | None = None) -> None:
@@ -606,7 +609,8 @@ class TUI(Container):
         # event per frame, fell minutes behind the provider and was cut off ("Connection
         # error.", GitHub issue #6). So a frame also waits as long as the last one took: painting
         # gets at most half the loop.
-        delay_ms = max(0.0, self.MIN_RENDER_INTERVAL_MS - elapsed, 2 * self.lastRenderCostMs - elapsed)
+        delay_ms = max(0.0, self.MIN_RENDER_INTERVAL_MS - elapsed,
+                       min(2 * self.lastRenderCostMs, self.MAX_RENDER_WAIT_MS) - elapsed)
         callback = lambda: self._run_scheduled_render(timer)
         if self._loop is not None:
             if self._loop.is_closed():
