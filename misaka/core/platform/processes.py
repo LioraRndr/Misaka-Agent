@@ -167,10 +167,16 @@ def terminate_orphaned_group(pgid: int, leader_identity: str) -> bool:
     the old group is gone and the new process must never be signalled.
 
     Returns ``True`` only when the old group is proven absent.
+
+    Windows has no process groups: the recorded leader is the process, and its tree is what the
+    group stands for. Refusing there outright (as this did) left every card a Sister root had
+    claimed on Windows unreclaimable once its process died (issue #10 plan, O1).
     """
 
-    if os.name != "posix" or int(pgid) <= 1:
-        return not _group_exists(int(pgid)) if os.name == "posix" else False
+    if os.name != "posix":
+        return _terminate_recorded_tree(int(pgid), leader_identity)
+    if int(pgid) <= 1:
+        return not _group_exists(int(pgid))
     pgid = int(pgid)
     if pgid == os.getpgrp():
         return False
@@ -198,6 +204,20 @@ def terminate_orphaned_group(pgid: int, leader_identity: str) -> bool:
                 return True
             time.sleep(0.05)
     return not _group_exists(pgid)
+
+
+def _terminate_recorded_tree(pid: int, leader_identity: str) -> bool:
+    """The non-POSIX half of :func:`terminate_orphaned_group`: gone, or now another process's PID,
+    is absent; the recorded process still running is terminated with its tree."""
+    if pid <= 0 or pid == os.getpid():
+        return False
+    current = identity(pid)
+    if current is None:
+        return not psutil.pid_exists(pid)          # alive but unreadable cannot be named the orphan
+    if not same_identity(current, leader_identity):
+        return True
+    terminate(pid)
+    return not identity_is_alive(pid, leader_identity)
 
 
 def _token(process: psutil.Process) -> ProcessToken | None:

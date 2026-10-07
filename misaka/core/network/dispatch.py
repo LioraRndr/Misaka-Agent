@@ -127,10 +127,10 @@ def reconcile(con, cfg, *, task_ids=None, workspace=None):
     process identity is alive; its claim is released under the exact ownership fence, so
     a paused-but-live Last Order keeps the Sister it still owns. A worker is wedged when
     its process is alive but the card has shown no progress for ``HEARTBEAT_STALE_SECONDS``.
-    Only a headless card process is stopped for that: it runs in its own process group under
-    its own lease, whereas a Last Order's or the panel's lease stands for a process that
-    hosts other work and stops its own wedged Sisters itself. ``task_ids`` and ``workspace``
-    narrow the pass.
+    Only a card whose recorded process leads its own process group is stopped for that (a
+    headless worker, a Sister root): a panel card records no group and is never in this branch,
+    and a card under a Last Order's lock (``lo*``) is left to her -- her process hosts other work
+    and stops its own wedged Sisters itself. ``task_ids`` and ``workspace`` narrow the pass.
     """
     import time as _time
 
