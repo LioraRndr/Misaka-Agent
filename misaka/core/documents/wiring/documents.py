@@ -141,7 +141,7 @@ def _ocr_note(row):
 
 def _seeing(row):
     """How a reader sees a page the text does not carry."""
-    if str(row.get("orig_path") or "").lower().endswith(".pdf"):
+    if str(row.get("orig_path") or "").lower().endswith(_RENDERABLE):     # a DjVu page renders too
         return "look at them with doc_page_image"
     return "only the source file shows them"
 
@@ -156,6 +156,13 @@ def _page_notes(row, start, end, figs=None):
         lines.append(f"Page {n} has no text here ({why}); {_seeing(row).replace('them', 'it')}.")
     if len(unread) > 10:
         lines.append(f"{len(unread) - 10} more pages in this range have no text here either.")
+    # A page OCR read in an otherwise typeset document is a scan or a picture with little text (a
+    # plate and its caption, a chart): figures() leaves it out, so it is named here instead.
+    listed = row.get("ocr_pages") if row.get("ocr") else None
+    partly = isinstance(listed, list) and len(listed) < (row.get("pages") or 0)
+    if partly and (hit := [n for n in listed if isinstance(n, int) and start <= n <= end]):
+        lines.append(f"Pages {corpus._page_spec(hit)} were read by OCR from the page image -- a scan, "
+                     f"or a picture with little text: doc_page_image shows what is on them.")
     pictured = [(page, record) for page, record in sorted((figs or {}).items()) if start <= page <= end]
     lines += [_figure_line(page, record) for page, record in pictured[:10]]
     if len(pictured) > 10:
@@ -315,16 +322,41 @@ def _picture_png(data, member):
             return f.read()
 
 
+# A picture is decoded in this process (a PDF page renders in a child, capped): a 41 KB PNG of
+# 12000 x 12000 pixels took 800 MB here. A JPEG is decoded at a reduced size; anything else this
+# large is refused in a sentence.
+PICTURE_PIXELS_AT_MOST = 40_000_000
+
+
 def _pillow_png(data):
-    """PNG bytes of an image Pillow can open, or None."""
+    """PNG bytes of an image Pillow can open, or None; ValueError for one too large to decode."""
+    import warnings
+
     from PIL import Image
     try:
-        with Image.open(BytesIO(data)) as image:
+        with warnings.catch_warnings():         # the size is checked here, against a lower bound
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            image = Image.open(BytesIO(data))
+    except Image.DecompressionBombError as error:
+        raise ValueError(f"This picture is too large to show here ({error}); open the document itself.") from error
+    except Exception:  # noqa: BLE001 - not a format Pillow reads
+        return None
+    with image:
+        width, height = image.size
+        if width * height > PICTURE_PIXELS_AT_MOST:
+            scale = 2                           # what a JPEG decodes at: 1/2, 1/4, 1/8
+            while width * height > PICTURE_PIXELS_AT_MOST * scale * scale and scale < 8:
+                scale *= 2
+            image.draft("RGB", (width // scale, height // scale))
+            if image.size[0] * image.size[1] > PICTURE_PIXELS_AT_MOST:
+                raise ValueError(f"This picture is {width} x {height} pixels, too large to show here; "
+                                 f"open the document itself to see it.")
+        try:
             buffer = BytesIO()
             image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB").save(buffer, format="PNG")
             return buffer.getvalue()
-    except Exception:  # noqa: BLE001 - not a format Pillow reads
-        return None
+        except Exception:  # noqa: BLE001 - a format Pillow names but cannot decode
+            return None
 
 
 def _render_slide(doc_id, source, page, scale, root):

@@ -132,6 +132,10 @@ def _program_command(install: update.Install) -> list[str] | None:
         return ["uv", "tool", "uninstall", "misaka"]
     if install.installer == "pipx":
         return ["pipx", "uninstall", "misaka"]
+    if install.installer == "Homebrew":
+        return ["brew", "uninstall", "misaka"]
+    if install.installer == "winget":
+        return ["winget", "uninstall", "Luciole-Studio.Misaka"]
     if install.kind == "checkout":
         return None
     if install.installer == "uv":

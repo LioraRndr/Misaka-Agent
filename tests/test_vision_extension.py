@@ -5,6 +5,7 @@ model that cannot see, and every image a text-only Sister was handed -- a scanne
 screenshot, a pasted chart -- reached her as that sentence. The browser alone could have a
 screenshot read by browser.vision_model. Now one vision model, vision.model, reads every image
 to such a model, on the request-time context event, without touching Pi's kernel."""
+import asyncio
 from types import SimpleNamespace as NS
 
 import pytest
@@ -109,3 +110,34 @@ def test_every_session_of_every_role_gets_it(tmp_path):
         names = [entry["name"] if isinstance(entry, dict) else getattr(entry, "name", None)
                  for entry in discover(NS(profile_dir=str(tmp_path / "sister"), kind=kind, workspace=str(tmp_path)))]
         assert "vision" in names, kind
+
+
+@pytest.mark.parametrize("stop, texts, outcome", [("length", [], "no text before its output limit"),
+                                                  ("stop", [""], "no text"),
+                                                  ("length", ["a map of the"], "reached its output limit")])
+async def test_an_empty_or_cut_off_reading_is_said_and_never_kept_empty(monkeypatch, stop, texts, outcome):
+    """A reasoning vision model that spent its output thinking returned nothing, and the bridge
+    kept that empty reading for good."""
+    import importlib
+    import sys
+    from types import SimpleNamespace as NS
+
+    from misaka.ai.types import Model
+    importlib.import_module("misaka.ai.stream")
+    stream = sys.modules["misaka.ai.stream"]      # the package re-exports a function by that name
+
+    async def complete_simple(model, context, options):
+        return NS(content=[NS(type="text", text=text) for text in texts], stopReason=stop, usage=None)
+
+    monkeypatch.setattr(stream, "complete_simple", complete_simple)
+    model = Model(id="m", name="m", api="openai-completions", provider="p", baseUrl="https://x", reasoning=True,
+                  input=["text", "image"], cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  contextWindow=1000, maxTokens=1000)
+    ctx = NS(modelRegistry=NS(find=lambda p, m: model, getAuth=lambda m: asyncio.sleep(
+        0, NS(auth=NS(baseUrl="", apiKey="k", headers={}), env={}))))
+    image = {"type": "image", "data": "", "mimeType": "image/png"}
+    if texts and texts[0]:
+        assert outcome in await vision.describe(image, "q", ctx, "p/m", setting="vision.model", purpose="t")
+    else:
+        with pytest.raises(ValueError, match=outcome):
+            await vision.describe(image, "q", ctx, "p/m", setting="vision.model", purpose="t")

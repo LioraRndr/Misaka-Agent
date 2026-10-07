@@ -48,7 +48,7 @@ class Install:
 
     kind: str                 # "checkout" | "git" | "wheel" | "bundle" (a release archive)
     editable: bool
-    installer: str            # "uv tool" | "pipx" | "uv" (uv pip) | "pip" | ""
+    installer: str            # "uv tool" | "pipx" | "uv" (uv pip) | "pip" | "Homebrew" | "winget" | ""
     path: Path | None         # the checkout, when there is one
     commit: str | None        # the commit a git install pinned
     version: str
@@ -71,21 +71,20 @@ INSTALL_SH = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/scripts/
 INSTALL_PS1 = f"irm https://raw.githubusercontent.com/{REPO}/main/scripts/install.ps1 | iex"
 
 
-def _bundle_root() -> Path | None:
-    """The release archive this interpreter runs from, or None. An archive carries its own
-    CPython at ``python/`` beside ``bin/misaka`` and ``BUNDLED.txt`` (scripts/build_release.py);
-    pip and git have nothing to do with it, and a new archive is how it is updated."""
-    root = Path(sys.prefix).parent
-    return root if (root / "BUNDLED.txt").is_file() and (root / "bin").is_dir() else None
+# A release archive Homebrew or winget put in place is theirs to replace (the installer script
+# would add a second copy beside it).
+PACKAGE_UPGRADE = {"Homebrew": "brew upgrade misaka", "winget": "winget upgrade Luciole-Studio.Misaka"}
 
 
 def describe() -> Install:
     from importlib.metadata import PackageNotFoundError, distribution
 
     from misaka.config import VERSION
-    bundle = _bundle_root()
+    from misaka.config.engine import bundle_installer, bundle_root
+    bundle = bundle_root()
     if bundle is not None:
-        return Install("bundle", False, "", bundle, None, VERSION)
+        # pip and git have nothing to do with an archive: a new archive is how it is updated.
+        return Install("bundle", False, bundle_installer(bundle), bundle, None, VERSION)
     try:
         dist = distribution("misaka")
     except PackageNotFoundError:
@@ -290,6 +289,11 @@ def _bundle_update(install: Install) -> int:
         return 0
     else:
         ui.print_info("", f"v{tag} is out; this is v{install.version}.")
+    if install.installer in PACKAGE_UPGRADE:
+        ui.print_info("", f"{install.installer} installed this release; it updates it:",
+                      f"  {PACKAGE_UPGRADE[install.installer]}",
+                      "Settings, credentials and research stay where they are.")
+        return 0
     ui.print_info("", "A release archive is updated by installing the new one -- the installer replaces it:",
                   f"  {INSTALL_PS1 if os.name == 'nt' else INSTALL_SH}",
                   "Settings, credentials and research stay where they are.")

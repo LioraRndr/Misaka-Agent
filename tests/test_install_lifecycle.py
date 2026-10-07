@@ -98,6 +98,39 @@ def test_a_release_archive_is_updated_by_the_installer(tmp_path, monkeypatch, ca
     assert "Tracking the main branch" not in out and "could not be compared" not in out
 
 
+@pytest.mark.parametrize("parents, installer, upgrade, remove", [
+    (("opt", "homebrew", "Cellar", "misaka", "0.18.6", "libexec"), "Homebrew", "brew upgrade misaka",
+     ["brew", "uninstall", "misaka"]),
+    (("AppData", "Local", "Microsoft", "WinGet", "Packages", "Luciole-Studio.Misaka_Microsoft.Winget.Source"),
+     "winget", "winget upgrade Luciole-Studio.Misaka", ["winget", "uninstall", "Luciole-Studio.Misaka"]),
+])
+def test_an_archive_homebrew_or_winget_put_in_place_is_theirs_to_update(tmp_path, monkeypatch, capsys, parents,
+                                                                          installer, upgrade, remove):
+    """The installer script would have put a second copy beside it (first on PATH, on Windows)."""
+    from misaka.cli import uninstall
+    root = _archive(tmp_path.joinpath(*parents))
+    monkeypatch.setattr(sys, "prefix", str(root / "python"))
+    install = update.describe()
+    assert (install.kind, install.installer) == ("bundle", installer)
+    monkeypatch.setattr(update, "_api", lambda path: ({"tag_name": "v99.0.0"}, None))
+    assert update.run(apply=True) == 0
+    out = capsys.readouterr().out
+    assert upgrade in out and "install.sh" not in out and "install.ps1" not in out
+    assert uninstall._program_command(install) == remove
+
+
+def test_the_users_commands_do_not_inherit_the_archives_python_flags(tmp_path, monkeypatch):
+    """The launcher sets them for MISAKA's own Python; under PYTHONSAFEPATH a skill's script could
+    not import the module beside it."""
+    from misaka.utils.shell import get_shell_env
+    monkeypatch.setenv("PYTHONSAFEPATH", "1")
+    monkeypatch.setenv("PYTHONNOUSERSITE", "1")
+    assert get_shell_env()["PYTHONSAFEPATH"] == "1", "outside an archive the user's own setting stands"
+    monkeypatch.setattr(sys, "prefix", str(_archive(tmp_path) / "python"))
+    env = get_shell_env()
+    assert "PYTHONSAFEPATH" not in env and "PYTHONNOUSERSITE" not in env
+
+
 def test_installed_extras_are_named_the_widest_way(monkeypatch):
     import importlib.metadata
     requires = ["anthropic>=0.45; extra == 'anthropic'", "openai>=1.60; extra == 'openai'",

@@ -222,13 +222,20 @@ def _running_lines(pages):
     return frozenset(line for line, n in counts.items() if n >= max(3, len(pages) // 2))
 
 
+RUNNING_LINES_AT_MOST = 2   # a running head, a folio, a stamp: a line or two at either end
+
+
 def _own_text(text, running):
-    """A page's text without the running lines it shares with the rest of the document."""
+    """A page's text without the running lines it shares with the rest of the document -- at most
+    ``RUNNING_LINES_AT_MOST`` at each end: a table's numeric rows all read "# # #", and stripping
+    while they matched took a whole statistical table for a running head (0.18.9 sweep)."""
     lines = [line for line in text.splitlines() if line.strip()]
-    while lines and _norm_line(lines[0]) in running:
-        lines.pop(0)
-    while lines and _norm_line(lines[-1]) in running:
-        lines.pop()
+    for _ in range(RUNNING_LINES_AT_MOST):
+        if lines and _norm_line(lines[0]) in running:
+            lines.pop(0)
+    for _ in range(RUNNING_LINES_AT_MOST):
+        if lines and _norm_line(lines[-1]) in running:
+            lines.pop()
     return "\n".join(lines).strip()
 
 
@@ -737,7 +744,9 @@ def _ocr_pages(p, meta=None, numbers=None, count=None):
     from misaka.config.product import setting
 
     langs = setting("documents", "ocr_langs", OCR_LANGS_DEFAULT, str) or OCR_LANGS_DEFAULT
-    with tempfile.TemporaryDirectory(prefix=".ocr-", dir=os.path.dirname(os.path.abspath(p))) as tmp:
+    # The system's temporary folder, not the source's: a library folder may be read-only, and since
+    # one routed page is enough to OCR, such a folder refused whole books it used to index.
+    with tempfile.TemporaryDirectory(prefix="misaka-ocr-") as tmp:
         sidecar = os.path.join(tmp, "sidecar.txt")
         argv = [OCR_BINARY, "--force-ocr", "--output-type", "pdf", "--sidecar", sidecar, "-l", langs]
         version = _ocr_version()
@@ -1536,7 +1545,7 @@ def _djvu_pages(p, meta=None):
     if not shutil.which(DJVU_RENDER_BINARY):
         why = f"{DJVU_RENDER_BINARY} is not installed (brew install djvulibre)"
     else:
-        with tempfile.TemporaryDirectory(prefix=".djvu-", dir=os.path.dirname(os.path.abspath(p))) as tmp:
+        with tempfile.TemporaryDirectory(prefix="misaka-djvu-") as tmp:
             rendered = os.path.join(tmp, "scan.pdf")
             done = _djvu_run([DJVU_RENDER_BINARY, "-format=pdf", f"-page={_page_spec(numbers)}", p, rendered],
                              learned)
@@ -1783,7 +1792,9 @@ TREE_ATTEMPT_VERSION = 1
 # Bumping this re-reads a PDF, a DjVu or an EPUB indexed by an older extractor the next time it is
 # ingested (``_reread``). 2: pages chosen for OCR one by one (``_route``), OCR sidecars and DjVu
 # text lined up with the file's own page numbers, and an EPUB's pictures marked where they stand.
-EXTRACT_VERSION = 2
+# 3: a statistical table is no longer taken for running lines and sent to OCR, and an EPUB's
+# pictures framed in <svg> are marked too.
+EXTRACT_VERSION = 3
 REREAD_SUFFIXES = (".pdf", ".djvu", ".epub")
 
 
@@ -1816,19 +1827,23 @@ def _reread(ddir, p, count):
     it is read again once ocrmypdf is installed.
     """
     meta = _read_meta_at(ddir) or {}
-    if int(meta.get("extract_version") or 1) >= EXTRACT_VERSION:
+    version = int(meta.get("extract_version") or 1)
+    if version >= EXTRACT_VERSION:
         return count
     ext = os.path.splitext(p)[1].lower()
     old = _stored_pages(ddir, count) if ext in REREAD_SUFFIXES else None
     pages, learned = None, {}
     # djvutxt skipped a page with no hidden text outright, so a DjVu stored out of step can have
     # nothing but full pages to show for it: only its page count gives it away. An EPUB's text
-    # used to drop its pictures, so one with pictures and no ``![...]`` marker is read again.
+    # used to drop its pictures (all of them before 2, those framed in <svg> before 3), so one
+    # with fewer ``![...]`` markers than pictures is read again. Version 2 sent a statistical
+    # table's pages to OCR: a document with some pages OCR'd is routed again.
     if ext == ".epub":
-        stale = old is not None and not any("![" in text for text in old) and bool(_epub_images(p))
+        stale = old is not None and sum(text.count("![") for text in old) < len(_epub_images(p))
     else:
         stale = old is not None and (_needs_reread(old) or (ext == ".djvu" and shutil.which(DJVU_TEXT_BINARY)
-                                                            and _djvu_page_count(p, {}) not in (None, count)))
+                                                            and _djvu_page_count(p, {}) not in (None, count))
+                                     or (version == 2 and 0 < len(_ocr_set(meta, count)) < count))
     if stale:
         pages = extract_pages(p, meta=learned)
         if not _has_text_layer(pages):
@@ -1842,8 +1857,11 @@ def _reread(ddir, p, count):
             return count                    # the stored pages hold OCR this machine cannot redo
         changed, final_ocr = list(range(1, len(pages) + 1)), now_ocr
     elif pages is not None:
+        # A page OCR'd before and not routed now (a table version 2 took for a scan) goes back to
+        # its text layer; one still routed whose OCR this machine cannot redo keeps its reading.
         changed = [n for n in range(1, count + 1)
-                   if (ext == ".epub" or n in now_ocr or _SKIPPED.search(old[n - 1])) and pages[n - 1] != old[n - 1]]
+                   if (ext == ".epub" or n in now_ocr or (n in was_ocr and n not in unread)
+                       or _SKIPPED.search(old[n - 1])) and pages[n - 1] != old[n - 1]]
         final_ocr = (was_ocr - set(changed)) | (now_ocr & set(changed))
         # A page still holding an earlier OCR's reading has been read, whatever this run managed.
         unread = {n: why for n, why in unread.items() if n in changed or n not in was_ocr}

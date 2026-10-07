@@ -86,7 +86,12 @@ async def test_a_word_document_shows_each_picture_it_embeds(tmp_path):
 
 # -- an EPUB ------------------------------------------------------------------------------------------------
 
-def _epub(path):
+CHAPTER = ('<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapter One</h1>'
+           '<p>The army crossed the river at dawn, and the map below shows where.</p>'
+           '<p><img src="../Images/map%201.png" alt="Map of the crossing"/></p></body></html>')
+
+
+def _epub(path, chapter=CHAPTER):
     with zipfile.ZipFile(path, "w") as book:
         book.writestr("mimetype", "application/epub+zip")
         book.writestr("META-INF/container.xml",
@@ -97,10 +102,7 @@ def _epub(path):
                       '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>The March</dc:title></metadata>'
                       '<manifest><item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml"/></manifest>'
                       '<spine><itemref idref="c1"/></spine></package>')
-        book.writestr("OEBPS/Text/ch1.xhtml",
-                      '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapter One</h1>'
-                      '<p>The army crossed the river at dawn, and the map below shows where.</p>'
-                      '<p><img src="../Images/map%201.png" alt="Map of the crossing"/></p></body></html>')
+        book.writestr("OEBPS/Text/ch1.xhtml", chapter)
         book.writestr("OEBPS/Images/map 1.png", _png(240, 160))
     return path
 
@@ -195,3 +197,49 @@ def test_an_epub_indexed_before_markers_is_read_again_and_its_pictures_named(tmp
     assert corpus.figures(doc_id, workspace=str(workspace))[1]["embedded"][0]["member"] == "OEBPS/Images/map 1.png"
     with open(f"{ddir}/meta.json", encoding="utf-8") as f:
         assert json.load(f)["reread"]["pages"] == [1]
+
+
+def _as_version_2(ddir, marker):
+    """What version 2 stored: the page without ``marker``, stamped as extracted by version 2."""
+    import json
+    page = f"{ddir}/pages/p0001.txt"
+    with open(page, encoding="utf-8") as f:
+        text = f.read()
+    with open(page, "w", encoding="utf-8") as f:
+        f.write(text.replace(marker, ""))
+    with open(f"{ddir}/meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    meta["extract_version"] = 2
+    with open(f"{ddir}/meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+
+
+async def test_a_cover_framed_in_svg_is_marked_and_an_epub_indexed_without_it_is_read_again(tmp_path):
+    """Calibre writes a cover or a plate as <svg><image xlink:href=...>; the svg was hidden as a
+    drawing, and the picture with it."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    book = _epub(workspace / "march.epub",
+                 '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:xlink="http://www.w3.org/1999/xlink">'
+                 '<body><h1>Chapter One</h1><svg viewBox="0 0 240 160"><image width="240" height="160" '
+                 'xlink:href="../Images/map%201.png"/></svg><p>The army crossed the river at dawn.</p></body></html>')
+    doc_id = _ingest(book, workspace)
+    assert "![image 1]" in corpus.read_page(doc_id, 1, workspace=str(workspace))
+    shown = await _call("doc_page_image", {"doc_id": doc_id, "page": 1, "figure": 1}, str(workspace))
+    assert _shown(shown).size == (240, 160)
+    _as_version_2(corpus.resolve_doc(doc_id, workspace=str(workspace)), "![image 1]")
+    _ingest(book, workspace)
+    assert "![image 1]" in corpus.read_page(doc_id, 1, workspace=str(workspace))
+
+
+def test_a_picture_too_large_to_decode_here_is_refused_in_a_sentence():
+    """41 KB of PNG, 12000 x 12000 pixels: 800 MB in the agent's process."""
+    from misaka.core.documents.wiring import documents as tools
+    huge = io.BytesIO()
+    Image.new("1", (12000, 12000)).save(huge, format="PNG")
+    with pytest.raises(ValueError, match="12000 x 12000 pixels, too large"):
+        tools._pillow_png(huge.getvalue())
+    photo = io.BytesIO()
+    Image.new("RGB", (9000, 6000), "white").save(photo, format="JPEG")
+    shown = Image.open(io.BytesIO(tools._pillow_png(photo.getvalue())))
+    assert shown.size[0] * shown.size[1] <= tools.PICTURE_PIXELS_AT_MOST, "a JPEG is decoded smaller"

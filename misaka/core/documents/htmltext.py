@@ -76,6 +76,12 @@ class Readable(HTMLParser):
         self._anchors: list[_Anchor] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "image" and self._hidden and self._images is not None:
+            # An EPUB's cover or plate is often <svg><image xlink:href=...>: the svg is a drawing
+            # and stays hidden, the picture it frames does not (0.18.9 sweep).
+            found = dict(attrs)
+            self._picture(found.get("xlink:href") or found.get("href"), "")
+            return
         if tag in _HIDDEN:
             self._hidden += 1
             return
@@ -112,12 +118,15 @@ class Readable(HTMLParser):
             self._parts.append("\n")
         elif tag == "img" and self._images is not None:
             found = dict(attrs)
-            alt = " ".join((found.get("alt") or "").split())[:MAX_ALT_CHARS]
-            marker = f"![{alt or f'image {len(self._images) + 1}'}]"
-            self._images.append({"marker": marker, "alt": alt, "src": (found.get("src") or "").strip()})
-            self._parts.append(f" {marker} ")
+            self._picture(found.get("src"), found.get("alt"))
         elif tag in _BLOCKS:
             self._parts.append("\n\n")
+
+    def _picture(self, src: str | None, alt: str | None) -> None:
+        alt = " ".join((alt or "").split())[:MAX_ALT_CHARS]
+        marker = f"![{alt or f'image {len(self._images) + 1}'}]"
+        self._images.append({"marker": marker, "alt": alt, "src": (src or "").strip()})
+        self._parts.append(f" {marker} ")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _HIDDEN:

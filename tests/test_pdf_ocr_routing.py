@@ -9,6 +9,7 @@ pages became 13 pages, the typeset text replaced by "[OCR skipped on page(s) 1-2
 scanned page numbered one too low -- so doc_verify located quotations on the wrong page."""
 import ctypes
 import json
+import os
 import shutil
 import subprocess
 
@@ -38,6 +39,14 @@ STAMP = "Downloaded from archive.example.org on 2026-10-07, page {n}"
 def test_a_stamp_on_every_page_is_not_a_text_layer():
     pages = [STAMP.format(n=n) + "\n" for n in range(1, 6)]
     assert corpus._route(pages) == {n: corpus.ROUTE_EMPTY for n in range(1, 6)}
+
+
+def test_a_statistical_table_is_not_taken_for_a_running_head():
+    """Its numeric rows all read "# # # #": stripping while they matched emptied every page of an
+    appendix, and the whole table went to OCR as pages with no text layer."""
+    pages = ["\n".join(f"{1850 + 30 * n + r}   {100 + r}   {200 + 2 * r}   {300 + 3 * r}" for r in range(30))
+             for n in range(4)]
+    assert corpus._route(pages) == {}
 
 
 def test_a_fifth_of_typeset_pages_no_longer_hides_the_scanned_rest():
@@ -178,6 +187,23 @@ def test_two_typeset_pages_before_the_scans_keep_their_text_and_their_numbers(tm
     assert meta == {"ocr": True, "ocr_pages": list(range(3, 15))}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a read-only folder is a POSIX permission")
+def test_a_book_in_a_read_only_folder_is_still_read(tmp_path, monkeypatch, fake_ocrmypdf):
+    """OCR worked beside the source; with one routed page enough to OCR, a read-only library
+    folder refused books it used to index."""
+    _calls, state = fake_ocrmypdf
+    state["count"] = 3
+    _layer(monkeypatch, [typeset(1), typeset(2), ""])
+    library = tmp_path / "library"
+    library.mkdir()
+    library.chmod(0o555)
+    try:
+        pages = corpus._pdf_pages(str(library / "book.pdf"), {})
+    finally:
+        library.chmod(0o755)
+    assert pages[2] == SCANNED.format(n=3)
+
+
 def test_an_ocrmypdf_older_than_11_7_reads_every_page_and_only_the_chosen_are_kept(tmp_path, monkeypatch, fake_ocrmypdf):
     calls, state = fake_ocrmypdf
     state["count"] = 3
@@ -260,6 +286,25 @@ def test_a_document_stored_out_of_step_is_renumbered_when_ingested_again(tmp_pat
     assert len(calls) == 1, "a document already current is not read again"
 
 
+def test_a_table_version_2_sent_to_ocr_goes_back_to_its_text_layer(tmp_path, monkeypatch, fake_ocrmypdf):
+    """Version 2 took a statistical table's rows for running lines and OCR'd its pages."""
+    calls, state = fake_ocrmypdf
+    table = "\n".join(f"{1850 + r}   {100 + r}   {200 + 2 * r}" for r in range(30))
+    doc_id = _as_version_1(tmp_path, monkeypatch, [typeset(1), table + "\n1850 l00 2OO", typeset(3)],
+                           ocr=True, ocr_pages=[2])
+    ddir = corpus.resolve_doc(doc_id, workspace=str(tmp_path / "ws"))
+    with open(f"{ddir}/meta.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    meta["extract_version"] = 2
+    with open(f"{ddir}/meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    state["count"] = 3
+    _layer(monkeypatch, [typeset(1), table, typeset(3)])
+    _, _count, _, meta = _ingest(tmp_path, monkeypatch)
+    assert corpus.read_page(doc_id, 2, workspace=str(tmp_path / "ws")) == table
+    assert not meta.get("ocr") and meta["reread"]["pages"] == [2] and calls == []
+
+
 def test_a_reread_rewrites_only_the_pages_it_newly_read(tmp_path, monkeypatch, fake_ocrmypdf):
     """Same page count: the typeset pages keep their stored bytes, so a located quotation stays."""
     _, state = fake_ocrmypdf
@@ -299,7 +344,15 @@ def test_the_listing_and_the_reader_name_unread_and_reread_pages():
     assert "Page 6 has no text here (no text layer; ocrmypdf is not installed" in notes
     assert "Page 7 has no text here (no text layer; OCR found no text on it)" in notes
     assert "doc_page_image" in notes and "Pages 4-5 were re-read" in notes
+    # A plate or a chart OCR read is left out of the figures, so the reader names it here.
+    assert "Pages 4-5 were read by OCR from the page image" in notes
     assert tools._page_notes(row, 1, 3) == ""
+
+
+def test_an_unread_djvu_page_is_seen_with_doc_page_image():
+    row = {"pages": 5, "ocr": True, "ocr_pages": [2], "orig_path": "/w/book.djvu",
+           "unread_pages": {"3": f"{corpus.ROUTE_EMPTY}; {corpus.OCR_MISSING}"}}
+    assert "doc_page_image" in tools._page_notes(row, 3, 3)
 
 
 # -- the real thing, when this machine has it -------------------------------------------------------
@@ -338,7 +391,8 @@ def build_pdf(path, kinds, stamp=False):
 def _needs_ocr():
     if not (shutil.which("ocrmypdf") and shutil.which("pdftotext") and shutil.which("tesseract")):
         pytest.skip("ocrmypdf, poppler and tesseract are not all installed")
-    langs = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, check=False).stdout.split()
+    langs = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", check=False).stdout.split()
     if not {"eng", "chi_sim", "jpn"} <= set(langs):
         pytest.skip("the default OCR languages are not all installed")
 

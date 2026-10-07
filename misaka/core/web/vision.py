@@ -64,6 +64,15 @@ async def describe(image, question, ctx, selected, *, setting, purpose, max_toke
         usage = getattr(result, 'usage', None)
         if usage is not None:
             facts['model_usage'] = usage.model_dump()
-    if getattr(result, 'stopReason', None) in {'error', 'aborted'}:
+    stop = getattr(result, 'stopReason', None)
+    if stop in {'error', 'aborted'}:
         raise ValueError(getattr(result, 'errorMessage', None) or f'The vision model {setting} names failed')
-    return config.redact_secrets(''.join(getattr(item, 'text', '') for item in result.content))
+    text = config.redact_secrets(''.join(getattr(item, 'text', '') for item in result.content))
+    # An empty or cut-off reading is not one to keep: the vision bridge caches what this returns
+    # (a reasoning model that spent its output thinking used to leave an empty reading for good).
+    if not text.strip():
+        raise ValueError(f'The vision model {setting} names returned no text'
+                         + (' before its output limit' if stop == 'length' else ''))
+    if stop == 'length':
+        text += '\n[The reading stops here: the vision model reached its output limit.]'
+    return text
