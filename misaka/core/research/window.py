@@ -5,11 +5,9 @@ import asyncio
 import os
 from contextlib import ExitStack, asynccontextmanager
 
-from misaka.agent.request_budget import install_turn_budget
 from misaka.ai.utils.overflow import output_limit_error
 from misaka.core.network import worker
 from misaka.core.platform import budget
-from misaka.core.platform.session import event_line
 from misaka.core.research.report import DRAFT_CONTRACT, FINAL_CONTRACT
 from misaka.core.session_control import for_session, wait_for_session
 from misaka.utils.async_lifecycle import settle
@@ -154,24 +152,15 @@ class WindowLO:
             raise RuntimeError("Research window changed conversation; resume in the intended session.")
         if os.path.realpath(options["session_dir"]) != os.path.realpath(os.path.dirname(self.session_file)):
             raise RuntimeError("A research call was routed to a different node's session.")
-        reservation = worker._reserve_usage(
-            options.get("usage_db"), options.get("usage_task_id"), options.get("usage_generation"),
-            options.get("usage_token_cap"), None)
-        if not reservation.get("allowed"):
-            return None, "", "shared token budget exhausted"
-        recorder = worker._UsageRecorder(None, options.get("usage_db"), options.get("usage_task_id"),
-                                        options.get("usage_generation"), reservation)
+        if worker.over_cap(options.get("usage_db"), options.get("usage_task_id"), options.get("usage_token_cap")):
+            return None, "", worker.budget_cap_reason()
         definitions = list(options.get("extra_tools", ()))
         scope = ExitStack()
-        stream = session.agent.streamFn
-        previous_limiter = getattr(session.agent, "_misaka_turn_budget", None)
         guard_hooks = None
-        limiter = None
         answer, error = None, None
 
         def observe(event):
             nonlocal answer, error
-            recorder(event_line(event))
             if read_field(event, "type") != "message_end":
                 return
             message = read_field(event, "message")
@@ -189,23 +178,6 @@ class WindowLO:
                 error = None
 
         unsubscribe = session.subscribe(observe)
-        heartbeat = None
-        reservation_errors = []
-
-        async def keep_reservation():
-            while True:
-                await asyncio.sleep(worker.RESERVATION_HEARTBEAT_SECONDS)
-                try:
-                    alive = await asyncio.to_thread(budget.touch_agent_path, options["usage_db"], reservation["token"], 600)
-                    if alive:
-                        continue
-                    reason = "shared token budget lease lost"
-                except Exception as error:  # noqa: BLE001 - a failed heartbeat must stop spending
-                    reason = f"shared token budget heartbeat failed: {error}"
-                reservation_errors.append(reason)
-                await session.abort()
-                return
-
         try:
             from misaka.core.research.planner import session_tools
             # Re-read at the actual turn boundary; a queued phase's old selection
@@ -219,23 +191,19 @@ class WindowLO:
             missing = set(names) - set(session.getActiveToolNames()) - set(OPTIONAL_MATERIAL_TOOLS)
             if missing:
                 raise RuntimeError(f"The window is missing research tools: {', '.join(sorted(missing))}")
-            if reservation.get("tokens"):
-                # Nest inside any existing session cap, then restore the exact provider
-                # wrapper. No process-wide environment or session identity is changed.
-                if previous_limiter is not None:
-                    del session.agent._misaka_turn_budget
-                limiter = install_turn_budget(session, int(reservation["tokens"]))
             if self.headless and not hasattr(session.agent, "_misaka_guards"):
                 from misaka.agent.guards import install_guards
+                from misaka.core.platform import metering
                 from misaka.core.platform.session import BOOKKEEPING_TOOLS
 
                 guard_hooks = (session.agent.finishTurn, session.agent.prepareNextTurnWithContext)
-                install_guards(session, limiter, bookkeeping_tools=BOOKKEEPING_TOOLS)
-            if reservation.get("token"):
-                heartbeat = asyncio.create_task(keep_reservation())
+                install_guards(session, metering.allowance, bookkeeping_tools=BOOKKEEPING_TOOLS)
             # Direct await enters the session's active-run guard before yielding. A
             # queued notification cannot take the window between idle and this turn.
-            with budget.usage_context(options.get("usage_db"), options.get("usage_task_id"), options.get("usage_generation")):
+            # The turn's model requests -- the phase's own, compaction, the vision bridge --
+            # are billed to the run through this context (metering).
+            with budget.usage_context(options.get("usage_db"), options.get("usage_task_id"),
+                                      options.get("usage_generation"), options.get("usage_token_cap")):
                 if preflight is not None:
                     await session.prompt(prompt, {"streamingBehavior": "steer", "preflightResult": preflight})
                 else:
@@ -247,32 +215,16 @@ class WindowLO:
                                      "stage": "adjudication_draft" if prompt.startswith((DRAFT_CONTRACT, FINAL_CONTRACT)) else None}},
                         {"triggerTurn": True, "prepareTurn": True})
             self.check_active()
-            if reservation_errors:
-                raise RuntimeError(reservation_errors[0])
             return None, answer or "", error or (None if answer is not None else "no completed research response")
         finally:
-            if heartbeat is not None:
-                heartbeat.cancel()
             unsubscribe()
-            session.agent.streamFn = stream
             if guard_hooks is not None:
                 session.agent.finishTurn, session.agent.prepareNextTurnWithContext = guard_hooks
                 del session.agent._misaka_guards
-            if previous_limiter is not None:
-                session.agent._misaka_turn_budget = previous_limiter
-            elif hasattr(session.agent, "_misaka_turn_budget"):
-                del session.agent._misaka_turn_budget
             try:
-                try:
-                    session.unregisterCustomTools(definitions)
-                finally:
-                    scope.close()
+                session.unregisterCustomTools(definitions)
             finally:
-                try:
-                    recorder.settle(limiter.accounted if limiter else None)
-                finally:
-                    if heartbeat is not None:
-                        await asyncio.gather(heartbeat, return_exceptions=True)
+                scope.close()
 
 
 @asynccontextmanager

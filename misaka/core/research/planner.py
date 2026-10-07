@@ -8,13 +8,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from pathlib import Path
 
 from misaka.ai.utils.overflow import hit_output_limit
 from misaka.config import home
 from misaka.core.network.card_contract import format_deliverable, split_deliverable
-from misaka.core.platform import budget, prompt_guard
+from misaka.core.platform import prompt_guard
 from misaka.core.platform import tasks as task_store
 from misaka.core.research import commands, ledger, runs
 from misaka.core.session_manager import find_most_recent_session, read_session_header
@@ -578,19 +577,12 @@ def _call(worker, cfg, prompt, *, cwd, session_dir, continue_session=False,
         kwargs["sister_catalog"] = sister_catalog
     if model:
         kwargs["model"] = model
-    while True:
-        result = worker.run_llm_json(
-            os.path.join(cfg["roles_root"], profile), prompt,
-            cfg["provider"], cfg["default_model"], **kwargs,
-        )
-        if (result[2] != "shared token budget exhausted" or con is None
-                or budget.exhausted(con, cfg.get("token_cap"))):
-            return result
-        if runs.stop_requested(con, task_id):
-            return None, "", "Research stopped while waiting for token capacity"
-        # Other node LOs share this ledger. A reservation is
-        # backpressure, not a failed model call; no tokens were spent on this refusal.
-        time.sleep(2)
+    # Waiting for room under the cap happens per request, in the meter; a run whose cap is
+    # spent comes back with budget.EXHAUSTED_MESSAGE and stops there.
+    return worker.run_llm_json(
+        os.path.join(cfg["roles_root"], profile), prompt,
+        cfg["provider"], cfg["default_model"], **kwargs,
+    )
 
 
 def publish_project_brief(workspace, plan, *, round=1):

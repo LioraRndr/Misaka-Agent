@@ -253,12 +253,10 @@ def _status(con, target, workspace):
     if not run:
         return "No matching research run was found."
     value = runs.summary(con, run["id"])
-    reading = budget.status(con, _cfg().get("token_cap"))
-    scope = {run["id"], *(t["id"] for t in runs.tasks(con, run["id"]))}
-    token_text = (f" | tokens added by this run {budget.spent(con, task_ids=scope):,}"
-                  f" | spent {usage.money(usage.run_usage(con, run)['total'])} (misaka usage --run {run['id']})")
-    if reading["cap"]:
-        token_text += f" | global tokens {reading['used']:,}/{reading['cap']:,}"
+    reading = budget.status(con, _cfg().get("token_cap"), task_id=run["id"])
+    token_text = (f" | tokens used by this run {reading['used']:,}"
+                  + (f" of its cap {reading['cap']:,}" if reading["cap"] else "")
+                  + f" | spent {usage.money(usage.run_usage(con, run)['total'])} (misaka usage --run {run['id']})")
     return (
         f"{value['id']} | project {runs.project_name(run)!r} ({value['workspace']}) | "
         f"{value['status']}/{value['phase']} | depth {value['wave']}/{value['limits']['max_depth']} | "

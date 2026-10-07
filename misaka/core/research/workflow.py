@@ -663,7 +663,7 @@ async def _drive_tasks_inner(con, cfg, runner, run_id, *, scope, context=None,
         pending = getattr(runner, "pending", None)
         flying = set(await pending(scope)) if pending is not None else set()
         halt = ("stopped" if runs.stop_requested(con, run_id) else
-                "budget" if budget.exhausted(con, cfg.get("token_cap")) else None)
+                "budget" if budget.exhausted(con, cfg.get("token_cap"), task_id=run_id) else None)
         if halt:
             await _halt_scope(con, cfg, runner, captured, context, owner=owner)
             return halt
@@ -2188,7 +2188,7 @@ async def _wait_level(con, cfg, spawner, run, handles, *, poll_seconds, progress
     async def top_up():
         nonlocal hold
         while pending and not hold and (width is None or len(handles) < width) and not still_warming():
-            if (runs.stop_requested(con, run["id"]) or budget.exhausted(con, cfg.get("token_cap"))
+            if (runs.stop_requested(con, run["id"]) or budget.exhausted(con, cfg.get("token_cap"), task_id=run["id"])
                     or any(n["status"] == "waiting_input" for n in runs.nodes(con, run["id"]))):
                 hold = True
                 break
@@ -2212,7 +2212,7 @@ async def _wait_level(con, cfg, spawner, run, handles, *, poll_seconds, progress
             raise RuntimeError(f"Research run {run['id']}: the driver lease was taken over by another process.")
         await _roster_check(cfg, run, progress)
         halted = (runs.stop_requested(con, run["id"])
-                  or budget.exhausted(con, cfg.get("token_cap")))
+                  or budget.exhausted(con, cfg.get("token_cap"), task_id=run["id"]))
         if halted:
             hold = True
             await _stop_all_off_loop(spawner, handles)
@@ -2248,7 +2248,7 @@ async def _wait_level(con, cfg, spawner, run, handles, *, poll_seconds, progress
         await top_up()
     if runs.stop_requested(con, run["id"]):
         return "stopped"
-    if budget.exhausted(con, cfg.get("token_cap")):
+    if budget.exhausted(con, cfg.get("token_cap"), task_id=run["id"]):
         return "budget"
     waiting = [n for n in runs.nodes(con, run["id"]) if n["status"] == "waiting_input"]
     if waiting:
@@ -2460,7 +2460,7 @@ async def run(con, cfg, spawner, *, run_id, poll_seconds=POLL_SECONDS, progress=
         raise RuntimeError(f"Research run {run_id} is already being driven by another process "
                            f"(lease {run['driver_lock']}); wait for it or stop that process.")
     cfg = dict(cfg)
-    halts = {"stopped": "The user requested a stop.", "budget": "The shared token budget limit was reached."}
+    halts = {"stopped": "The user requested a stop.", "budget": "The run reached research.token_cap; raise it and resume the run to go on."}
     window = root_runner = root_context = None
     lost = asyncio.Event()
     keeper = asyncio.create_task(_keep_lease(con, run_id, driver_lock, lost))
@@ -2516,7 +2516,7 @@ async def run(con, cfg, spawner, *, run_id, poll_seconds=POLL_SECONDS, progress=
         if runs.stop_requested(con, run_id):
             await _settle_stopped_tasks(con, cfg, run_id)
             return partial(halts["stopped"])
-        if budget.exhausted(con, cfg.get("token_cap")):
+        if budget.exhausted(con, cfg.get("token_cap"), task_id=run_id):
             return partial(halts["budget"])
         from misaka.core.research.node import HeadlessRunner, PaneRunner
         from misaka.core.research.window import WindowLO, node_description, node_session
@@ -2643,6 +2643,10 @@ async def run(con, cfg, spawner, *, run_id, poll_seconds=POLL_SECONDS, progress=
         current = runs.get(con, run_id)
         if current["status"] == "done":
             raise
+        if budget.exhausted(con, cfg.get("token_cap"), task_id=run_id):
+            # A phase stopped because the run reached research.token_cap: a halt, resumable.
+            await _settle_stopped_tasks(con, cfg, run_id)
+            return partial(halts["budget"])
         if current["driver_lock"] == driver_lock:
             runs.set_state(con, run_id, status="failed", error=f"{type(error).__name__}: {error}"[:500],
                            driver_lock=driver_lock)

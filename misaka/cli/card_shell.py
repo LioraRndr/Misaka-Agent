@@ -99,12 +99,6 @@ def launch(task_id, resume_only=False, say=None):
     os.chdir(run_dir)
 
     from misaka.cli.engine import main as engine_main
-    from misaka.core.network.todo import TodoPart
-
-    for part in assembly.parts:
-        if isinstance(part, TodoPart):
-            part.usage = {"usage_db": CFG["db"], "task_id": task_id,
-                          "generation": int(task["generation"])}
     try:
         from misaka.utils import loop_watchdog
         loop_watchdog.configure(f"card-{task_id}", exit_on_stall=True)

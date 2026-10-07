@@ -1808,6 +1808,10 @@ class Daemon:
             raise ValueError(f"Card not found: {task_id}")
         if row["status"] != "ready":
             raise ValueError(f"Card {task_id} is not ready (current status: {row['status']}).")
+        from misaka.core.network import worker
+        if worker.over_cap(_expand(CFG["db"]), task_id, CFG["token_cap"]):
+            # The research run's cap is spent: the card is not started and stays ready.
+            raise ValueError(f"Card {task_id} was not started: {worker.budget_cap_reason()}.")
         # A card requeued while its last window is still open runs in that window again.
         reuse = self._card_pane_to_reuse(task_id)
         from misaka.core.network.ally import presets

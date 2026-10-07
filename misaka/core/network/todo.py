@@ -207,8 +207,6 @@ class TodoPart:
         self._touched = 0.0
         self._in_flight = 0               # tool calls started and not yet answered
         self._stamper = None              # the task that stamps progress while one is
-        self.usage = None                 # card-shell opts in; managed/headless workers already meter their calls
-        self._close_usage = None
 
         def con():
             return self.con()
@@ -437,11 +435,6 @@ class TodoPart:
     def attach(self, session):
         self.session = session
 
-    async def session_start(self, event=None, ctx=None):
-        if self.usage is not None and self._close_usage is None:
-            from misaka.core.network import worker
-            self._close_usage = worker.install_card_usage(self.session, **self.usage)
-
     def con(self):
         if self._con is None:
             path = (os.environ.get("MISAKA_SISTER_OWNER_DB")
@@ -645,6 +638,14 @@ class TodoPart:
         if row is None:
             return
         generation = int(row["generation"])
+        from misaka.core.network import worker
+        if worker.stopped_at_cap(reason):
+            # The research run's token cap, not this card: it waits, ready, for a resume.
+            if self._bdb.back_to_ready(self.con(), self.task_id, generation=generation,
+                                       claim_lock=row["claim_lock"]):
+                self._bdb.add_event(self.con(), self.task_id, "budget_stop", {"reason": reason},
+                                    generation=generation)
+            return
         if stop == "length" and self._continued_generation != generation:
             self._continued_generation = generation
             self._prompt(f"Your last reply was cut off: {reason}. Continue the card from where it "
@@ -796,9 +797,6 @@ class TodoPart:
 
     async def session_shutdown(self, event=None, ctx=None):
         self._calls_settled()
-        if self._close_usage is not None:
-            self._close_usage()
-            self._close_usage = None
         if self._con is not None:
             self._con.close()
             self._con = None

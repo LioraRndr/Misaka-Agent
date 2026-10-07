@@ -38,7 +38,16 @@ def _event_summary(d, nbytes):
 
 
 def _compact_event(line, cap=4000):
-    """Cap a harness event line at ``cap`` bytes: reduce ``agent_end`` to a token total, anything else to a summary."""
+    """Cap a harness event line at ``cap`` bytes, anything over it reduced to a summary. An
+    ``agent_end`` keeps no usage: every model request is recorded in the ledger by the meter as it
+    ends (``misaka.core.platform.metering``), and a total here would count the turn twice -- old
+    rows that carry one are still counted (``budget.spent``), new ones never do."""
+    if '"agent_end"' in line:
+        try:
+            if json.loads(line).get("type") == "agent_end":
+                return json.dumps({"type": "agent_end"})
+        except ValueError:
+            pass
     if len(line) <= cap:
         return line
     try:
@@ -46,38 +55,6 @@ def _compact_event(line, cap=4000):
     except ValueError:
         return json.dumps({"type": "raw", "truncated_bytes": len(line),
                            "preview": line[:200]}, ensure_ascii=False)
-    if d.get("type") == "agent_end":
-        total = 0
-        for message in d.get("messages") or []:
-            usage = message.get("usage") if isinstance(message, dict) else None
-            if not isinstance(usage, dict):
-                continue
-            if isinstance(usage.get("totalTokens"), int):
-                total += usage["totalTokens"]
-            else:
-                total += sum(
-                    int(usage.get(key) or 0)
-                    for key in (
-                        "input",
-                        "output",
-                        "cacheRead",
-                        "cacheWrite",
-                        "input_tokens",
-                        "output_tokens",
-                        "cache_read_input_tokens",
-                        "cache_creation_input_tokens",
-                    )
-                )
-        # Always valid JSON, bounded regardless of message count or size;
-        # slicing the serialized ledger used to yield invalid JSON.
-        return json.dumps(
-            {
-                "type": "agent_end",
-                "messages": [{"role": "assistant", "usage": {"totalTokens": total}}],
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
     return _event_summary(d, len(line))
 
 
@@ -253,7 +230,7 @@ def run_task(con, t, cfg, *, say=None):
     task["_attachments"] = card_files.attachment_list(run_dir, t["id"], workspace=workspace)
     task["_handoffs"] = worker.card_handoffs(con, t)
     task.update(worker.card_extras(con, t, cfg))
-    bud = budget.status(con, cfg.get("token_cap"))
+    bud = budget.status(con, cfg.get("token_cap"), task_id=t["id"])
     if bud["mode"] == "stop":
         if db.back_to_ready(
             con, t["id"], generation=generation, claim_lock=lock
@@ -308,7 +285,7 @@ def run_task(con, t, cfg, *, say=None):
                 con,
                 t["id"],
                 "budget_stop",
-                budget.status(con, cfg.get("token_cap")),
+                budget.status(con, cfg.get("token_cap"), task_id=t["id"]),
                 generation=generation,
             )
     elif verdict.get("settled"):
