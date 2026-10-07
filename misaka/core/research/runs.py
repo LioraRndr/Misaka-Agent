@@ -1404,6 +1404,18 @@ def cards_failed_key(cards):
     return "cards_failed:" + ",".join(f"{card['id']}@{card['generation']}" for card in cards)
 
 
+def plan_change_key(round):
+    """The action-key prefix of the changes Last Order made to a round's cards while they ran."""
+    return f"cards:{int(round)}"
+
+
+def plan_changes(con, run_id, node_id, round):
+    """The changes Last Order made to a round's cards while they ran, oldest first."""
+    return [json.loads(row["payload_json"]) for row in con.execute(
+        "SELECT payload_json FROM research_actions WHERE run_id=? AND branch_id=? AND action_key LIKE ? "
+        "ORDER BY created_at,rowid", (run_id, node_id, plan_change_key(round) + ":%"))]
+
+
 def failed_card_decisions(con, run_id, node_id=None):
     """What node Last Orders decided about cards that failed for good, oldest first: each names
     its ``decision`` and the ``cards`` it covers."""

@@ -368,6 +368,12 @@ that turn, while she waits on her cards it is a turn of its own. Her answer goes
 conversation; from the shell, `misaka chat --attach --session PATH` (the path `tell` prints)
 follows it. A node that is not running cannot hear; `tell` names the nodes that can.
 
+While a node's cards run, you can have its plan changed: ask its Last Order to add a card, to give
+a card that has not started to another Sister (one created since the plan was made, say), or to
+cancel one. She records the change with `misaka_research_cards`, checked as a plan's cards are;
+the run applies it at once, the cards already working go on, and the node's plan file lists what
+changed and why.
+
 A resumed run needs the Sisters its cards went to. If you removed one, create her again with the
 same number first.
 

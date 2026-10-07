@@ -58,7 +58,9 @@ Between levels the root Last Order reconciles: options open as nodes (options of
 question share one node), finished nodes whose paths arrive at the same place may be joined into one successor,
 and relations between nodes are recorded. Follow the current plan-approval policy: when enabled, every plan and
 every reconciliation waits for its own approval; otherwise the driver proceeds after an accepted ready plan. A
-plan that reframes the question always waits for the user. The graph expands breadth-first; max_depth is the
+plan that reframes the question always waits for the user. While a node's research cards run, its Last Order can
+change them at the user's word with `misaka_research_cards`: add cards, or give a card that has not started to
+another Sister, or cancel it; the cards already working go on. The graph expands breadth-first; max_depth is the
 largest allowed depth (root = 0), and max_nodes caps the graph. At max_depth a node is still reviewed and revised,
 but cannot fork.
 
@@ -462,6 +464,111 @@ async def _wait_unpaused(con, run_id, session):
         await asyncio.sleep(.1)
 
 
+def _changed_tasks(tasks, changes):
+    """A round's tasks as Last Order changed them while its cards ran, change by change."""
+    by_id = {task["local_id"]: dict(task) for task in tasks}
+    for change in changes:
+        for item in change["cancel"]:
+            by_id.pop(item["local_id"], None)
+        for item in change["reassign"]:
+            if item["local_id"] in by_id:
+                by_id[item["local_id"]].update(assignee=item["assignee"], assignee_reason=item["assignee_reason"])
+        for task in change["add"]:
+            by_id[task["local_id"]] = task
+    return list(by_id.values())
+
+
+def _round_cards(con, run, node, round):
+    """A round's research cards by their local id in the plan (a later round's carry ``r<n>/``)."""
+    prefix = "" if round <= 1 else f"r{round}/"
+    return {row["local_id"][len(prefix):]: row for row in runs.tasks(con, run["id"], kind="research", node_id=node["id"])
+            if int(row["round"] or 1) == round and (row["local_id"] or "").startswith(prefix)}
+
+
+def _check_plan_change(con, run, node, round, roster, change):
+    """A change to a round's running cards, checked as a plan's tasks are (the same roster, ids,
+    dependencies and cycles) and written down by local id."""
+    plan = runs.action(con, run["id"], node["id"], runs.plan_key(round))["payload"]
+    tasks = _changed_tasks(plan["tasks"], runs.plan_changes(con, run["id"], node["id"], round))
+    cards = _round_cards(con, run, node, round)
+    wanted = {task["local_id"] for task in tasks}
+    local_of = {row["id"]: local for local, row in cards.items()}
+
+    def unstarted(ref, done):
+        local = local_of.get(ref, ref)
+        row = cards.get(local)
+        if row is None or local not in wanted:
+            raise ValueError(f"{ref} is not one of this round's cards: {', '.join(sorted(wanted)) or 'none'}.")
+        if row["status"] not in ("ready", "todo"):
+            raise ValueError(f"Card {row['id']} ({local}) is {row['status']}; only a card that has not started is {done}.")
+        return local
+
+    roster_ids = {entry["id"] if isinstance(entry, dict) else str(entry) for entry in roster}
+    for assignee in [item["assignee"] for item in change["reassign"]] + [task["assignee"] for task in change["add"]]:
+        if assignee not in roster_ids:
+            raise ValueError(f"{assignee} is not in the Sister roster: {', '.join(sorted(roster_ids))}.")
+    for task in change["add"]:
+        if task["local_id"] in wanted or task["local_id"] in cards:
+            raise ValueError(f"{task['local_id']} is already a card of this round; give the new one another local_id.")
+    normalized = {"reason": change["reason"], "add": change["add"],
+                  "reassign": [{"local_id": unstarted(item["card"], "reassigned"), "assignee": item["assignee"],
+                                "assignee_reason": item["assignee_reason"]} for item in change["reassign"]],
+                  "cancel": [{"local_id": unstarted(item["card"], "cancelled"), "reason": item["reason"]}
+                             for item in change["cancel"]]}
+    # The whole round as it would stand, with the Sisters its cards already have taken as they are.
+    checked = planner._validate_tasks(_changed_tasks(tasks, [normalized]), roster_ids | {t["assignee"] for t in tasks})
+    added = {task["local_id"] for task in change["add"]}
+    normalized["add"] = [task for task in checked if task["local_id"] in added]
+    return normalized
+
+
+async def _apply_plan_changes(con, run, node, round, applied, progress, owner):
+    """Make the board match the changes Last Order recorded since the last look: cancelled cards
+    and reassigned ones come off (with the cards waiting on them, whose ``needs`` name the old
+    ids), and ``_submit_tasks`` creates what the round now lacks. True when something was applied."""
+    changes = runs.plan_changes(con, run["id"], node["id"], round)
+    if len(changes) <= applied[0]:
+        return False
+    plan = runs.action(con, run["id"], node["id"], runs.plan_key(round))["payload"]
+    tasks = _changed_tasks(plan["tasks"], changes)
+    wanted = {task["local_id"]: task for task in tasks}
+    cards = _round_cards(con, run, node, round)
+    waiting = {local: row for local, row in cards.items() if row["status"] in ("ready", "todo")}
+    off = {local for local, row in waiting.items()
+           if local not in wanted or wanted[local]["assignee"] != row["assignee"]}
+    while True:
+        more = {local for local in waiting if local not in off and local in wanted
+                and set(wanted[local].get("dependencies") or []) & off}
+        if not more:
+            break
+        off |= more
+    for local in sorted(off):
+        runs.check_owner(con, *owner)
+        ok, message = card_files.remove(con, run["workspace"], waiting[local]["id"])
+        if not ok:
+            raise RuntimeError(message)
+    previous = [row for row in runs.tasks(con, run["id"], kind="research", node_id=node["id"])
+                if row["status"] == "done" and int(row["round"] or 1) < round]
+    await _submit_tasks(con, run, node, tasks, kind="research", progress=progress, round=round, previous=previous)
+    # A card started between Last Order's call and this look goes on as it was.
+    late = sorted({item["local_id"] for change in changes[applied[0]:] for item in change["cancel"] + change["reassign"]
+                   if item["local_id"] in cards and item["local_id"] not in waiting
+                   and (item["local_id"] not in wanted or cards[item["local_id"]]["assignee"] != wanted[item["local_id"]]["assignee"])})
+    record = "\n".join(f"- {change['reason']}: " + "; ".join(
+        [f"added {task['local_id']} → Sister {task['assignee']}" for task in change["add"]]
+        + [f"{item['local_id']} → Sister {item['assignee']}" for item in change["reassign"]]
+        + [f"cancelled {item['local_id']} ({item['reason']})" for item in change["cancel"]]) for change in changes)
+    _write_plan(con, run, node, {**plan, "tasks": tasks, "plan_markdown": plan["plan_markdown"].rstrip()
+                                 + "\n\n## Changed while the cards ran\n" + record}, round)
+    newest = changes[applied[0]:]
+    applied[0] = len(changes)
+    await _progress(progress, "plan_changed",
+                    f"{_label(node)}: Last Order changed its cards -- " + " | ".join(change["reason"] for change in newest)
+                    + (f". Already started, so they go on as they were: {', '.join(late)}." if late else "."),
+                    run, node=node["id"])
+    return True
+
+
 async def _tell_failed(con, run, linked, told, progress):
     """A card that failed for good is news the moment it lands (GitHub issue #9): what becomes of it
     -- retried, concluded without, or the node failed -- is decided once the phase's other cards are
@@ -483,14 +590,15 @@ async def _tell_failed(con, run, linked, told, progress):
 
 
 async def _drive_tasks(con, cfg, runner, run_id, *, scope, context=None,
-                       tool_call_id="research", poll_seconds=POLL_SECONDS, progress=None, check_active=None, session=None, owner=None):
+                       tool_call_id="research", poll_seconds=POLL_SECONDS, progress=None, check_active=None, session=None, owner=None,
+                       refresh=None):
     """Drive the cards in ``scope`` (task ids) until none is open; tasks waiting on dependencies stay in ``todo``."""
     captured = {row["id"]: row for row in runs.tasks(con, run_id) if row["id"] in scope}
     try:
         return await _drive_tasks_inner(con, cfg, runner, run_id, scope=scope, context=context,
                                        tool_call_id=tool_call_id, poll_seconds=poll_seconds,
                                        progress=progress, check_active=check_active, session=session,
-                                       captured=captured, owner=owner)
+                                       captured=captured, owner=owner, refresh=refresh)
     except BaseException:
         # The same unwind serves root/fork and normal error/cancellation. Drain it
         # through repeated cancellation, before the caller releases its driver/node.
@@ -504,8 +612,10 @@ async def _drive_tasks(con, cfg, runner, run_id, *, scope, context=None,
 
 
 async def _drive_tasks_inner(con, cfg, runner, run_id, *, scope, context=None,
-                       tool_call_id="research", poll_seconds=POLL_SECONDS, progress=None, check_active=None, session=None, captured=None, owner=None):
-    """Drive the cards in ``scope`` (task ids) until none is open; tasks waiting on dependencies stay in ``todo``."""
+                       tool_call_id="research", poll_seconds=POLL_SECONDS, progress=None, check_active=None, session=None, captured=None, owner=None,
+                       refresh=None):
+    """Drive the cards in ``scope`` (task ids) until none is open; tasks waiting on dependencies stay in ``todo``.
+    ``refresh()``, when given, is asked at every look: a new scope when the cards changed, else None."""
     last_snapshot = None
     # Attempts already failed when the phase began were told of then.
     told_failed = {(tid, row["generation"]) for tid, row in captured.items() if row["status"] == "failed"}
@@ -515,6 +625,12 @@ async def _drive_tasks_inner(con, cfg, runner, run_id, *, scope, context=None,
             check_active()
         run = runs.get(con, run_id)
         await _roster_check(cfg, run, progress)
+        changed = await refresh() if refresh is not None else None
+        if changed is not None:
+            scope.clear()
+            scope.update(changed)
+            for gone in set(captured) - scope:
+                captured.pop(gone)
         linked = [row for row in runs.tasks(con, run_id) if row["id"] in scope]
         await _tell_failed(con, run, linked, told_failed, progress)
         for row in linked:
@@ -1160,14 +1276,45 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
     async def drive(kind):
         """Drive the node's cards of ``kind``. Before cards that failed for good fail the node, its
         Last Order decides: send them back, go on without them, or let the node fail -- the node
-        used to fail at once and wait for the root to retry it (2026-09-29: provider refusals)."""
+        used to fail at once and wait for the root to retry it (2026-09-29: provider refusals).
+        While research cards run, she can change them (``misaka_research_cards``)."""
+        if kind != "research":
+            return await drive_cards(kind)
+        round = runs.current_plan(con, run["id"], nid)[0] or 1
+        current = runs.node(con, nid)
+        tools = [commands.plan_change_tool(
+            con, run, current, round=round, session_file=current["session_file"] or run["root_session"],
+            validate=lambda change: _check_plan_change(
+                con, run, current, round, planner._roster({**cfg, "workspace": run["workspace"]}), change))]
+        control = _session_control(session)
+        tooled = session if hasattr(session, "registerCustomTools") else None   # a test double has no tools
+        if tooled is not None:
+            tooled.registerCustomTools(tools)            # the window's own turns see it
+        if control is not None:
+            control.review_tools = tools                 # an attached chat's turns, and `research --tell`'s
+        applied = [0]
+
+        async def refresh():
+            if not await _apply_plan_changes(con, run, current, round, applied, progress, (owner_run, owner_node)):
+                return None
+            return {row["id"] for row in runs.tasks(con, run["id"], kind=kind, node_id=nid)} - runs.given_up_cards(con, run["id"], nid)
+
+        try:
+            return await drive_cards(kind, refresh=refresh)
+        finally:
+            if tooled is not None:
+                tooled.unregisterCustomTools(tools)
+            if control is not None and control.review_tools is tools:
+                control.review_tools = ()
+
+    async def drive_cards(kind, refresh=None):
         while True:
             cards = runs.tasks(con, run["id"], kind=kind, node_id=nid)
             scope = {row["id"] for row in cards} - runs.given_up_cards(con, run["id"], nid)
             outcome = await _drive_tasks(con, cfg, runner, run["id"], scope=scope, context=context,
                                          tool_call_id=tool_call_id, poll_seconds=poll_seconds, progress=progress,
                                          session=session, check_active=lambda: check(allow_stop=True),
-                                         owner=(owner_run, owner_node))
+                                         owner=(owner_run, owner_node), refresh=refresh)
             lost = [row for row in runs.tasks(con, run["id"], kind=kind, node_id=nid)
                     if row["id"] in scope and row["status"] in ("failed", "stopped")]
             if outcome != "failed" or not lost:
