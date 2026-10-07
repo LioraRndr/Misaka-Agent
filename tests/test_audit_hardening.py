@@ -53,7 +53,7 @@ def test_the_file_tools_do_not_read_misakas_credentials(tmp_path, monkeypatch):
     assert CREDENTIALS_REFUSED.startswith("MISAKA's credentials")
 
 
-# -- H5: a node in a container whose /proc is empty ---------------------------------------------------------
+# -- H5: a node in a restricted container ----------------------------------------------------------------------
 
 def test_a_runner_claims_its_row_where_no_identity_can_be_read(tmp_path, monkeypatch):
     from contextlib import closing

@@ -484,8 +484,8 @@ def prepare_runner(con, table, row_id):
 
 
 def _own_identity(pid):
-    """This process's identity, or ``host:pid`` where neither psutil nor ``ps`` can read one (a
-    container with an empty /proc: every node failed to start there, issue #10 audit, H5). Only
+    """This process's identity, or ``host:pid`` where neither psutil nor ``ps`` can read its start
+    time (a restricted container: every node crashed at start there, issue #10 audit, H5). Only
     for the process's own claim -- its PID cannot be reused while it runs. ``processes.identity``
     itself keeps answering None for an unreadable process: everywhere else that None is what keeps
     a reused PID from passing for the recorded one."""
