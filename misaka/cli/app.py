@@ -554,7 +554,7 @@ def _cmd_research(args):
         from misaka.utils import loop_watchdog
         loop_watchdog.configure("research", exit_on_stall=False)
         out = _asyncio.run(loop_watchdog.watched(workflow.run(
-            con, cfg, research_node.ProcessSpawner(),
+            con, cfg, research_node.ProcessSpawner(show_output=True),   # nodes print beside this output, in a pane's shell too
             run_id=run["id"], poll_seconds=1.0, resume=bool(args.resume), progress=progress)))
     except RuntimeError as err:
         # Node failures already print their own reason above; the workflow's own summary is

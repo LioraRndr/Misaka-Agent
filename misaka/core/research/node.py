@@ -26,13 +26,19 @@ from misaka.utils import loop_watchdog
 
 
 class ProcessSpawner:
-    """Managed research children, independent of visible panes and their terminals."""
+    """Managed research children, independent of visible panes and their terminals.
+
+    ``show_output`` is for a driver that is itself plain text in a terminal (``misaka research``),
+    whose children print beside it even when that terminal is a pane's shell."""
+
+    def __init__(self, *, show_output=False):
+        self.show_output = show_output
 
     def spawn(self, argv, *, cwd, new_session=False):
         env = os.environ.copy()
         # A child of a pane is not the pane: neither it nor its model sessions may report as
-        # the foreground LO, and its output must not land on the pane's screen.
-        quiet = env.pop("MISAKA_NET_PANE", None) is not None
+        # the foreground LO, and its output must not land on a pane's TUI screen.
+        quiet = env.pop("MISAKA_NET_PANE", None) is not None and not self.show_output
         return subprocess.Popen(
             argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL if quiet else None,

@@ -70,3 +70,4 @@ def test_a_healthy_loop_writes_no_stack(tmp_path):
 def test_an_unconfigured_process_is_not_watched(tmp_path):
     code, _log, logs = _run(tmp_path, "blocked", configured=False)
     assert code == 0 and logs == []
+
