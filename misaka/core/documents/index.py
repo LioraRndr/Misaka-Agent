@@ -1814,7 +1814,7 @@ TREE_ATTEMPT_VERSION = 1
 # pictures framed in <svg> are marked too.
 EXTRACT_VERSION = 3
 REREAD_SUFFIXES = (".pdf", ".djvu", ".epub")
-REREAD_TRIES = 3            # a re-read pdfium cannot route is put off this many times, then given up
+REREAD_TRIES = 3            # the re-read pdfium cannot route on this many ingests in a row is given up
 
 
 def _needs_reread(pages):
@@ -1871,14 +1871,19 @@ def _reread(ddir, p, count):
             # Routed by text alone, a plate OCR read by its image cover would go back to its
             # caption for good: read again when pdfium answers (0.18.9 sweep) -- up to
             # REREAD_TRIES times; a file pdfium never reads keeps what is stored, stamped current.
+            # Not given up while it holds pages waiting for an OCR this machine lacks: those are
+            # read once ocrmypdf is installed, as everywhere else in a re-read.
             with _meta_lock(ddir):
                 m = _read_meta_at(ddir) or {}
-                tries = int(m.get("reread_put_off") or 0) + 1
-                if tries >= REREAD_TRIES:
+                put_off = m.get("reread_put_off") if isinstance(m.get("reread_put_off"), dict) else {}
+                tries = int(put_off.get("tries") or 0) + 1 if put_off.get("version") == EXTRACT_VERSION else 1
+                waits_for_ocr = not shutil.which(OCR_BINARY) and any(
+                    str(why).endswith(OCR_MISSING) for why in (m.get("unread_pages") or {}).values())
+                if tries >= REREAD_TRIES and not waits_for_ocr:
                     m.pop("reread_put_off", None)
                     m["extract_version"] = EXTRACT_VERSION
                 else:
-                    m["reread_put_off"] = tries
+                    m["reread_put_off"] = {"version": EXTRACT_VERSION, "tries": tries}
                 atomic.write_text(os.path.join(ddir, "meta.json"), json.dumps(m, ensure_ascii=False, indent=2))
             return count
     unread = {int(n): why for n, why in (learned.get("unread_pages") or {}).items()}
@@ -1919,6 +1924,7 @@ def _reread(ddir, p, count):
             m["reread"] = {"at": int(time.time()), "pages": changed, "pages_before": count}
         if not ocr_missing:
             m["extract_version"] = EXTRACT_VERSION
+            m.pop("reread_put_off", None)       # a later try that pdfium answered
         atomic.write_text(os.path.join(ddir, "meta.json"), json.dumps(m, ensure_ascii=False, indent=2))
     return total
 

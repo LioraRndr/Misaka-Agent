@@ -436,3 +436,36 @@ def test_a_reread_without_pdfiums_answer_keeps_a_plates_ocr(tmp_path, monkeypatc
     meta = json.loads((ddir / "meta.json").read_text(encoding="utf-8"))
     assert meta["extract_version"] == corpus.EXTRACT_VERSION and "reread_put_off" not in meta
     assert (ddir / "pages" / "p0006.txt").read_text(encoding="utf-8") == stored[5], "what was stored stands"
+
+
+def _put_off_doc(tmp_path, monkeypatch, **meta):
+    ddir, source = tmp_path / "doc", tmp_path / "book.pdf"
+    (ddir / "pages").mkdir(parents=True)
+    source.write_bytes(b"%PDF-1.4\n")
+    layer = [typeset(n) for n in range(1, 6)] + [""]
+    for number, text in enumerate(layer, 1):
+        (ddir / "pages" / f"p{number:04d}.txt").write_text(text, encoding="utf-8")
+    (ddir / "meta.json").write_text(json.dumps({"extract_version": 2, "pages": 6, **meta}), encoding="utf-8")
+    monkeypatch.setattr(corpus, "_pdf_text_layer", lambda p: list(layer))
+    monkeypatch.setattr(corpus, "_ocr_pages", lambda *a, **k: None)
+    return ddir, source
+
+
+def test_a_reread_put_off_and_then_answered_forgets_the_misses(tmp_path, monkeypatch):
+    ddir, source = _put_off_doc(tmp_path, monkeypatch)
+    monkeypatch.setattr(corpus, "_pdf_visuals", lambda p, numbers: None)
+    corpus._reread(str(ddir), str(source), 6)
+    monkeypatch.setattr(corpus, "_pdf_visuals", lambda p, numbers: {n: {"cover": 1.0, "marked": True} for n in numbers})
+    corpus._reread(str(ddir), str(source), 6)
+    meta = json.loads((ddir / "meta.json").read_text(encoding="utf-8"))
+    assert "reread_put_off" not in meta, "the next version's re-read starts its count afresh"
+
+
+def test_a_reread_is_not_given_up_while_its_pages_wait_for_ocr(tmp_path, monkeypatch):
+    ddir, source = _put_off_doc(tmp_path, monkeypatch, unread_pages={"6": f"{corpus.ROUTE_EMPTY}; {corpus.OCR_MISSING}"})
+    monkeypatch.setattr(corpus, "_pdf_visuals", lambda p, numbers: None)
+    monkeypatch.setattr(corpus.shutil, "which", lambda name: None)
+    for _ in range(corpus.REREAD_TRIES + 1):
+        corpus._reread(str(ddir), str(source), 6)
+    assert json.loads((ddir / "meta.json").read_text(encoding="utf-8"))["extract_version"] == 2, \
+        "read again once ocrmypdf is installed"
