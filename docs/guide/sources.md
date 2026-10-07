@@ -30,13 +30,26 @@ What reading them needs:
 |---|---|
 | PDF | `pdftotext` from poppler (`brew install poppler`); a built-in reader is the fallback |
 | scanned PDF | `ocrmypdf` with the language data: `brew install ocrmypdf tesseract-lang`, or `ocrmypdf` and `tesseract-ocr` with your language packs on Linux |
-| DjVu | DjVuLibre (`djvutxt`); scanned DjVu goes through OCR as well |
+| DjVu | DjVuLibre (`djvused`, and `ddjvu` for pages that need OCR); scanned DjVu goes through OCR as well |
 | old `.doc`, `.xls`, `.ppt` | LibreOffice |
 
-- **Scanned PDFs.** A PDF where fewer than a fifth of the pages carry text goes through OCR, which
-  leaves the pages that do have text alone. `documents.ocr_langs` in `settings.json` sets the
-  languages (default `eng+chi_sim+jpn`); each needs its language data installed, or OCR fails and
-  the message says why.
+- **Scanned PDFs.** Each page is checked on its own, and a page goes through OCR when it has no
+  text of its own (a download stamp or a running head repeated on most pages does not count), when
+  its text is garbled (a broken font encoding), or when it is mostly a picture with little text on
+  it. A page that has a text layer keeps it, and what OCR reads on it is added after it, so a
+  scanned facsimile under a typeset heading loses neither. Pages that needed OCR and did not get
+  it -- no `ocrmypdf`, or a failed run -- are marked unread: `doc_list` counts them, and
+  `doc_read` names each one with the reason. Pages OCR read and found no text on (blank scans,
+  pictures, maps) are named by `doc_read` too, but not counted as unread. A document is turned
+  away only when, after OCR, fewer than a fifth of its pages carry text. `documents.ocr_langs` in
+  `settings.json` sets the languages (default `eng+chi_sim+jpn`); each needs its language data
+  installed, or OCR fails and the message says why.
+- **Documents indexed by an older version.** Running `misaka doc add` or `scan` again on a PDF or
+  DjVu indexed before per-page OCR re-reads it when its stored pages show it may need it: pages
+  that printed something the old version did not read get OCR, and a document whose pages were
+  numbered out of step with the file is renumbered. Only the pages whose text changed are
+  rewritten, and the command lists how many; `doc_read` and `doc_verify` say so on those pages,
+  because a quotation located there earlier may have pointed at different text.
 - **Outlines.** With the `pageindex` extra installed, long PDFs get an outline (chapters and
   sections with their page ranges), so an agent can go straight to a chapter. Plain-text and Markdown documents get theirs from their own headings (`CHAPTER XII`,
   `LIVRE III`, a title set in capitals, `#` in Markdown), with no extra needed. Outlines are made

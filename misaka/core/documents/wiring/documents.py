@@ -6,6 +6,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -68,31 +69,91 @@ def _find(query, doc_id, ctx, limit=10):
 # it, so OCR text and a publisher's text layer looked identical at every tool -- including in
 # doc_verify's answer, which is the one the research ledger records a quotation against. OCR
 # has an error rate; a citation should not carry it silently.
+#
+# ``meta['unread_pages']`` names the pages that needed OCR and did not get it, with the reason
+# (no ocrmypdf, a failed run), and the pages OCR found no text on (a blank scan, a photograph,
+# a map), which ``_unread`` keeps apart; ``meta['reread']`` names the pages a newer extractor
+# rewrote. Both used to be silence: an empty page in doc_read looked like a
+# blank one, and a page whose text changed under a recorded quotation looked like any other.
 
 def _row(doc_id, root):
     """The listing row for one document under ``root``, or ``{}`` -- ``docs`` reads meta.json."""
     return next((r for r in corpus.docs(workspace=root) if r["doc_id"] == doc_id), None) or {}
 
 
+def _unread(row, textless=False):
+    """``{page: why}`` from ``meta['unread_pages']``: the pages that needed OCR and did not get it,
+    or with ``textless`` the pages OCR read and found no text on -- a blank scan, a photograph, a
+    map -- which are not missing anything a reader was owed."""
+    listed = row.get("unread_pages")
+    if not isinstance(listed, dict):
+        return {}
+    return {int(n): str(why) for n, why in listed.items()
+            if str(n).isdigit() and str(why).endswith(corpus.OCR_FOUND_NOTHING) == textless}
+
+
+def _reread(row):
+    """``(the pages a newer extractor rewrote, when)`` from ``meta['reread']``, or ``([], None)``."""
+    done = row.get("reread")
+    if not isinstance(done, dict) or not isinstance(done.get("pages"), list):
+        return [], None
+    at = done.get("at")
+    when = time.strftime("%Y-%m-%d", time.localtime(at)) if isinstance(at, (int, float)) else None
+    return [n for n in done["pages"] if isinstance(n, int)], when
+
+
 def _ocr_badge(row):
-    """The lower-fidelity marker for a listing row, or ``""``."""
-    if not row.get("ocr"):
-        return ""
-    listed, pages = row.get("ocr_pages"), row.get("pages") or 0
-    if isinstance(listed, list) and 0 < len(listed) < pages:
-        return f" (OCR {len(listed)}/{pages})"
-    return " (OCR)"
+    """The lower-fidelity markers for a listing row: pages read by OCR, pages nothing read."""
+    marks = []
+    if row.get("ocr"):
+        listed, pages = row.get("ocr_pages"), row.get("pages") or 0
+        marks.append(f"OCR {len(listed)}/{pages}"
+                     if isinstance(listed, list) and 0 < len(listed) < pages else "OCR")
+    if unread := _unread(row):
+        marks.append(f"{len(unread)} unread")
+    return "".join(f" ({mark})" for mark in marks)
 
 
 def _ocr_note(row):
-    """One sentence about a document read by OCR, in the tool's own voice, or ``""``."""
-    if not row.get("ocr"):
-        return ""
-    listed, pages = row.get("ocr_pages"), row.get("pages") or 0
-    which = (f"{len(listed)} of its {pages} pages were"
-             if isinstance(listed, list) and 0 < len(listed) < pages else "Its text was")
-    return (f"{which} read by OCR, so this is lower fidelity than a publisher's text layer: "
-            f"look at doc_page_image before resting a claim on an exact wording.\n")
+    """A sentence or two about a document's lower-fidelity pages, in the tool's own voice, or ``""``."""
+    note = ""
+    if row.get("ocr"):
+        listed, pages = row.get("ocr_pages"), row.get("pages") or 0
+        which = (f"{len(listed)} of its {pages} pages were"
+                 if isinstance(listed, list) and 0 < len(listed) < pages else "Its text was")
+        note = (f"{which} read by OCR, so this is lower fidelity than a publisher's text layer: "
+                f"look at doc_page_image before resting a claim on an exact wording.\n")
+    if unread := _unread(row):
+        note += (f"Pages {corpus._page_spec(unread)} needed OCR and did not get it, so their text is "
+                 f"missing here: {_seeing(row)}.\n")
+    if textless := _unread(row, textless=True):
+        note += (f"Pages {corpus._page_spec(textless)} hold no text OCR could read -- blank pages, "
+                 f"pictures or maps: {_seeing(row)}.\n")
+    return note
+
+
+def _seeing(row):
+    """How a reader sees a page the text does not carry."""
+    if str(row.get("orig_path") or "").lower().endswith(".pdf"):
+        return "look at them with doc_page_image"
+    return "only the source file shows them"
+
+
+def _page_notes(row, start, end):
+    """What a reader of pages ``start``-``end`` should know that their text does not say."""
+    lines = []
+    unread = sorted((n, why) for n, why in {**_unread(row), **_unread(row, textless=True)}.items()
+                    if start <= n <= end)
+    for n, why in unread[:10]:
+        lines.append(f"Page {n} has no text here ({why}); {_seeing(row).replace('them', 'it')}.")
+    if len(unread) > 10:
+        lines.append(f"{len(unread) - 10} more pages in this range have no text here either.")
+    pages, when = _reread(row)
+    if hit := [n for n in pages if start <= n <= end]:
+        lines.append(f"Pages {corpus._page_spec(hit)} were re-read by a newer extractor"
+                     f"{f' on {when}' if when else ''}: a quotation located there before then may "
+                     f"have pointed at different text.")
+    return "".join(line + "\n" for line in lines)
 
 
 def _page_from_ocr(row, page):
@@ -264,10 +325,11 @@ def register(harn):
                               offset=params.offset, workspace=workspace)
         if signal_aborted(signal):
             return _text("Cancelled.")
+        notes = _page_notes(await _off_loop(_row, params.doc_id, workspace), start, end)
         if not txt:
-            return _text(f"No text was extracted from p{start}-{end}; the pages may contain only "
+            return _text(notes + f"No text was extracted from p{start}-{end}; the pages may contain only "
                          f"images. Use doc_page_image(doc_id, page) to see a page as it is printed.")
-        return _text(untrusted(f"{params.doc_id} p{start}-{end}", txt))
+        return _text(notes + untrusted(f"{params.doc_id} p{start}-{end}", txt))
 
     class PageImageParams(BaseModel):
         doc_id: str = Field(description="Document ID from `doc_list`.")
@@ -408,11 +470,17 @@ def register(harn):
         lines = [f"✅ Page {v['page']}, character {v['offset']}",
                  f"claim_hash {v['claim_hash']}",
                  f"Cite as: [{params.doc_id} p{v['page']}]"]
+        row = await _off_loop(_row, params.doc_id, root)
         # OCR is a transcription; locating text in it does not establish what the page says.
-        if _page_from_ocr(await _off_loop(_row, params.doc_id, root), v["page"]):
+        if _page_from_ocr(row, v["page"]):
             lines.append(f"Page {v['page']} was read by OCR, not lifted from a text layer: the "
                          f"quotation matches what OCR read there. Check it against "
                          f"doc_page_image(doc_id, {v['page']}) before citing it word for word.")
+        pages, when = _reread(row)
+        if v["page"] in pages:
+            lines.append(f"Page {v['page']} was re-read by a newer extractor"
+                         f"{f' on {when}' if when else ''}: a locator recorded for this page "
+                         f"before then may not match this one.")
         return _text("\n".join(lines))
 
 SESSION_KINDS = {"foreground", "dm", "card", "child", "bare"}

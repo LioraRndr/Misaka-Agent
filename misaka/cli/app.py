@@ -2,6 +2,7 @@
 import argparse
 import os
 import sys
+import time
 
 from misaka.cli import bootstrap
 from misaka.config import CFG, VERSION, current_config, home, layout
@@ -654,20 +655,46 @@ def _cmd_bundles(args):
         sys.exit(str(error))
 
 
+def _doc_notes(did, since):
+    """What indexing ``did`` left unread, and what it re-read at or after ``since``."""
+    ddir = corpus.resolve_doc(did, workspace=db.canonical_workspace())
+    meta = (corpus._read_meta_at(ddir) if ddir else None) or {}
+    notes = []
+    listed = meta.get("unread_pages") if isinstance(meta.get("unread_pages"), dict) else {}
+    unread = {n: why for n, why in listed.items() if not str(why).endswith(corpus.OCR_FOUND_NOTHING)}
+    if unread:
+        reasons = sorted(set(unread.values()))
+        notes.append(f"{len(unread)} page(s) need OCR and were not read: {reasons[0]}"
+                     + (f" (and {len(reasons) - 1} other reason(s))" if len(reasons) > 1 else ""))
+    if textless := len(listed) - len(unread):
+        notes.append(f"{textless} page(s) hold no text OCR could read (blank pages, pictures, maps)")
+    reread = meta.get("reread")
+    if isinstance(reread, dict) and int(reread.get("at") or 0) >= since:
+        notes.append(f"re-read by the current extractor: {len(reread.get('pages') or [])} page(s) changed "
+                     f"({reread.get('pages_before')} -> {meta.get('pages')} pages)")
+    return notes
+
+
 def _cmd_doc(args):
     if args.action == "add":
         if not args.arg:
             sys.exit("Usage: misaka doc add <file> [--no-tree]")
+        since = int(time.time())
         did, n = corpus.ingest(args.arg, with_tree=not args.no_tree, workspace=db.canonical_workspace())
         doc = corpus.resolve_doc(did, workspace=db.canonical_workspace())
         has = doc and os.path.exists(os.path.join(doc, "tree.json"))
         structure = "with PageIndex structure" if has else "page navigation only"
         print(f"Added {os.path.basename(args.arg)} as {did}: {n} pages, {structure}.")
+        for note in _doc_notes(did, since):
+            print(f"  {note}")
     elif args.action == "scan":
         target = args.arg or os.getcwd()
+        since = int(time.time())
         ingested, skipped = corpus.scan(target, with_tree=not args.no_tree, workspace=db.canonical_workspace())
         for did, path in ingested:
             print(f"  {did}  {path}")
+            for note in _doc_notes(did, since):
+                print(f"      {note}")
         for path, reason in skipped:
             print(f"  skipped {path}: {reason}")
         if not ingested:
