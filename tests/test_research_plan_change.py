@@ -80,6 +80,23 @@ def test_cards_are_added_reassigned_and_cancelled_while_the_others_run(executing
     assert not asyncio.run(workflow._apply_plan_changes(con, run, root, 1, applied, events.append, (run, root)))
 
 
+def test_a_card_whose_process_is_already_starting_goes_on(executing):
+    """Between the runner starting a card's process and the card taking its claim, the card is
+    still `ready`: removing it then would pull it out from under the process."""
+    con, run, root, tool, ctx = executing
+    before = workflow._round_cards(con, run, root, 1)
+    change(tool, ctx, cancel=[{"card": "c", "reason": "covered"}])
+    events = []
+
+    async def pending(task_ids):
+        return {before["c"]["id"]} & set(task_ids)
+
+    assert asyncio.run(workflow._apply_plan_changes(con, run, root, 1, [0], events.append, (run, root),
+                                                    pending=pending))
+    assert tasks.get(con, before["c"]["id"]) is not None
+    assert "Already started, so they go on as they were: c." in events[-1]["message"]
+
+
 @pytest.mark.parametrize("fields, said", [
     ({"cancel": [{"card": "a", "reason": "x"}]}, "is running; only a card that has not started"),
     ({"cancel": [{"card": "zz", "reason": "x"}]}, "is not one of this round's cards"),

@@ -522,10 +522,12 @@ def _check_plan_change(con, run, node, round, roster, change):
     return normalized
 
 
-async def _apply_plan_changes(con, run, node, round, applied, progress, owner):
+async def _apply_plan_changes(con, run, node, round, applied, progress, owner, pending=None):
     """Make the board match the changes Last Order recorded since the last look: cancelled cards
     and reassigned ones come off (with the cards waiting on them, whose ``needs`` name the old
-    ids), and ``_submit_tasks`` creates what the round now lacks. True when something was applied."""
+    ids), and ``_submit_tasks`` creates what the round now lacks. A card the runner is already
+    starting (``pending``: its process or pane is up, its claim not yet taken) counts as started.
+    True when something was applied."""
     changes = runs.plan_changes(con, run["id"], node["id"], round)
     if len(changes) <= applied[0]:
         return False
@@ -534,6 +536,9 @@ async def _apply_plan_changes(con, run, node, round, applied, progress, owner):
     wanted = {task["local_id"]: task for task in tasks}
     cards = _round_cards(con, run, node, round)
     waiting = {local: row for local, row in cards.items() if row["status"] in ("ready", "todo")}
+    if pending is not None and waiting:
+        starting = set(await pending([row["id"] for row in waiting.values()]))
+        waiting = {local: row for local, row in waiting.items() if row["id"] not in starting}
     off = {local for local, row in waiting.items()
            if local not in wanted or wanted[local]["assignee"] != row["assignee"]}
     while True:
@@ -1295,7 +1300,8 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
         applied = [0]
 
         async def refresh():
-            if not await _apply_plan_changes(con, run, current, round, applied, progress, (owner_run, owner_node)):
+            if not await _apply_plan_changes(con, run, current, round, applied, progress, (owner_run, owner_node),
+                                             pending=getattr(runner, "pending", None)):
                 return None
             return {row["id"] for row in runs.tasks(con, run["id"], kind=kind, node_id=nid)} - runs.given_up_cards(con, run["id"], nid)
 
