@@ -40,11 +40,10 @@ Homebrew 与 winget 见 [release/README.md](../release/README.md)。
 | 可选组件 | 增加的功能 |
 |---|---|
 | `providers` | 所有模型服务商的 SDK。只想装一家，就写 `anthropic`、`openai`、`google`、`bedrock` 或 `mistral`（OpenRouter 和其他兼容 OpenAI 的服务用 `openai`）。 |
-| `pageindex` | 长 PDF 的章节目录 |
 | `browser` | 操控网页浏览器的工具 |
 | `lcm-semantic` | 按意思检索过去的对话 |
 
-同时装几个：`"misaka[providers,pageindex] @ git+https://..."`。
+同时装几个：`"misaka[providers,browser] @ git+https://..."`。
 
 ## 3. 运行设置向导
 

@@ -51,7 +51,7 @@ What reading them needs:
   `![...]` markers is read again too, so its pictures are named. Only the pages whose text changed are
   rewritten, and the command lists how many; `doc_read` and `doc_verify` say so on those pages,
   because a quotation located there earlier may have pointed at different text.
-- **Outlines.** With the `pageindex` extra installed, long PDFs get an outline (chapters and
+- **Outlines.** Long PDFs get an outline (chapters and
   sections with their page ranges), so an agent can go straight to a chapter. Plain-text and Markdown documents get theirs from their own headings (`CHAPTER XII`,
   `LIVRE III`, a title set in capitals, `#` in Markdown), with no extra needed. Outlines are made
   for documents of 20 pages or more. Running `misaka doc add` or `scan` again on a document

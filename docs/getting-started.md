@@ -46,11 +46,10 @@ optional pieces:
 | Extra | Adds |
 |---|---|
 | `providers` | every model provider's SDK. To install one only, use `anthropic`, `openai`, `google`, `bedrock` or `mistral` (OpenRouter and other OpenAI-compatible services use `openai`). |
-| `pageindex` | chapter outlines for long PDFs |
 | `browser` | tools that drive a web browser |
 | `lcm-semantic` | searching past conversations by meaning |
 
-Several at once: `"misaka[providers,pageindex] @ git+https://..."`.
+Several at once: `"misaka[providers,browser] @ git+https://..."`.
 
 ## 3. Run the setup wizard
 

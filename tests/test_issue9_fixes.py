@@ -108,3 +108,19 @@ def test_the_roster_comment_names_a_tool_that_exists():
     import inspect
     assert "misaka_sisters" not in inspect.getsource(roster)
     assert os.path.exists(roster.__file__)
+
+
+# -- PDF outlines in every install ------------------------------------------------------------------------
+
+def test_every_install_has_what_pdf_outlines_need():
+    """The outline packages were an extra, and a release archive cannot add one: no archive install
+    ever had an outline. They are MISAKA's own dependencies now."""
+    import tomllib
+    from pathlib import Path
+
+    from misaka.core.documents import pageindex
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    named = {requirement.split("=")[0].split(">")[0].strip().lower() for requirement in project["dependencies"]}
+    assert {name.lower() for name in pageindex.REQUIREMENTS} - named <= {"regex"}, "regex comes with tiktoken"
+    assert "tiktoken" in named
+    assert project["optional-dependencies"]["pageindex"] == [], "the old extra still installs"

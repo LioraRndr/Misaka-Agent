@@ -1673,8 +1673,8 @@ def _warn_no_pageindex(p):
     _warned_no_pageindex = True
     from .pageindex import INSTALL_HINT
     print(f"Warning: no PageIndex structure extraction for {os.path.basename(p)} (and any other "
-          f"document in this run): the optional extra is not installed, so documents are split "
-          f"into pages only, with no outline.\n         Install it with: {INSTALL_HINT}\n"
+          f"document in this run): PageIndex's packages are missing from this install, so documents "
+          f"are split into pages only, with no outline.\n         To fix it: {INSTALL_HINT}\n"
           f"         Then re-run the same `misaka doc add`/`doc scan` to backfill the outline.",
           file=sys.stderr)
 

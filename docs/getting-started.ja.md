@@ -40,11 +40,10 @@ Homebrew と winget は [release/README.md](../release/README.md) を見てく�
 | 追加機能 | 加わるもの |
 |---|---|
 | `providers` | すべてのモデルプロバイダの SDK。一社だけなら `anthropic`、`openai`、`google`、`bedrock`、`mistral` のいずれかを指定します（OpenRouter や OpenAI 互換のサービスは `openai`）。 |
-| `pageindex` | 長い PDF の章立て |
 | `browser` | ウェブブラウザを操作するツール |
 | `lcm-semantic` | 過去の会話を意味で検索する機能 |
 
-複数まとめて：`"misaka[providers,pageindex] @ git+https://..."`。
+複数まとめて：`"misaka[providers,browser] @ git+https://..."`。
 
 ## 3. セットアップウィザードを実行する
 
