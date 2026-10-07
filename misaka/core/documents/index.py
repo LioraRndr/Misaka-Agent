@@ -2,6 +2,7 @@
 import contextlib
 import functools
 import hashlib
+import itertools
 import json
 import os
 import posixpath
@@ -524,6 +525,123 @@ def embedded_image(doc_id, page, figure, workspace=None):
     if data is None:
         raise ValueError(f"{member} is missing from the stored file, or larger than 64 MiB.")
     return data, member
+
+
+# -- the number printed on a page -------------------------------------------------------------------
+#
+# A page here is a page of the file, counted from 1, and that is the locator every tool and every
+# citation uses -- it never shifts. What a reader looks up in the book is the number printed on the
+# page, and the two part company at a cover, Roman-numbered front matter, an unnumbered plate, or a
+# journal article whose pages start at 1361 (GitHub issue #9: a scanned book thirteen pages out, a
+# delivered card citing the file's pages as the book's). So the printed number is found where it
+# can be, and shown beside the file's page -- never in place of it.
+#
+# Two sources, in this order. A PDF that says what each page is labelled (/PageLabels: 32 of the 98
+# PDFs in one real corpus, front matter and journal offsets alike). Otherwise the numbers at the top
+# or bottom of the pages themselves, believed only where many pages nearby agree on the same
+# distance from the file's page, so a year in a running head or a footnote number never passes.
+LABELS_VERSION = 1
+FOLIO_WINDOW = 12            # pages either side that are asked to agree
+FOLIO_SUPPORT = 4            # ... and how many of them must
+FOLIO_MIN_PAGES = 10         # fewer agreeing pages than this in a book: no printed numbers claimed
+FOLIO_GAP = 6                # an unnumbered page between two that agree takes their number
+
+_PDFIUM_LABELS_CHILD = """
+import json, sys
+import pypdfium2 as pdfium
+pdf = pdfium.PdfDocument(sys.argv[1])
+try:
+    json.dump([pdf.get_page_label(i) or "" for i in range(len(pdf))], sys.stdout)
+finally:
+    pdf.close()
+"""
+_FOLIO_ALONE = re.compile(r"^[\s\-–—·•.\[(（]*(?:第\s*)?(\d{1,4})(?:\s*[页頁])?[\s\-–—·•.\])）]*$")
+_FOLIO_LEADS = re.compile(r"^(\d{1,4})\s+\S")      # "338  EAST JIN": a head on a left-hand page
+_FOLIO_ENDS = re.compile(r"\S\s+(\d{1,4})$")       # "The Mind in the Machine  219"
+
+
+def _pdf_page_labels(p):
+    """A PDF's own page labels, one per page (``""`` for an unlabelled one), or None."""
+    try:
+        out = subprocess.run([sys.executable, "-c", _PDFIUM_LABELS_CHILD, p], capture_output=True,
+                             text=True, encoding="utf-8", timeout=120, check=False)
+        labels = json.loads(out.stdout) if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return labels if isinstance(labels, list) and all(isinstance(x, str) for x in labels) else None
+
+
+def _folios(text):
+    """The numbers a page prints at its top or bottom: alone on one of its first or last two
+    lines ("338", "- 338 -", "第338页"), at either end of a head ("338  East Jin", "East Jin
+    338"), or at the end of a foot. A foot line that *starts* with a number is a footnote
+    ("87 Zhuravsky, ..."): its numbers climb a page at a time often enough to pass for folios."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    found = set()
+    for line, head in [(line, True) for line in lines[:2]] + [(line, False) for line in lines[-2:]]:
+        match = _FOLIO_ALONE.match(line) or _FOLIO_ENDS.search(line) or (head and _FOLIO_LEADS.match(line))
+        if match:
+            found.add(int(match.group(1)))
+    return found
+
+
+def _inferred_labels(pages):
+    """``{page: printed number}`` read off the pages, where it can be believed (see above)."""
+    offsets = {n: {folio - n for folio in _folios(text)} for n, text in enumerate(pages, 1)}
+    chosen = {}
+    for n, candidates in offsets.items():
+        best = None
+        for d in candidates:
+            support = sum(1 for m in range(n - FOLIO_WINDOW, n + FOLIO_WINDOW + 1) if d in offsets.get(m, ()))
+            if support >= FOLIO_SUPPORT and (best is None or support > best[1]):
+                best = (d, support)
+        if best:
+            chosen[n] = best[0]
+    if len(chosen) < FOLIO_MIN_PAGES:
+        return {}
+    numbered = sorted(chosen)
+    for left, right in itertools.pairwise(numbered):
+        if chosen[left] == chosen[right] and 1 < right - left <= FOLIO_GAP:
+            for n in range(left + 1, right):
+                chosen[n] = chosen[left]
+    return {n: str(n + d) for n, d in chosen.items() if n + d >= 1}
+
+
+def page_labels(doc_id, workspace=None):
+    """``({page: printed number}, where it came from)`` for a PDF or a DjVu, only where the printed
+    number differs from the file's page; ``({}, None)`` when nothing is known. ``where`` is "the
+    PDF's page labels" or "the page headers and footers". Found once and kept in ``labels.json``."""
+    ddir = resolve_doc(doc_id, workspace=workspace)
+    source = _stored_source(ddir) if ddir else None
+    if not source or os.path.splitext(source)[1].lower() not in (".pdf", ".djvu"):
+        return {}, None
+    path = os.path.join(ddir, "labels.json")
+    data = None
+    if _real_file(path, ddir):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = None
+    if not isinstance(data, dict) or data.get("version") != LABELS_VERSION:
+        labels, where = {}, None
+        own = _pdf_page_labels(source) if source.lower().endswith(".pdf") else None
+        if own and any(label and label != str(n) for n, label in enumerate(own, 1)):
+            labels, where = {n: label for n, label in enumerate(own, 1) if label}, "the PDF's page labels"
+        else:
+            meta = _read_meta_at(ddir) or {}
+            labels = _inferred_labels(_stored_pages(ddir, int(meta.get("pages") or 0)))
+            where = "the page headers and footers" if labels else None
+        data = {"version": LABELS_VERSION, "where": where,
+                "labels": {str(n): label for n, label in labels.items() if label != str(n)}}
+        atomic.write_text(path, json.dumps(data, ensure_ascii=False))
+    return {int(n): label for n, label in data.get("labels", {}).items() if str(n).isdigit()}, data.get("where")
+
+
+def printed(doc_id, page, workspace=None):
+    """``"printed p. 338"`` for a page whose printed number differs from its file page, else ``""``."""
+    labels, _where = page_labels(doc_id, workspace=workspace)
+    return f"printed p. {labels[page]}" if page in labels else ""
 
 
 # -- OCR: an optional external binary, fail-closed ------------------------------------------------
@@ -1737,8 +1855,9 @@ def _reread(ddir, p, count):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(_page_path(ddir, n))
         if changed:
-            with contextlib.suppress(FileNotFoundError):  # read off the old pages: found again on asking
-                os.unlink(os.path.join(ddir, "figures.json"))
+            for derived in ("figures.json", "labels.json"):   # read off the old pages: found again on asking
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(os.path.join(ddir, derived))
         m = _read_meta_at(ddir) or {}
         if pages is not None:
             for key in ("ocr", "ocr_pages", "unread_pages"):
@@ -2212,12 +2331,16 @@ def search_literal(q, limit=10, doc_id=None, workspace=None):
     targets = [doc_id] if doc_id else [m["doc_id"] for m in docs(workspace)]
     hits = []
     for did in targets:
+        labels = None
         for page, text in _iter_pages(did, workspace=workspace):
             span = _locate(text, needle)
             if span:
                 pos, end = span
                 snip = text[max(0, pos - 12):pos] + "<<" + text[pos:end] + ">>" + text[end:end + 12]
-                hits.append({"doc_id": did, "page": page, "s": snip.replace("\n", " ")})
+                if labels is None:
+                    labels = page_labels(did, workspace=workspace)[0]
+                hits.append({"doc_id": did, "page": page, "printed": labels.get(page, ""),
+                             "s": snip.replace("\n", " ")})
                 if len(hits) >= limit:
                     return hits
     return hits
@@ -2235,7 +2358,9 @@ def verify_quote(doc_id, quote, page=None, workspace=None):
         if not span:
             continue
         real = span[0]
-        return {"page": pg, "offset": real, "claim_hash": claim_hash(doc_id, pg, real, quote)}
+        labels, where = page_labels(doc_id, workspace=workspace)
+        return {"page": pg, "offset": real, "claim_hash": claim_hash(doc_id, pg, real, quote),
+                "printed": labels.get(pg, ""), "printed_from": where if pg in labels else None}
     return None
 
 
@@ -2293,8 +2418,10 @@ def read_pages(doc_id, start, end, max_chars=12000, offset=0, workspace=None):
     offset = max(0, int(offset or 0))
     stop = offset + max_chars
     pieces, seen, more = [], 0, False
+    labels, _where = page_labels(doc_id, workspace=workspace)
     for page, t in _iter_pages(doc_id, lo=start, hi=end, workspace=workspace):
-        chunk = f"\n--- p{page} ---\n{t}" if t.strip() else f"\n--- p{page} --- (no text on this page)\n"
+        head = f"--- p{page} (printed p. {labels[page]}) ---" if page in labels else f"--- p{page} ---"
+        chunk = f"\n{head}\n{t}" if t.strip() else f"\n{head} (no text on this page)\n"
         if seen + len(chunk) > offset:
             pieces.append(chunk[max(0, offset - seen):stop - seen])
         seen += len(chunk)

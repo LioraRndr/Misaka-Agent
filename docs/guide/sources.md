@@ -72,7 +72,10 @@ What reading them needs:
   A value read off a figure is a reading, not a quotation: `doc_verify` cannot locate it.
 - **Pages.** In a PDF or DjVu file a page is a page of the file, counted from 1 -- not always the
   number printed on it (front matter in Roman numerals, a scanned cover, an article whose journal
-  pagination starts at 1361). EPUB, HTML, text and Office files
+  pagination starts at 1361). Where the printed number is known, `doc_read`, `doc_find` and
+  `doc_verify` show it beside the file's page (`p351 (printed p. 338)`): from the PDF's own page
+  labels, or else read off the page heads and feet, but only where many pages in a row agree on
+  it. The file's page stays the locator a citation records. EPUB, HTML, text and Office files
   have none, so MISAKA cuts them into pages of about 3,000 characters at paragraph breaks, and
   a citation such as `p12` points into that cut.
 

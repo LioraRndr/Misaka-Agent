@@ -711,7 +711,8 @@ def _cmd_doc(args):
     elif args.action == "find":
         hits = corpus.search_literal(args.arg, doc_id=args.doc, workspace=db.canonical_workspace())
         for h in hits:
-            print(f"  {h['doc_id']} p{h['page']}  {h['s'][:90]}")
+            printed = f" (printed p. {h['printed']})" if h.get("printed") else ""
+            print(f"  {h['doc_id']} p{h['page']}{printed}  {h['s'][:90]}")
         print(f"{len(hits)} match(es). Use `misaka doc verify` before citing a quotation.")
     elif args.action == "verify":
         if not args.arg or not args.doc:
@@ -719,7 +720,8 @@ def _cmd_doc(args):
         v = corpus.verify_quote(args.doc, args.arg, workspace=db.canonical_workspace())
         if not v:
             sys.exit("❌ Quote not found in that document.")
-        print(f"✅ p{v['page']} offset {v['offset']}\n   claim_hash {v['claim_hash']}")
+        printed = f" (printed p. {v['printed']}, from {v['printed_from']})" if v.get("printed") else ""
+        print(f"✅ p{v['page']}{printed} offset {v['offset']}\n   claim_hash {v['claim_hash']}")
     elif args.action == "tree":
         if not (args.arg or args.doc):
             sys.exit("Usage: misaka doc tree <doc-id>")

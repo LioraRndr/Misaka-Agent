@@ -60,6 +60,10 @@ def _docs(ctx):
     return corpus.docs(workspace=_workspace(ctx))
 
 
+def _printed(hit):
+    return f" (printed p. {hit['printed']})" if hit.get("printed") else ""
+
+
 def _find(query, doc_id, ctx, limit=10):
     return corpus.search_literal(query, doc_id=doc_id, workspace=_workspace(ctx), limit=limit)
 
@@ -615,7 +619,7 @@ def register(harn):
             return _text("Cancelled.")
         if not hits:
             return _text("No matches.")
-        found = "\n".join(f"{h['doc_id']} p{h['page']}  {h['s'][:100]}" for h in hits)
+        found = "\n".join(f"{h['doc_id']} p{h['page']}{_printed(h)}  {h['s'][:100]}" for h in hits)
         return _text(untrusted(f"doc-search:{params.query}", found))
 
     class AddParams(BaseModel):
@@ -674,6 +678,10 @@ def register(harn):
         lines = [f"✅ Page {v['page']}, character {v['offset']}",
                  f"claim_hash {v['claim_hash']}",
                  f"Cite as: [{params.doc_id} p{v['page']}]"]
+        if v.get("printed"):
+            # The file's page is the locator; the printed number is what a reader looks up.
+            lines[0] += f" -- printed page {v['printed']} (from {v['printed_from']})"
+            lines[2] = f"Cite as: [{params.doc_id} p{v['page']}; printed p. {v['printed']}]"
         row = await _off_loop(_row, params.doc_id, root)
         # OCR is a transcription; locating text in it does not establish what the page says.
         if _page_from_ocr(row, v["page"]):
