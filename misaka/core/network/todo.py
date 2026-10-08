@@ -308,7 +308,8 @@ class TodoPart:
                     raise ValueError("Only this node's red-team card may record critique issues.")
                 generation, claim_lock = self._ownership()
                 if generation is None or not bdb.add_event(
-                    c, task_id, "research_critique", {"issues": [item.model_dump() for item in p.issues]},
+                    c, task_id, "research_critique",
+                    {"issues": [item.model_dump() for item in p.issues], "claim_lock": claim_lock},
                     generation=generation, claim_lock=claim_lock,
                 ):
                     raise ValueError("Card ownership changed before its review was recorded.")
@@ -317,7 +318,8 @@ class TodoPart:
                     raise ValueError("Only this node's divergence-review card may record alternatives.")
                 generation, claim_lock = self._ownership()
                 if generation is None or not bdb.add_event(
-                    c, task_id, "research_divergence", {"alternatives": [item.model_dump() for item in p.alternatives]},
+                    c, task_id, "research_divergence",
+                    {"alternatives": [item.model_dump() for item in p.alternatives], "claim_lock": claim_lock},
                     generation=generation, claim_lock=claim_lock,
                 ):
                     raise ValueError("Card ownership changed before its alternatives were recorded.")
@@ -368,9 +370,8 @@ class TodoPart:
             # review found them (2026-10-01, B117). Once per attempt, before the review is
             # submitted, its author checks her own file against her record.
             recorded = _review_record(submission)
-            if recorded is not None and bdb.latest_payload(con(), task_id, "review_record_checked",
-                                                           generation=row["generation"]) is None:
-                bdb.add_event(con(), task_id, "review_record_checked", {"items": recorded[1]},
+            if recorded is not None and worker.attempt_payload(con(), row, "review_record_checked") is None:
+                bdb.add_event(con(), task_id, "review_record_checked", {"items": recorded[1], "claim_lock": row["claim_lock"]},
                               generation=row["generation"], claim_lock=row["claim_lock"])
                 raise ValueError(
                     "Before this review is submitted, check the file you wrote against what you recorded "

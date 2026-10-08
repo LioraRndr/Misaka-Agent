@@ -88,7 +88,10 @@ def _claimer_alive(lock: Any) -> bool:
     """Conservatively determine whether the process that owns a claim is alive."""
     parts = str(lock or "").split(":")
     try:
-        if len(parts) >= 4 and parts[0] == "lo":
+        # The panel daemon's claim (``net:<host>:<pid>:...``): its live leases are its own to watch
+        # (``_watch_cards`` never interrupts a pane for taking long). Unrecognised, an idle card
+        # pane was taken for wedged by any reconcile and its group killed (0.18.10 sweep).
+        if len(parts) >= 4 and parts[0] in {"lo", "net"}:
             if parts[1] != socket.gethostname():
                 return True
             return psutil.pid_exists(int(parts[2]))

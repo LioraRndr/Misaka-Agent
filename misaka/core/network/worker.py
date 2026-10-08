@@ -119,19 +119,28 @@ def declare_completion(con, row, summary):
     """Record that this attempt's work is done. The host submits it when the turn ends: a
     Sister's session at ``agent_settled``, an ally's runner after its ACP turn. A board event,
     so a declaration made in another process (an ally's MCP bridge) reaches the host too."""
-    if not task_store.add_event(con, row["id"], COMPLETION_EVENT, {"summary": summary},
+    if not task_store.add_event(con, row["id"], COMPLETION_EVENT, {"summary": summary, "claim_lock": row["claim_lock"]},
                                 generation=row["generation"], claim_lock=row["claim_lock"]):
         raise ValueError("Card ownership changed before its completion was recorded.")
 
 
-def declared_completion(con, row):
-    """The summary this attempt declared with ``misaka_card_complete``, or None."""
-    raw = task_store.latest_payload(con, row["id"], COMPLETION_EVENT, generation=row["generation"])
+def attempt_payload(con, row, kind):
+    """What this attempt of the card recorded under ``kind``, or None. A card sent back to ready --
+    a retry, a dead worker reclaimed, a reviewer asking for changes -- keeps its generation, so an
+    event of the generation can be an earlier attempt's: only one stamped with this attempt's claim
+    lock counts. Before, the next attempt submitted with the last one's summary (0.18.10 sweep)."""
+    raw = task_store.latest_payload(con, row["id"], kind, generation=row["generation"])
     try:
         value = json.loads(raw) if raw else None
     except (TypeError, ValueError):
         return None
-    return str(value.get("summary") or "") if isinstance(value, dict) else None
+    return value if isinstance(value, dict) and value.get("claim_lock") == row["claim_lock"] else None
+
+
+def declared_completion(con, row):
+    """The summary this attempt declared with ``misaka_card_complete``, or None."""
+    value = attempt_payload(con, row, COMPLETION_EVENT)
+    return str(value.get("summary") or "") if value is not None else None
 
 
 def missing_deliverable(task):
@@ -504,12 +513,12 @@ def build_submission(con, task, summary):
         "findings": findings,
     }
     # Typed tool data, frozen with the card's completion. Never reopen a model-written JSON file.
-    critique = task_store.latest_payload(con, task["id"], "research_critique", generation=task["generation"])
+    critique = attempt_payload(con, task, "research_critique")
     if critique is not None:
-        submission["issues"] = json.loads(critique)["issues"]
-    divergence = task_store.latest_payload(con, task["id"], "research_divergence", generation=task["generation"])
+        submission["issues"] = critique["issues"]
+    divergence = attempt_payload(con, task, "research_divergence")
     if divergence is not None:
-        submission["alternatives"] = json.loads(divergence)["alternatives"]
+        submission["alternatives"] = divergence["alternatives"]
     if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_run_tasks'").fetchone():
         link = con.execute("SELECT kind FROM research_run_tasks WHERE task_id=?", (task["id"],)).fetchone()
         from misaka.core.research import runs

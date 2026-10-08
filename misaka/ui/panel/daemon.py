@@ -1818,7 +1818,16 @@ class Daemon:
         if row["assignee"] not in presets.names():     # an ally's runner says itself why it cannot start
             profile = os.path.join(_expand(CFG["profiles_root"]), row["assignee"])
             if not os.path.isdir(profile):
-                raise ValueError(f"Sister {row['assignee']} is not in the roster.")
+                # Failed for good, as headless dispatch fails it (a configuration fault): left
+                # ready, the card was asked for again on every poll and its research never ended.
+                reason = f"Sister {row['assignee']} is not in the roster."
+                generation = int(row["generation"])
+                lock = f"net:{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+                if db.claim(con, task_id, lock, ttl_seconds=60, generation=generation, pid=os.getpid()):
+                    db.add_event(con, task_id, "failed", {"reason": reason}, generation=generation, claim_lock=lock)
+                    db.mark_failed(con, task_id, generation=generation, claim_lock=lock,
+                                   failure_kind="configuration", reason=reason)
+                raise ValueError(reason)
         generation = int(row["generation"])
         lock = f"net:{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
         host_cap, assignee_cap = admission.limits()
