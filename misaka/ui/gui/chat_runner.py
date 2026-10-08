@@ -349,6 +349,12 @@ class ChatHost:
             models.append({**_model_summary(model), "configured": self.registry.hasConfiguredAuth(model)})
         return {"models": models, "current": _model_summary(self.session.model)}
 
+    def op_skills(self, _params: dict) -> dict:
+        from misaka.core.skills.wiring.skills import SkillsPart, _runtime_name, _slash_entries
+        return {"skills": [{"name": _runtime_name(e), "description": e.get("list_description") or e.get("description", "")}
+                           for part in self.session.moments.parts if isinstance(part, SkillsPart)
+                           for e in _slash_entries(part._entries())]}
+
     async def op_set_model(self, params: dict) -> dict:
         model = self.registry.find(str(params.get("provider", "")), str(params.get("id", "")))
         if model is None:
@@ -378,7 +384,7 @@ class ChatHost:
 
     ASYNC_OPS = {"stop": op_stop, "compact": op_compact,
                  "set_model": op_set_model, "set_thinking": op_set_thinking, "rename": op_rename}
-    SYNC_OPS = {"prompt": op_prompt, "models": op_models, "status": op_status, "snapshot": op_snapshot,
+    SYNC_OPS = {"prompt": op_prompt, "models": op_models, "skills": op_skills, "status": op_status, "snapshot": op_snapshot,
                 "ui_response": op_ui_response}
 
     async def _execute(self, request: dict, handler, params: dict) -> None:

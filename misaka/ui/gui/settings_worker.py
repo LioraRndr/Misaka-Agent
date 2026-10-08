@@ -52,6 +52,11 @@ def _extras_command(extras: list[str]) -> dict:
 
 
 def op_overview(_params: dict) -> dict:
+    if _params.get("section") == "skills":
+        # Older GUI servers can invoke this fresh, read-only worker while their
+        # existing chats stay alive, before they gain composer_skills themselves.
+        from misaka.ui.gui.composer import skill_catalogue
+        return skill_catalogue(os.getcwd(), _params.get("role") or None)
     import platform
 
     from misaka.cli.setup import Wizard, _install_command

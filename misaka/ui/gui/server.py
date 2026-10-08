@@ -25,6 +25,8 @@ from misaka.config import CFG, VERSION, current_config, home, sisters
 from misaka.ui.gui.chats import ChatManager
 from misaka.ui.gui.jobs import Jobs
 from misaka.ui.gui.projects import Projects
+from misaka.ui.gui.session_library import SessionLibrary, path_key
+from misaka.ui.gui.composer import ComposerFiles, referenced_message, skill_catalogue, skill_role
 from misaka.ui.gui.services import ResearchProcesses, Settings
 from misaka.ui.panel import client
 
@@ -85,6 +87,8 @@ class Bridge:
         self.settings = Settings()
         self.research_runs = ResearchProcesses()
         self.projects = Projects(home.home() / "state" / "gui-projects.json")
+        self.session_library = SessionLibrary(home.home() / "state" / "gui-session-library.json")
+        self.composer_files = ComposerFiles()
         self.picker_lock = threading.Lock()
 
     def request(self, method, params=None):
@@ -121,7 +125,7 @@ class Bridge:
                   "home": str(home.home()), "panes": [], "cards": [], "sessions": [], "connected": False,
                   "chats": [chat for chat in self.chats.list()
                             if os.path.normcase(chat["workspace"]) == os.path.normcase(cwd)],
-                  "sisters": sorted(sisters())}
+                  "sisters": sorted(sisters()), "preferences": self.session_library.preferences(cwd)}
         try:
             result["panes"] = self.request("panes.list")["panes"]
             result.update(self.request("cards.list", {"workspace": cwd}))
@@ -190,7 +194,7 @@ class Bridge:
             sessions = []
             for role in [None, *sorted(sisters())]:
                 sessions.extend({**s, "role": role} for s in self.saved_chat_sessions({**data, "all_roles": False, "role": role})["sessions"])
-            return {"sessions": sorted(sessions, key=lambda s: s["modified"], reverse=True)[:100]}
+            return {"sessions": sorted(sessions, key=lambda s: s["modified"], reverse=True)}
         import asyncio
         from misaka.config import sessions as sessions_cfg
         from misaka.core.session_manager import SessionManager
@@ -202,10 +206,15 @@ class Bridge:
         listing = asyncio.run(SessionManager.list(cwd, bucket))
         live = data["_live_paths"] if "_live_paths" in data else self._live_pane_session_paths()
         entries = []
-        for item in sorted(listing, key=lambda s: s.modified, reverse=True)[:60]:
+        preferences = self.session_library.preferences(cwd)
+        for item in sorted(listing, key=lambda s: s.modified, reverse=True):
+            pref = preferences.get(path_key(item.path), {})
+            if pref.get("deleted_at") and not data.get("_include_deleted"):
+                continue
             entries.append({
                 "id": item.id, "path": item.path, "name": item.name,
-                "title": item.name or (item.firstMessage or "").strip()[:80] or "未命名会话",
+                "title": pref.get("title") or item.name or (item.firstMessage or "").strip()[:80] or "未命名会话",
+                "pinned_at": pref.get("pinned_at", 0),
                 "modified": item.modified.timestamp() if hasattr(item.modified, "timestamp") else 0,
                 "messages": item.messageCount, "live": os.path.abspath(item.path) in live,
                 "chat_id": next((c["id"] for c in self.chats.list()
@@ -287,14 +296,89 @@ class Bridge:
         if os.path.normcase(cwd) not in {os.path.normcase(p) for p in self.projects.read()}:
             raise ValueError("请先添加这个项目")
         result = {"workspace": cwd, "saved": self.saved_chat_sessions({"workspace": cwd, "all_roles": True})["sessions"],
-                  "chats": [c for c in self.chats.list() if os.path.normcase(c["workspace"]) == os.path.normcase(cwd)], "sessions": []}
+                  "chats": [c for c in self.chats.list() if os.path.normcase(c["workspace"]) == os.path.normcase(cwd)],
+                  "sessions": [], "preferences": self.session_library.preferences(cwd)}
         try:
             result["sessions"] = self.request("cards.list", {"workspace": cwd}).get("sessions", [])
         except (ConnectionError, FileNotFoundError):
             pass
         return result
 
+    def session_update(self, data):
+        cwd = workspace_path(data.get("workspace", self.workspace))
+        path = required_text(data, "path", 4096)
+        key = path_key(path)
+        op = required_text(data, "op", 32)
+        if op not in {"pin", "rename", "delete", "restore"}:
+            raise ValueError("未知会话管理操作")
+        if op == "delete" and data.get("confirmed") is not True:
+            raise ValueError("请先确认删除这段对话")
+        value = data.get("value")
+        if op == "pin" and not isinstance(value, bool):
+            raise ValueError("置顶状态格式有误")
+        if op == "rename":
+            value = required_text(data, "value", 120).strip()
+        live = [c for c in self.chats.list() if path_key(c["workspace"]) == path_key(cwd)
+                and path_key(c.get("sessionFile") or c.get("sourceSession") or "") == key]
+        known = self.saved_chat_sessions({"workspace": cwd, "all_roles": True, "_include_deleted": True})["sessions"]
+        try:
+            known += self.request("cards.list", {"workspace": cwd}).get("sessions", [])
+        except (ConnectionError, FileNotFoundError):
+            pass
+        target = next((s for s in known if s.get("path") and path_key(s["path"]) == key), None)
+        stored = self.session_library.preferences(cwd).get(key)
+        if not target and live:
+            target = {"path": path, "title": live[0].get("name") or "未命名会话", "role": live[0].get("role")}
+        if not target and op == "restore" and stored and stored.get("deleted_at"):
+            target = stored
+        if not target or not path.lower().endswith(".jsonl"):
+            raise ValueError("当前项目没有这段对话，请刷新列表")
+        # Only GUI-owned runners are closed. Task sessions retain their original owner.
+        for chat in live:
+            if chat.get("status") in {"starting", "ready"}:
+                if op == "delete":
+                    self.chats.close(chat["id"])
+                elif op == "rename":
+                    self.chats.rename({"chat_id": chat["id"], "name": value})
+        session = {"path": str(Path(path).resolve()), "workspace": cwd,
+                   "title": target.get("title") or target.get("name") or "未命名会话", "role": target.get("role")}
+        self.session_library.update(session, op, value)
+        return {"preferences": self.session_library.preferences(cwd)}
+
+    def composer_skills(self, data):
+        cwd = workspace_path(data.get("workspace", self.workspace))
+        role = skill_role(data.get("role"))
+        if role and role not in sisters():
+            raise ValueError("未知的 Sister")
+        if data.get("chat_id"):
+            channel = self.chats._channel(data.get("chat_id"))
+            if path_key(channel.meta["workspace"]) != path_key(cwd):
+                raise ValueError("对话属于其他项目")
+            try:
+                return self.chats.request(data, "skills")
+            except ValueError as error:
+                if str(error) != "未知操作 'skills'":
+                    raise
+                # Runners started before the skills IPC operation remain usable.
+                # Read their role/project roots without restarting or prompting them.
+                return skill_catalogue(cwd, channel.meta.get("role"))
+        return skill_catalogue(cwd, role)
+
     def dispatch(self, action, data):
+        if action == "session_update":
+            return self.session_update(data)
+        if action == "session_trash":
+            cwd = workspace_path(data.get("workspace", self.workspace))
+            return {"sessions": sorted([s for s in self.session_library.preferences(cwd).values()
+                                       if s.get("deleted_at")], key=lambda s: s["deleted_at"], reverse=True)}
+        if action == "composer_skills":
+            return self.composer_skills(data)
+        if action == "composer_files":
+            cwd = workspace_path(data.get("workspace", self.workspace))
+            query = data.get("query", "")
+            if not isinstance(query, str) or len(query) > 1024:
+                raise ValueError("文件搜索词格式有误")
+            return self.composer_files.search(cwd, query)
         if action == "projects":
             return self.project_list(data)
         if action == "pick_folder":
@@ -362,7 +446,8 @@ class Bridge:
                 raise ValueError("会话已结束，无法发送消息；记录仍可查看")
             operation = {"session_snapshot": "snapshot", "session_input": "input",
                          "session_pause": "pause", "session_resume": "resume"}[action]
-            result = asyncio.run(request(owner, operation, **({"text": required_text(data, "text")} if operation == "input" else {})))
+            params = {"text": referenced_message(required_text(data, "text"), data.get("files"), cwd)} if operation == "input" else {}
+            result = asyncio.run(request(owner, operation, **params))
             if operation == "snapshot":
                 messages = [to_jsonable(m) for entry in result.pop("entries", []) or []
                             for m in session_entry_to_context_messages(entry)]
@@ -378,6 +463,9 @@ class Bridge:
                   "chat_snapshot": self.chat_snapshot}
         if action in native:
             return native[action](data)
+        if action == "chat_send":
+            channel = self.chats._channel(data.get("chat_id"))
+            data = {**data, "text": referenced_message(required_text(data, "text", 262144), data.get("files"), channel.meta["workspace"])}
         proxied = {"chat_events": self.chats.events, "chat_send": self.chats.send,
                    "chat_stop": self.chats.stop, "chat_compact": self.chats.compact,
                    "chat_models": self.chats.models, "chat_set_model": self.chats.set_model,
@@ -591,6 +679,8 @@ class GUIServer(ThreadingHTTPServer):
         self.bridge = bridge
         self.token = secrets.token_urlsafe(32)
         self.origin = f"http://127.0.0.1:{self.server_port}"
+        # Keep the frontend paired with this running backend across source updates.
+        self.assets = {name: (STATIC / name).read_bytes() for name in ("index.html", "app.js", "style.css")}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -638,7 +728,8 @@ class Handler(BaseHTTPRequestHandler):
         match = files.get(path)
         if not match:
             return self.reply(404, {"error": "页面不存在"})
-        self.reply(200, (STATIC / match[0]).read_bytes(), match[1])
+        raw = self.server.assets.get(match[0])
+        self.reply(200, raw if raw is not None else (STATIC / match[0]).read_bytes(), match[1])
 
     def do_POST(self):
         if not self.same_origin():
@@ -664,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 6})
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 8})
                 return
             if self.path == "/api/shutdown":
                 self.reply(200, {"message": "网页服务已关闭；网页对话已停止并保存，独立研究进程继续运行"})

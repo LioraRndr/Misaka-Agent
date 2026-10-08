@@ -261,6 +261,13 @@ class HTTPTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(self.request("GET", "/../../server.py")[0], 404)
 
+    def test_frontend_stays_paired_with_running_backend_after_source_changes(self):
+        with patch("misaka.ui.gui.server.STATIC", Path("missing-new-source")):
+            for path, asset in [("/", "index.html"), ("/app.js", "app.js"), ("/style.css", "style.css")]:
+                status, body, _ = self.request("GET", path)
+                self.assertEqual(status, 200)
+                self.assertEqual(body, self.server.assets[asset])
+
     def test_malformed_and_oversized_requests(self):
         for data in [b"[]", b"invalid"]:
             self.assertEqual(self.request(data=data, headers=self.auth())[0], 400)
@@ -279,7 +286,7 @@ class HTTPTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(payload["native_chat"])
-        self.assertEqual(payload["project_gui"], 6)
+        self.assertEqual(payload["project_gui"], 8)
 
 
 if __name__ == "__main__":

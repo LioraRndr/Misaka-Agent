@@ -12,25 +12,29 @@
 <div class="app" id="app">
 <nav class="nav-rail" aria-label="主导航">
   <button class="rail-item rail-home active" id="rail-home" data-action="new-chat" aria-label="首页"><i data-icon="home"></i><span class="rail-tip" role="tooltip">首页</span></button>
-  <button class="rail-item" id="rail-chats" aria-label="项目与对话" aria-controls="sidebar" aria-expanded="true"><i data-icon="chats"></i><span class="rail-tip" role="tooltip">项目与对话 · Ctrl+B</span></button>
   <button class="rail-item" data-view="research" aria-label="研究"><i data-icon="research"></i><em id="research-badge" class="rail-badge" hidden></em><span class="rail-tip" role="tooltip">研究</span></button>
   <button class="rail-item" data-view="documents" aria-label="材料与文件"><i data-icon="library"></i><span class="rail-tip" role="tooltip">材料与文件</span></button>
-  <button class="rail-item" id="rail-tools" aria-label="更多项目工具" aria-haspopup="menu"><i data-icon="more"></i><em id="board-badge" class="rail-badge" hidden></em><span class="rail-tip" role="tooltip">更多项目工具</span></button>
+  <button class="rail-item" data-view="board" aria-label="任务看板"><i data-icon="board"></i><em id="board-badge" class="rail-badge" hidden></em><span class="rail-tip" role="tooltip">任务看板</span></button>
+  <button class="rail-item" data-view="team" aria-label="协作成员"><i data-icon="team"></i><span class="rail-tip" role="tooltip">协作成员</span></button>
+  <button class="rail-item" data-view="skills" aria-label="技能库"><i data-icon="skills"></i><span class="rail-tip" role="tooltip">技能库</span></button>
+  <button class="rail-item" data-action="history" aria-label="当前项目历史"><i data-icon="history"></i><span class="rail-tip" role="tooltip">当前项目历史</span></button>
+  <button class="rail-item" id="rail-trash" aria-label="回收站"><i data-icon="trash"></i><span class="rail-tip" role="tooltip">回收站</span></button>
+  <button class="rail-item" id="rail-terminal" data-view="legacy" aria-label="外部终端" hidden><i data-icon="terminal"></i><span class="rail-tip" role="tooltip">外部终端</span></button>
   <div class="rail-bottom"><button class="rail-item" data-view="settings" aria-label="设置"><i data-icon="settings"></i><span class="rail-tip" role="tooltip">设置</span></button></div>
 </nav>
 <aside class="sidebar" id="sidebar" aria-label="侧栏">
   <div class="sb-head">
     <a class="brand" href="#" data-action="new-chat" aria-label="MISAKA 首页"><img class="logo" src="/Misaka.ico" alt=""><span class="wordmark">Misaka<small>研究工作台</small></span></a>
-    <button class="icon-btn" id="sidebar-toggle" title="收起侧栏（Ctrl+B）" aria-label="收起侧栏"><i data-icon="sidebar"></i></button>
+    <button class="icon-btn" id="sidebar-toggle" title="收起项目与对话（Ctrl+B）" aria-label="项目与对话" aria-controls="sidebar" aria-expanded="true"><i data-icon="sidebar"></i></button>
   </div>
-  <button class="project-switch" id="project-switch" title="切换项目文件夹" aria-haspopup="menu"><i data-icon="folder"></i><span class="ps-text"><small>项目</small><b id="project-name">加载项目…</b></span><i data-icon="chevrons" class="ps-caret"></i></button>
+  <button class="project-switch" id="project-switch" title="切换项目文件夹" aria-label="切换项目文件夹" aria-haspopup="menu"><i data-icon="folder"></i><span class="ps-text"><small>项目</small><b id="project-name">加载项目…</b></span><i data-icon="chevrons" class="ps-caret"></i></button>
   <div class="sb-group">
     <button class="sb-item new-chat" data-action="new-chat"><i data-icon="compose"></i><span>新对话</span><kbd>Ctrl ⇧ O</kbd></button>
     <label class="sb-search"><i data-icon="search"></i><input id="chat-filter" type="search" placeholder="搜索对话" aria-label="搜索对话" autocomplete="off"><kbd>Ctrl K</kbd></label>
   </div>
   <div class="sb-list-toolbar">
     <div class="sidebar-views" role="group" aria-label="侧栏视图">
-      <button id="view-projects" aria-pressed="true">项目</button><button id="view-recent" aria-pressed="false">最近</button>
+      <button id="view-projects" aria-label="按项目查看" aria-pressed="true">项目</button><button id="view-recent" aria-label="按最新顺序查看" aria-pressed="false">最近</button>
     </div>
     <button class="icon-btn" id="add-project" title="添加项目文件夹" aria-label="添加项目文件夹"><i data-icon="plus"></i></button>
   </div>
@@ -86,7 +90,7 @@
           </div>
         </div>
       </form>
-      <div class="composer-foot"><span id="chat-hint">Enter 发送 · Shift+Enter 换行 · 输入 / 查看指令 · 可粘贴或拖入图片</span></div>
+      <div class="composer-foot"><span id="chat-hint">Enter 发送 · Shift+Enter 换行 · / 选择技能与指令 · @ 引用项目文件</span></div>
       <div class="home-suggest" id="home-suggest">
         <button data-view="research"><i data-icon="research"></i><span>发起一项研究</span></button>
         <button data-action="history"><i data-icon="history"></i><span>继续之前的会话</span></button>
