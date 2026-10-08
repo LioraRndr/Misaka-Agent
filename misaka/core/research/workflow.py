@@ -201,13 +201,20 @@ def _forget_plan(con, run, node, round):
 
 
 def _followup_recorded(con, run, node, round):
-    """A later round is recorded and still has cards to send: one whose every card was cancelled
-    is withdrawn, and the node concludes."""
-    later = runs.plan_round(con, run["id"], node["id"])
-    if later <= round:
-        return False
-    plan = runs.action(con, run["id"], node["id"], runs.plan_key(later))
-    return bool(plan) and bool(_changed_tasks(plan["payload"]["tasks"], runs.plan_changes(con, run["id"], node["id"], later)))
+    return runs.plan_round(con, run["id"], node["id"]) > round
+
+
+def _withdraw_emptied_round(con, run, node, round):
+    """Withdraw a follow-up round whose every card Last Order cancelled, as
+    ``misaka_research_withdraw`` would: kept, it read as a follow-up she had asked for, and her
+    conclusion was dropped as one (0.18.10 sweep). Its card changes go with it, or a round planned
+    again under the same number would inherit them."""
+    with runs.owned_txn(con, run, node):
+        for key in (runs.start_key(round), runs.plan_key(round)):
+            runs.delete_action(con, run["id"], node["id"], key)
+        con.execute("DELETE FROM research_actions WHERE run_id=? AND branch_id=? AND action_key LIKE ?",
+                    (run["id"], node["id"], runs.plan_change_key(round) + ":%"))
+    _forget_plan(con, run, node, round)
 
 
 def _followup_tool(con, cfg, run, node, round):
@@ -1429,8 +1436,12 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
                                 f"{_label(node)} is a branch point: its options open when the level is reconciled.", run)
                 return _close(con, run, node, "closed")
             if not plan["tasks"]:
-                # Every card of the round cancelled while they ran: the round is withdrawn, and the
-                # node concludes on what it has -- closed as a branch point, it had no conclusion.
+                # Every card of the round cancelled while they ran: closed as a branch point, the
+                # node had no conclusion. A follow-up round is withdrawn and the node concludes on
+                # what it has; a first round has nothing to conclude on.
+                if not _done(con, run, node, "research"):
+                    return _close(con, run, node, "failed")
+                _withdraw_emptied_round(con, run, node, round)
                 set_node(status="synthesizing")
                 continue
             previous = [row for row in runs.tasks(con, run["id"], kind="research", node_id=nid)
@@ -1474,6 +1485,10 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
             # round, for ever (0.18.10 sweep).
             round = max((int(row["round"] or 1) for row in runs.tasks(con, run["id"], kind="research", node_id=nid)),
                         default=1)
+            later = runs.plan_round(con, run["id"], nid)
+            if later > round and (later_plan := runs.action(con, run["id"], nid, runs.plan_key(later))) and not _changed_tasks(
+                    later_plan["payload"]["tasks"], runs.plan_changes(con, run["id"], nid, later)):
+                _withdraw_emptied_round(con, run, node, later)
             left = runs.current_limits(con, run)["max_followups"] - (round - 1)    # follow-ups still allowed on this node
             version = _revisions(con, run, node) + _revisions(con, run, node, loop="gaps") + 1
             # The red team reviews the versions of its own loop; once the divergence review has
