@@ -2355,7 +2355,7 @@ def _folded_spans(text, keep_break_hyphens=False):
     return "".join(folded), spans
 
 
-@functools.lru_cache(maxsize=8192)
+@functools.lru_cache(maxsize=4096)
 def _normalized_page(text, keep):
     """A page as quotations are matched against it, worked out once: a run's every unfound
     quotation read and normalised every page of its document again -- half a minute for 200 of
@@ -2422,7 +2422,7 @@ def _pages_holding(doc_id, workspace, needle):
     return {pg for pg, readings in _normalized_doc(doc_id, workspace, stamp) if any(needle in r for r in readings)}
 
 
-@functools.lru_cache(maxsize=64)
+@functools.lru_cache(maxsize=8)
 def _normalized_doc(doc_id, workspace, _stamp):
     """``(page, (its normalised readings))`` for every page of a document, at one index version."""
     return tuple((pg, tuple(_normalized_page(text, keep) for keep in

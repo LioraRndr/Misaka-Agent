@@ -201,7 +201,13 @@ def _forget_plan(con, run, node, round):
 
 
 def _followup_recorded(con, run, node, round):
-    return runs.plan_round(con, run["id"], node["id"]) > round
+    """A later round is recorded and still has cards to send: one whose every card was cancelled
+    is withdrawn, and the node concludes."""
+    later = runs.plan_round(con, run["id"], node["id"])
+    if later <= round:
+        return False
+    plan = runs.action(con, run["id"], node["id"], runs.plan_key(later))
+    return bool(plan) and bool(_changed_tasks(plan["payload"]["tasks"], runs.plan_changes(con, run["id"], node["id"], later)))
 
 
 def _followup_tool(con, cfg, run, node, round):
@@ -1416,12 +1422,17 @@ async def _expand_owned(con, cfg, runner, worker, run, node, *, context, tool_ca
                             tasks=[{"title": t["title"], "assignee": t["assignee"], "local_id": t["local_id"],
                                     "dependencies": t.get("dependencies") or []} for t in plan["tasks"]],
                             red_team=plan.get("red_team"), plan=plan, round=round)
-            if not plan["tasks"]:
+            if not plan["tasks"] and (command is None or not command["payload"]["tasks"]):
                 # A pure branch point: nothing of its own to research; its options open at the
                 # level's reconciliation.
                 await _progress(progress, "branch_point",
                                 f"{_label(node)} is a branch point: its options open when the level is reconciled.", run)
                 return _close(con, run, node, "closed")
+            if not plan["tasks"]:
+                # Every card of the round cancelled while they ran: the round is withdrawn, and the
+                # node concludes on what it has -- closed as a branch point, it had no conclusion.
+                set_node(status="synthesizing")
+                continue
             previous = [row for row in runs.tasks(con, run["id"], kind="research", node_id=nid)
                         if row["status"] == "done" and int(row["round"] or 1) < round]
             await _submit_tasks(con, run, node, plan["tasks"], kind="research", progress=progress,

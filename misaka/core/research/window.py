@@ -243,11 +243,12 @@ async def node_session(con, cfg, run, node):
         research_context=True, overrides=runs.session_overrides(run))
     flags += ["--session-dir", directory]
     # A conversation recorded but never written -- the run failed before its first entry was
-    # persisted -- is opened anew, as an interactive node's is: asked for by name it raised
-    # FileNotFoundError on every resume (0.18.10 sweep).
+    # persisted -- is opened anew: asked for by name it raised FileNotFoundError on every resume,
+    # and --continue would pick whatever else is newest in its directory, for a root started from
+    # a chat that chat's other conversations (0.18.10 sweep).
     if session_file and os.path.exists(session_file):
         flags += ["--session", session_file]
-    else:
+    elif not session_file:
         flags.append("--continue")
     env.update(MISAKA_USAGE_DB=str(cfg["db"]), MISAKA_USAGE_TASK_ID=run["id"],
                MISAKA_USAGE_GENERATION="1", MISAKA_USAGE_TOKEN_CAP="")

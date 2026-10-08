@@ -134,7 +134,11 @@ def attempt_payload(con, row, kind):
         value = json.loads(raw) if raw else None
     except (TypeError, ValueError):
         return None
-    return value if isinstance(value, dict) and value.get("claim_lock") == row["claim_lock"] else None
+    if not isinstance(value, dict):
+        return None
+    # A settled card has no claim left: its redeclaration (a red team revising its critique after a
+    # note) reads what its last attempt recorded, as before.
+    return value if row["claim_lock"] is None or value.get("claim_lock") == row["claim_lock"] else None
 
 
 def declared_completion(con, row):
