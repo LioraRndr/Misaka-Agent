@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -23,6 +24,7 @@ from urllib.parse import urlsplit
 from misaka.config import CFG, VERSION, current_config, home, sisters
 from misaka.ui.gui.chats import ChatManager
 from misaka.ui.gui.jobs import Jobs
+from misaka.ui.gui.projects import Projects
 from misaka.ui.gui.services import ResearchProcesses, Settings
 from misaka.ui.panel import client
 
@@ -82,6 +84,8 @@ class Bridge:
         self.jobs = Jobs()
         self.settings = Settings()
         self.research_runs = ResearchProcesses()
+        self.projects = Projects(home.home() / "state" / "gui-projects.json")
+        self.picker_lock = threading.Lock()
 
     def request(self, method, params=None):
         return client.request(method, params, timeout=20)
@@ -182,6 +186,7 @@ class Bridge:
 
     def saved_chat_sessions(self, data):
         if data.get("all_roles"):
+            data = {**data, "_live_paths": self._live_pane_session_paths()}
             sessions = []
             for role in [None, *sorted(sisters())]:
                 sessions.extend({**s, "role": role} for s in self.saved_chat_sessions({**data, "all_roles": False, "role": role})["sessions"])
@@ -195,7 +200,7 @@ class Bridge:
             raise ValueError("未知的 Sister")
         bucket = sessions_cfg.chat_dir(role, cwd)
         listing = asyncio.run(SessionManager.list(cwd, bucket))
-        live = self._live_pane_session_paths()
+        live = data["_live_paths"] if "_live_paths" in data else self._live_pane_session_paths()
         entries = []
         for item in sorted(listing, key=lambda s: s.modified, reverse=True)[:60]:
             entries.append({
@@ -243,7 +248,59 @@ class Bridge:
                 messages.append(to_jsonable(message))
         return {"messages": messages}
 
+    def project_list(self, data):
+        paths = data.get("paths", [])
+        if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
+            raise ValueError("项目列表格式有误")
+        validated = []
+        for path in paths:
+            try:
+                validated.append(workspace_path(path))
+            except (OSError, ValueError):
+                if not data.get("migrate"):
+                    raise
+        saved = self.projects.add(validated) if validated else self.projects.read()
+        return {"projects": [{"path": p, "available": Path(p).is_dir()} for p in saved]}
+
+    def pick_project_folder(self, data):
+        if not self.picker_lock.acquire(blocking=False):
+            raise ValueError("文件夹选择窗口已打开，请先完成选择")
+        try:
+            initial = workspace_path(data.get("workspace", self.workspace))
+            result = subprocess.run([sys.executable, "-X", "utf8", "-m", "misaka.ui.gui.folder_picker", initial],
+                                    capture_output=True, text=True, encoding="utf-8", timeout=300,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                response = json.loads(result.stdout)
+            except ValueError:
+                raise ValueError("无法打开系统文件夹选择窗口，请使用输入路径") from None
+            if result.returncode or response.get("error"):
+                raise ValueError("无法打开系统文件夹选择窗口，请使用输入路径")
+            return {"path": workspace_path(response["path"]) if response.get("path") else None}
+        except subprocess.TimeoutExpired:
+            raise ValueError("文件夹选择已超时，请重试") from None
+        finally:
+            self.picker_lock.release()
+
+    def project_sessions(self, data):
+        cwd = workspace_path(data.get("workspace", self.workspace))
+        if os.path.normcase(cwd) not in {os.path.normcase(p) for p in self.projects.read()}:
+            raise ValueError("请先添加这个项目")
+        result = {"workspace": cwd, "saved": self.saved_chat_sessions({"workspace": cwd, "all_roles": True})["sessions"],
+                  "chats": [c for c in self.chats.list() if os.path.normcase(c["workspace"]) == os.path.normcase(cwd)], "sessions": []}
+        try:
+            result["sessions"] = self.request("cards.list", {"workspace": cwd}).get("sessions", [])
+        except (ConnectionError, FileNotFoundError):
+            pass
+        return result
+
     def dispatch(self, action, data):
+        if action == "projects":
+            return self.project_list(data)
+        if action == "pick_folder":
+            return self.pick_project_folder(data)
+        if action == "project_sessions":
+            return self.project_sessions(data)
         if action == "job":
             return self.jobs.get(required_text(data, "job_id", 64), workspace_path(data.get("workspace", self.workspace)))
         if action == "settings":
@@ -607,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 5})
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 6})
                 return
             if self.path == "/api/shutdown":
                 self.reply(200, {"message": "网页服务已关闭；网页对话已停止并保存，独立研究进程继续运行"})

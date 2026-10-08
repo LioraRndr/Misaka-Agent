@@ -28,14 +28,16 @@ function el(tag, cls='', text='', ...more) {
 function button(text, action, cls='btn sm', iconName='') {const n=el('button',cls);n.type='button';if(iconName)n.append(icon(iconName));if(text)n.append(text);n.onclick=e=>{e.stopPropagation();guard(action,n);};return n;}
 function empty(parent,text) {parent.replaceChildren(el('div','empty',text));}
 async function guard(fn, target) {if(target)target.disabled=true;try{return await fn();}catch(e){toast(e.message,true);}finally{if(target)target.disabled=false;}}
-async function api(action, data={}) {
-  const response=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Misaka-Token':token},body:JSON.stringify({...(workspace?{workspace}:{}),...data}),signal:AbortSignal.timeout(45000)});
+async function api(action, data={}, timeout=45000) {
+  const response=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Misaka-Token':token},body:JSON.stringify({...(workspace?{workspace}:{}),...data}),signal:AbortSignal.timeout(timeout)});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'操作失败');return result;
 }
 function jsonStored(key,fallback){try{return JSON.parse(localStorage.getItem(key))||fallback;}catch{return fallback;}}
 
 /* ---------- 图标 ---------- */
 const ICONS = {
+  home:'<path d="m3 10 9-7 9 7"/><path d="M5 9v11h5v-6h4v6h5V9"/>',
+  chats:'<path d="M4 4h13a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M7 8h8M7 12h5"/>',
   sidebar:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9.5 4v16"/>',
   compose:'<path d="M12 20h8"/><path d="M16.4 4.6a2 2 0 0 1 2.9 2.9L8 18.8l-3.8.9.9-3.8Z"/>',
   search:'<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
@@ -111,7 +113,12 @@ function toast(text,error=false) {
 function modal(title, contents) {closePopover();$('#dialog-title').textContent=title;$('#dialog-body').replaceChildren(contents);if(!$('#dialog').open)$('#dialog').showModal();}
 function closeDialog() {if($('#dialog').open)$('#dialog').close();}
 $('#dialog-close').onclick=closeDialog;
-$('#dialog').addEventListener('click', e=>{if(e.target===$('#dialog')){const r=$('#dialog').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDialog();}});
+let dialogBackdropDown=false;
+function outsideDialog(e){const r=$('#dialog').getBoundingClientRect();return e.target===$('#dialog')&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom);}
+$('#dialog').addEventListener('pointerdown',e=>{dialogBackdropDown=e.button===0&&outsideDialog(e);});
+$('#dialog').addEventListener('pointercancel',()=>{dialogBackdropDown=false;});
+$('#dialog').addEventListener('click',e=>{const dismiss=dialogBackdropDown&&outsideDialog(e);dialogBackdropDown=false;if(dismiss)closeDialog();});
+$('#dialog').addEventListener('close',()=>{dialogBackdropDown=false;closePopover();});
 function confirmAction(title,text,action,{label='确认',danger=false}={}) {
   const box=el('div'), actions=el('div','dialog-actions');
   actions.append(button('取消',closeDialog,'btn ghost'),button(label,async()=>{closeDialog();await action();},danger?'btn accent':'btn primary'));
@@ -120,14 +127,14 @@ function confirmAction(title,text,action,{label='确认',danger=false}={}) {
 let popAnchor=null;
 function openPopover(anchor, content, {align='start', prefer='bottom', width=0}={}) {
   closePopover();
-  const pop=$('#popover');pop.replaceChildren(content);pop.hidden=false;
+  const pop=$('#popover');(anchor.closest('dialog')||document.body).append(pop);pop.replaceChildren(content);pop.hidden=false;
   pop.style.minWidth=width?width+'px':'';pop.style.left='0px';pop.style.top='0px';
   const a=anchor.getBoundingClientRect(), p=pop.getBoundingClientRect();
   let up=prefer==='top', top=up?a.top-p.height-8:a.bottom+6;
   if (!up&&top+p.height>innerHeight-8&&a.top-p.height-8>8) {up=true;top=a.top-p.height-8;}
   if (up&&top<8) {up=false;top=a.bottom+6;}
   const left=Math.max(8,Math.min(align==='end'?a.right-p.width:a.left, innerWidth-p.width-8));
-  pop.style.left=left+'px';pop.style.top=Math.max(8,top)+'px';
+  pop.style.left=(prefer==='side'?Math.min(a.right+14,innerWidth-p.width-8):left)+'px';pop.style.top=(prefer==='side'?Math.max(8,Math.min(a.top,innerHeight-p.height-8)):Math.max(8,top))+'px';
   pop.className='popover'+(up?' from-bottom':'')+(align==='end'?' right':'');
   popAnchor=anchor;anchor.setAttribute('aria-expanded','true');
   const search=pop.querySelector('input');if(search)setTimeout(()=>search.focus(),0);
@@ -153,6 +160,41 @@ function menuSearch(box, placeholder) {
     for (const head of $$('.menu-head',box)) {let n=head.nextElementSibling,any=false;while(n&&!n.classList.contains('menu-head')){if(n.classList.contains('menu-item')&&!n.hidden)any=true;n=n.nextElementSibling;}head.hidden=!any;}};
   wrap.append(input);return wrap;
 }
+
+// Keep select elements as form state; every visible choice uses the same menu.
+const selectButtons=new WeakMap();
+function enhanceSelects(){
+  for(const select of $$('select')){
+    let trigger=selectButtons.get(select);
+    if(!trigger){trigger=button('',()=>showSelectMenu(select,trigger),'select-trigger');trigger.setAttribute('aria-haspopup','listbox');
+      trigger.append(el('span','select-label'),icon('chevron-down'));selectButtons.set(select,trigger);select.classList.add('custom-select-source');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
+      select.addEventListener('change',enhanceSelects);trigger.addEventListener('keydown',e=>{if(['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();showSelectMenu(select,trigger);}});}
+    if(trigger.previousElementSibling!==select)select.after(trigger);
+    const label=select.selectedOptions[0]?.textContent||'请选择',name=select.getAttribute('aria-label')||select.closest('label')?.firstChild?.textContent||'选择';
+    if(trigger.firstChild.textContent!==label)trigger.firstChild.textContent=label;
+    if(trigger.disabled!==select.disabled)trigger.disabled=select.disabled;
+    const aria=name+'：'+label;if(trigger.getAttribute('aria-label')!==aria)trigger.setAttribute('aria-label',aria);
+  }
+}
+function showSelectMenu(select,trigger){
+  if(select.disabled||togglePopover(trigger))return;
+  const box=el('div'),items=el('div','select-options');items.setAttribute('role','listbox');items.setAttribute('aria-label',trigger.getAttribute('aria-label'));
+  if(select.options.length>7)box.append(menuSearch(items,'搜索选项'));
+  for(const option of select.options){const row=menuItem({label:option.textContent,checked:option.selected,onClick:()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));enhanceSelects();trigger.focus();}});
+    row.disabled=option.disabled||option.parentElement.disabled;row.setAttribute('role','option');row.setAttribute('aria-selected',option.selected);items.append(row);}
+  box.append(items);openPopover(trigger,box,{width:Math.max(240,Math.min(trigger.offsetWidth,380))});
+  if(select.options.length<=7)(items.querySelector('[aria-selected="true"]:not(:disabled)')||items.querySelector('button:not(:disabled)'))?.focus();
+}
+document.addEventListener('keydown',e=>{
+  const pop=$('#popover');if(pop.hidden||!['ArrowDown','ArrowUp','Home','End','Escape'].includes(e.key))return;
+  if(e.key==='Escape'){e.preventDefault();e.stopPropagation();const anchor=popAnchor;closePopover();anchor?.focus();return;}
+  if(e.target.tagName==='INPUT'&&['Home','End'].includes(e.key))return;
+  const rows=$$('.menu-item:not(:disabled)',pop).filter(b=>!b.hidden);if(!rows.length)return;e.preventDefault();
+  const i=rows.indexOf(document.activeElement),next=e.key==='Home'?0:e.key==='End'?rows.length-1:e.key==='ArrowDown'?(i+1)%rows.length:(i-1+rows.length)%rows.length;rows[next].focus();
+},true);
+let selectRefresh=0;
+new MutationObserver(()=>{if(!selectRefresh)selectRefresh=requestAnimationFrame(()=>{selectRefresh=0;enhanceSelects();});}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','selected','value','aria-label']});
+enhanceSelects();
 async function copyText(text, target) {
   try {await navigator.clipboard.writeText(text);}
   catch {const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove();}
@@ -574,11 +616,14 @@ function textSeg(seg) {
   return div;
 }
 function thinkingSeg(seg, key) {
+  if(seg.text.trim().length<=320&&seg.text.trim().split(/\n\s*\n/).length<=3){
+    const row=el('div','work-progress'+(seg.live?' live':'')),body=el('div','md');body.append(renderMarkdown(seg.text));row.append(icon('bulb'),body);return row;
+  }
   const d=el('details','thinking'+(seg.live?' live':'')), sum=el('summary');
-  sum.append(icon('bulb'), el('span',seg.live?'shimmer':'',seg.live?'正在思考':'思考过程'));
+  sum.append(icon('bulb'), el('span',seg.live?'shimmer':'',seg.live?'正在思考':'思考摘要'));
   if (seg.live) sum.append(el('span','th-preview',seg.text.trim().split('\n').pop().slice(-90)));
   sum.append(icon('chevron-right','chev'));
-  d.append(sum, el('div','th-body',seg.text));
+  const body=el('div','th-body md');body.append(renderMarkdown(seg.text));d.append(sum,body);
   trackDetails(d,sum,'th:'+key,false);
   return d;
 }
@@ -1045,11 +1090,11 @@ function showChatMenu(anchor=$('#chat-menu')) {
 }
 function showProjectMenu(anchor=$('#project-switch')) {
   if (togglePopover(anchor)) return;
-  const box=el('div');box.append(el('div','menu-head','最近的项目'));
-  for (const path of recentProjects) box.append(menuItem({icon:'folder',label:baseName(path),hint:path,checked:samePath(path,workspace),onClick:()=>switchProject(path),
-    onRemove:samePath(path,workspace)?null:()=>{recentProjects=recentProjects.filter(p=>p!==path);localStorage.setItem('misaka-projects',JSON.stringify(recentProjects));closePopover();showProjectMenu(anchor);}}));
+  const box=el('div');box.append(el('div','menu-head','项目文件夹'));
+  for (const path of recentProjects) box.append(menuItem({icon:'folder',label:baseName(path),hint:path,checked:samePath(path,workspace),onClick:()=>switchProject(path)}));
   box.append(el('div','menu-sep'));
-  box.append(menuItem({icon:'plus',label:'打开其他文件夹…',onClick:showProjectPicker}));
+  box.append(menuItem({icon:'plus',label:'添加项目文件夹…',onClick:showProjectPicker}));
+  box.append(menuItem({icon:'pencil',label:'输入文件夹路径…',onClick:showProjectPathDialog}));
   openPopover(anchor,box,{width:anchor.offsetWidth});
 }
 
@@ -1171,8 +1216,6 @@ function drawPanes() {
   const panes=projectPanes(), list=$('#pane-list');list.replaceChildren();$('#pane-count').textContent=panes.length;
   if(!panes.length)empty(list,'研究工作流、设置向导等终端进程会出现在这里。');
   for(const p of panes){const b=button('',()=>selectPane(p.id),'pane-item'+(p.id===selected?' selected':''));b.title=p.title+' · '+paneLabel(p);b.append(el('i','dot'+(p.alive?(p.busy?' busy':' ok'):'')),el('span','',p.title),el('small','',paneLabel(p)));list.append(b);}
-  const alive=panes.filter(p=>p.alive).length;
-  $('#nav-legacy').hidden=!panes.length&&view!=='legacy';$('#pane-badge').hidden=!alive;$('#pane-badge').textContent=alive;
   const pane=state?.panes.find(p=>p.id===selected);
   $('#terminal-stack').hidden=!pane;$('#pane-actions').hidden=!pane;
   if (pane) {$('#session-title').textContent=pane.title;$('#pane-status').textContent=paneLabel(pane);$('#pane-status').className='status-chip'+(pane.alive?(pane.busy?' busy':' ok'):'');}
@@ -1189,37 +1232,65 @@ function timeGroup(seconds) {
 function drawSidebar() {
   $('#project-name').textContent=workspace?baseName(workspace):'加载项目…';$('#project-switch').title=workspace||'切换项目文件夹';
   const filter=$('#chat-filter').value.trim().toLowerCase(), match=t=>!filter||String(t).toLowerCase().includes(filter);
-  const live=[], livePaths=new Set();
-  for (const s of (state?.chats||[]).filter(s=>samePath(s.workspace,workspace)).reverse()) {
-    if (['closed','error'].includes(s.status)) continue;
-    // The open chat's long poll is fresher than this 3s summary; only idle chats take it.
-    const ch=chatState(s.id), name=ch.meta.name;
-    if (s.id!==selectedChat||!ch.meta.status) {Object.assign(ch.meta,s);if(!s.name&&name)ch.meta.name=name;ch.streaming=!!s.streaming;}
-    if (s.sessionFile) livePaths.add(s.sessionFile);
-    live.push({id:s.id,title:ch.meta.name||chatTitle(s),role:s.role,busy:ch.streaming||s.status==='starting'});
-  }
-  if (selectedChat&&!isSnapshot(selectedChat)&&!isAttached(selectedChat)&&!live.some(x=>x.id===selectedChat)) {
-    const ch=chatState(selectedChat);
-    if (!['closed','error'].includes(ch.meta.status)) live.unshift({id:selectedChat,title:ch.meta.name||chatTitle(ch.meta),role:ch.meta.role,busy:ch.streaming||ch.meta.status==='starting'});
-  }
-  const tasks=(state?.sessions||[]).filter(s=>s.control&&s.state!=='saved'&&!livePaths.has(s.path));
-  const saved=savedSessions.filter(s=>!livePaths.has(s.path));
-  const sig=JSON.stringify([filter,selectedChat,live,tasks.map(t=>[t.id,t.title,t.state]),saved.map(s=>[s.path,s.title,s.modified])]);
+  const projects=recentProjects.map(path=>({path,entries:sidebarEntries(path),data:projectData.get(projectKey(path))}));
+  const sig=JSON.stringify([filter,selectedChat,workspace,sidebarView,[...collapsedProjects],projects]);
   if (sig===sidebarSig) return;
   sidebarSig=sig;
-  const list=$('#chat-list');list.replaceChildren();
-  const item=(title,onClick,cls,lead,role)=>{const b=button('',onClick,'chat-item'+cls);b.title=title;b.append(lead,el('span','ci-title',title));if(role)b.append(el('span','ci-role',role));list.append(b);};
-  const active=live.filter(c=>match(c.title)), runningTasks=tasks.filter(t=>match(t.title||t.role||'任务对话'));
-  if (active.length||runningTasks.length) list.append(el('div','cl-group','进行中'));
-  for (const c of active) item(c.title,()=>selectChat(c.id),c.id===selectedChat?' selected':'',el('i','dot '+(c.busy?'busy':'ok')),c.role);
-  for (const s of runningTasks) item(s.title||s.role||'任务对话',()=>openAttached(s),selectedChat==='attached:'+s.id?' selected':'',icon('task'),s.role);
-  let group='';
-  for (const s of saved.filter(s=>match(s.title))) {
-    const g=timeGroup(s.modified);if(g!==group){group=g;list.append(el('div','cl-group',g));}
-    item(s.title,()=>resumeSaved(s),' saved'+(selectedChat==='snapshot:'+s.path?' selected':''),icon('history'),s.role);
+  const list=$('#chat-list'),changedView=list.dataset.view!==sidebarView;
+  if(changedView){list.replaceChildren();list.dataset.view=sidebarView;if(!matchMedia('(prefers-reduced-motion: reduce)').matches){list._switchAnimation?.cancel();list._switchAnimation=list.animate([{opacity:.4,transform:'translateY(4px)'},{opacity:1,transform:'translateY(0)'}],{duration:180,easing:'ease-out'});}}
+  $('#view-projects').setAttribute('aria-pressed',sidebarView==='projects');$('#view-recent').setAttribute('aria-pressed',sidebarView==='recent');
+  $('.sidebar-views').dataset.active=sidebarView;
+  const item=(entry,recent=false)=>({key:'entry:'+projectKey(entry.workspace)+'|'+entry.id,sig:'entry',build:()=>{const b=button('',()=>openSidebarEntry(b._entry),'chat-item');return b;},patch:b=>{
+    b._entry=entry;b.classList.toggle('selected',entry.id===selectedChat&&samePath(entry.workspace,workspace));b.title=entry.title+'\n'+entry.workspace;
+    const content=JSON.stringify([entry.kind,entry.title,entry.role,entry.busy,recent]);if(b._content===content)return;b._content=content;
+    const text=el('span','ci-main');text.append(el('span','ci-title',entry.title));if(recent)text.append(el('small','ci-project',baseName(entry.workspace)));
+    b.replaceChildren(entry.kind==='live'?el('i','dot '+(entry.busy?'busy':'ok')):icon(entry.kind==='task'?'task':'history'),text);if(entry.role)b.append(el('span','ci-role',entry.role));
+  }});
+  const message=(key,text,retry=false)=>({key,sig:text,build:()=>retry?button(text,()=>refreshProjects(),'project-empty warn-text'):el('div','project-empty',text)});
+  const specs=[];
+  if(sidebarView==='recent'){
+    let group='';const entries=projects.flatMap(p=>p.entries).filter(e=>match(e.title+' '+e.workspace)).sort((a,b)=>b.modified-a.modified);
+    for(const entry of entries){const g=timeGroup(entry.modified);if(g!==group){group=g;specs.push({key:'date:'+g,sig:g,build:()=>el('div','cl-group',g)});}specs.push(item(entry,true));}
+    if(!entries.length)specs.push(message('empty',filter?'没有匹配的对话':projectsBusy?'正在读取各项目的对话…':'还没有对话，选择项目后开始吧'));
+    for(const p of projects.filter(p=>p.data?.error))specs.push(message('error:'+projectKey(p.path),baseName(p.path)+' · 读取失败，重试',true));
+  }else{
+    for(const p of projects){const projectMatch=match(p.path),entries=p.entries.filter(e=>projectMatch||match(e.title));if(filter&&!projectMatch&&!entries.length)continue;
+      const key=projectKey(p.path),expanded=!!filter||!collapsedProjects.has(key);
+      specs.push({key:'project:'+key,sig:'project',build:()=>{
+        const group=el('section','project-group'),header=el('div','project-row');
+        const toggle=button('',()=>{if(collapsedProjects.has(key))collapsedProjects.delete(key);else collapsedProjects.add(key);localStorage.setItem('misaka-collapsed-projects',JSON.stringify([...collapsedProjects]));drawSidebar();},'icon-btn project-fold','chevron-right');
+        const name=button('',()=>switchProject(p.path),'project-link');name.title=p.path;name.append(icon('folder'),el('span','',baseName(p.path)));header.append(toggle,name);
+        const collapse=el('div','project-collapse');collapse.append(el('div','project-chats'));group.append(header,collapse);return group;
+      },patch:group=>{
+        group.classList.toggle('expanded',expanded);const header=group.firstElementChild,toggle=header.firstElementChild,name=header.lastElementChild,collapse=group.lastElementChild,current=samePath(p.path,workspace);
+        header.classList.toggle('current',current);toggle.setAttribute('aria-label',(expanded?'收起':'展开')+'项目 '+baseName(p.path));toggle.setAttribute('aria-expanded',expanded);
+        if(current)name.setAttribute('aria-current','true');else name.removeAttribute('aria-current');collapse.inert=!expanded;
+        const children=entries.map(entry=>item(entry));if(!entries.length)children.push(message('empty',p.data?.error?'暂时无法读取 · 重试':p.data||current?'暂无对话':'正在读取…',!!p.data?.error));
+        reconcile(collapse.firstElementChild,children,!changedView&&!filter);
+      }});
+    }
+    if(!specs.length)specs.push(message('empty',filter?'没有匹配的项目或对话':'添加文件夹，开始一个项目'));
   }
-  $('#chat-count').textContent=live.length;
-  if (!list.children.length) empty(list,filter?'没有匹配的对话':'在这个项目中开始第一段对话');
+  reconcile(list,specs,!changedView&&!filter);
+  $('#chat-count').textContent=projects.reduce((n,p)=>n+p.entries.length,0);
+}
+
+function sidebarEntries(path){
+  const current=samePath(path,workspace),data=current?{...state,saved:savedSessions}:projectData.get(projectKey(path));if(!data)return [];
+  const entries=[],seen=new Set(),key=p=>projectKey(p||'');
+  for(const s of data.chats||[]){if(['closed','error'].includes(s.status))continue;const ch=chatState(s.id),name=ch.meta.name;
+    if(s.id!==selectedChat||!ch.meta.status){Object.assign(ch.meta,s);if(!s.name&&name)ch.meta.name=name;ch.streaming=!!s.streaming;}
+    if(s.sessionFile)seen.add(key(s.sessionFile));const saved=(data.saved||[]).find(x=>samePath(x.path,s.sessionFile));
+    entries.push({kind:'live',id:s.id,title:ch.meta.name||chatTitle(s),role:s.role,busy:ch.streaming||s.status==='starting',modified:Math.max(s.updatedAt||s.startedAt||0,saved?.modified||0),workspace:path});}
+  for(const s of data.sessions||[]){if(!s.control||s.state==='saved'||seen.has(key(s.path)))continue;seen.add(key(s.path));
+    entries.push({kind:'task',id:'attached:'+s.id,title:s.title||s.role||'任务对话',role:s.role,modified:Number(s.modified)||0,workspace:path,session:s});}
+  for(const s of data.saved||[]){if(seen.has(key(s.path)))continue;seen.add(key(s.path));entries.push({kind:'saved',id:'snapshot:'+s.path,title:s.title,role:s.role,modified:s.modified||0,workspace:path,session:s});}
+  return entries.sort((a,b)=>b.modified-a.modified);
+}
+async function openSidebarEntry(entry){
+  if(!samePath(entry.workspace,workspace)){const switched=await switchProject(entry.workspace);if(!switched)return;}
+  if(!samePath(entry.workspace,workspace))return;
+  if(entry.kind==='live')selectChat(entry.id);else if(entry.kind==='task')await openAttached(entry.session);else await resumeSaved(entry.session);
 }
 function drawState() {
   $('#version').textContent='v'+state.version;$('#connection-text').textContent=state.connected?'本地服务已连接':'本地服务待启动';
@@ -1242,15 +1313,32 @@ async function selectPane(id) {
   sessionStorage.setItem('misaka-pane',id);sessionStorage.removeItem('misaka-chat');
   lastScreen='';lastSize='';drawState();await showView('legacy');await resizeTerminal();await refreshScreen();
 }
-function toggleSidebar() {
-  if (innerWidth<=860) {$('#app').classList.toggle('sb-open');return;}
-  const collapsed=$('#app').classList.toggle('sb-collapsed');localStorage.setItem('misaka-sidebar',collapsed?'collapsed':'open');
+function sidebarVisible(){return innerWidth<=860?$('#app').classList.contains('sb-open'):!$('#app').classList.contains('sb-collapsed');}
+function syncSidebarVisibility(){
+  const open=sidebarVisible(),sidebar=$('#sidebar');if(!open&&sidebar.contains(document.activeElement))$('#rail-chats').focus();
+  sidebar.inert=!open;sidebar.setAttribute('aria-hidden',String(!open));$('#rail-chats').setAttribute('aria-expanded',String(open));
+  $('#sidebar-toggle').setAttribute('aria-label',open?'收起项目列表':'展开项目列表');
+}
+function setSidebarOpen(open){
+  if(innerWidth<=860)$('#app').classList.toggle('sb-open',open);else{$('#app').classList.toggle('sb-collapsed',!open);localStorage.setItem('misaka-sidebar',open?'open':'collapsed');}
+  closePopover();syncSidebarVisibility();
+}
+function toggleSidebar(){setSidebarOpen(!sidebarVisible());}
+function syncRail(){
+  $('#rail-home').classList.toggle('active',view==='chat');$('#rail-tools').classList.toggle('active',['board','team','skills','legacy'].includes(view));
+  $$('.rail-item[data-view]').forEach(n=>{n.classList.toggle('active',n.dataset.view===view);if(n.dataset.view===view)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});
+}
+function showToolsMenu(){
+  const anchor=$('#rail-tools');if(togglePopover(anchor))return;const box=el('div','tools-menu');box.append(el('div','menu-head','项目工具'));
+  for(const [name,label,ic] of [['board','任务看板','board'],['team','协作成员','team'],['skills','技能库','skills']])box.append(menuItem({icon:ic,label,checked:view===name,onClick:()=>showView(name)}));
+  box.append(menuItem({icon:'history',label:'当前项目全部历史',onClick:showNativeHistory}));
+  if(projectPanes().length||view==='legacy')box.append(menuItem({icon:'terminal',label:'外部终端',onClick:()=>showView('legacy')}));
+  openPopover(anchor,box,{width:240,prefer:'side'});
 }
 async function showView(name) {
   if(!titles[name])return;view=name;closePopover();
   $$('.view').forEach(n=>n.hidden=n.id!=='view-'+name);
-  $$('.sb-item[data-view]').forEach(n=>n.classList.toggle('active',n.dataset.view===name));
-  $('#app').classList.remove('sb-open');
+  syncRail();if(innerWidth<=860)setSidebarOpen(false);
   if(name!=='chat'){const t=$('#page-title');t.textContent=titles[name];t.classList.remove('editable');t.title='';$('#chat-status').hidden=true;$('#chat-role').hidden=true;$('#chat-actions').hidden=true;}
   if(name==='chat'){updateChatHeader();renderChat();}
   if(name==='board'){if(!state?.connected)await api('connect');await refreshState();drawBoard();}
@@ -1405,6 +1493,8 @@ function splitCommand(text){const tokens=[];let current='',quote=null,started=fa
 
 /* ---------- 事件绑定 ---------- */
 $('#project-switch').onclick=()=>showProjectMenu();
+$('#add-project').onclick=()=>guard(showProjectPicker,$('#add-project'));
+for(const mode of ['projects','recent'])$('#view-'+mode).onclick=()=>{sidebarView=mode;localStorage.setItem('misaka-sidebar-view',mode);drawSidebar();};
 document.addEventListener('click',e=>{const b=e.target.closest('button,a[data-action]');if(!b)return;
   if(b.dataset.view){e.preventDefault();guard(()=>showView(b.dataset.view));}
   if(b.dataset.action==='new-chat'){e.preventDefault();goHome();}
@@ -1412,7 +1502,8 @@ document.addEventListener('click',e=>{const b=e.target.closest('button,a[data-ac
   if(b.dataset.key)guard(()=>queueInput('key',{key:b.dataset.key}),b);
   if(b.dataset.settings){e.preventDefault();openSettings(b.dataset.settings);}
   if(b.dataset.command)guard(()=>runCommand(JSON.parse(b.dataset.command),b.querySelector('h3')?.textContent||'MISAKA 命令'),b);});
-$('#sidebar-toggle').onclick=toggleSidebar;$('#sidebar-open').onclick=toggleSidebar;$('#scrim').onclick=()=>$('#app').classList.remove('sb-open');
+$('#sidebar-toggle').onclick=toggleSidebar;$('#sidebar-open').onclick=toggleSidebar;$('#rail-chats').onclick=toggleSidebar;$('#rail-tools').onclick=showToolsMenu;$('#scrim').onclick=()=>setSidebarOpen(false);
+window.addEventListener('resize',syncSidebarVisibility);
 $('#chat-filter').addEventListener('input',drawSidebar);
 $('#chat-filter').addEventListener('keydown',e=>{if(e.key==='Escape'){e.target.value='';drawSidebar();e.target.blur();}});
 $('#chat-form').onsubmit=e=>{e.preventDefault();if(sendMode()==='stop')stopChat();else guard(submitChat);};
@@ -1449,19 +1540,11 @@ $('#page-title').onclick=()=>{if($('#page-title').classList.contains('editable')
 $('#resume-snapshot').onclick=e=>guard(resumeCurrent,e.currentTarget);
 function shutdownGui(){confirmAction('关闭网页服务','关闭服务会停止网页对话，记录保留。后台研究继续运行。仅关闭浏览器页面不会停止对话。',async()=>{const result=await api('shutdown');guiClosed=true;toast(result.message);$('#connection-text').textContent='网页服务已关闭';$('#connection-dot').className='err';$('#notice').hidden=false;$('#notice').textContent=result.message;},{label:'关闭服务',danger:true});}
 document.addEventListener('keydown',e=>{
-  const mod=e.ctrlKey||e.metaKey, key=e.key.toLowerCase(), pop=$('#popover');
-  if (!pop.hidden) {
-    const items=$$('.menu-item',pop).filter(i=>!i.hidden), at=items.findIndex(i=>i.classList.contains('kb'));
-    if (e.key==='Escape') {e.preventDefault();popAnchor?.focus();closePopover();return;}
-    if ((e.key==='ArrowDown'||e.key==='ArrowUp')&&items.length) {
-      e.preventDefault();const down=e.key==='ArrowDown', n=items.length;
-      items[at]?.classList.remove('kb');
-      const next=items[at<0?(down?0:n-1):(at+(down?1:n-1))%n];next.classList.add('kb');next.scrollIntoView({block:'nearest'});return;}
-    if (e.key==='Enter'&&at>=0) {e.preventDefault();items[at].click();return;}
-  }
+  if(e.defaultPrevented)return;
+  const mod=e.ctrlKey||e.metaKey, key=e.key.toLowerCase();
   if (mod&&e.shiftKey&&key==='o') {e.preventDefault();goHome();}
   else if (mod&&!e.shiftKey&&key==='b') {e.preventDefault();toggleSidebar();}
-  else if (mod&&key==='k') {e.preventDefault();$('#app').classList.remove('sb-collapsed');if(innerWidth<=860)$('#app').classList.add('sb-open');$('#chat-filter').focus();$('#chat-filter').select();}
+  else if (mod&&key==='k') {e.preventDefault();setSidebarOpen(true);$('#chat-filter').focus();$('#chat-filter').select();}
   else if (e.key==='Escape'&&!$('#dialog').open&&view==='chat'&&e.target.id!=='chat-input'&&chatFlags().ch?.streaming) stopChat();
   else if (view==='chat'&&!mod&&!e.altKey&&e.key.length===1&&(e.target===document.body||e.target.closest?.('#chat-scroll'))&&!$('#dialog').open&&!$('#chat-input').disabled) $('#chat-input').focus();
 });
@@ -1470,23 +1553,38 @@ document.addEventListener('keydown',e=>{
 const drafts=new Map();
 let recentProjects=jsonStored('misaka-projects',[]);if(!Array.isArray(recentProjects))recentProjects=[];
 recentProjects=recentProjects.filter(p=>typeof p==='string');
-function rememberProject(path){recentProjects=[path,...recentProjects.filter(p=>!samePath(p,path))].slice(0,20);localStorage.setItem('misaka-projects',JSON.stringify(recentProjects));}
+const projectKey=path=>navigator.platform.toLowerCase().includes('win')?String(path).replaceAll('\\','/').toLowerCase():String(path);
+let sidebarView=localStorage.getItem('misaka-sidebar-view')==='recent'?'recent':'projects',projectsBusy=false;
+const projectData=new Map(),collapsedProjects=new Set(Array.isArray(jsonStored('misaka-collapsed-projects',[]))?jsonStored('misaka-collapsed-projects',[]):[]);
+function rememberProject(path){if(!recentProjects.some(p=>samePath(p,path)))recentProjects.push(path);localStorage.setItem('misaka-projects',JSON.stringify(recentProjects));}
+async function syncProjects(paths=[],migrate=false){const data=await api('projects',{paths,migrate});recentProjects=data.projects.map(p=>p.path);localStorage.setItem('misaka-projects',JSON.stringify(recentProjects));drawSidebar();}
+async function refreshProjects(){if(projectsBusy)return;projectsBusy=true;
+  try{await syncProjects();const paths=[...recentProjects];let cursor=0;
+    await Promise.all(Array.from({length:Math.min(3,paths.length)},async()=>{while(cursor<paths.length){const path=paths[cursor++];try{const data=await api('project_sessions',{workspace:path});projectData.set(projectKey(path),data);}catch(e){projectData.set(projectKey(path),{...projectData.get(projectKey(path)),error:e.message});}drawSidebar();}}));
+  }finally{projectsBusy=false;sidebarSig='';drawSidebar();}}
 function rememberSelection(){if(selectedChat&&!isSnapshot(selectedChat))sessionStorage.setItem('misaka-chat:'+workspace,selectedChat);}
 function draftKey(){return workspace+'|'+(selectedChat||'new');}
 function saveDraft(){drafts.set(draftKey(),{text:$('#chat-input').value,images:[...pendingImages]});}
 function restoreDraft(){const d=drafts.get(draftKey());$('#chat-input').value=d?.text||'';pendingImages=[...(d?.images||[])];drawChips();autoSize();updateSendButton();}
-async function switchProject(path){const ticket=++projectSwitch;const next=await api('state',{workspace:path});if(ticket!==projectSwitch)return;saveDraft();rememberSelection();workspace=next.workspace;state=next;selected=null;selectedChat=null;readOnlyView=null;savedSessions=[];sidebarSig='';rememberProject(workspace);localStorage.setItem('misaka-workspace',workspace);const saved=sessionStorage.getItem('misaka-chat:'+workspace);if(saved&&(state.chats||[]).some(s=>s.id===saved&&!['closed','error'].includes(s.status)))selectedChat=saved;restoreDraft();closeDialog();drawState();renderChat();await showView('chat');await loadSaved();toast('已切换到项目 '+baseName(workspace));}
+async function switchProject(path){const ticket=++projectSwitch;const next=await api('state',{workspace:path});if(ticket!==projectSwitch)return false;
+  await syncProjects([next.workspace]);if(ticket!==projectSwitch)return false;
+  saveDraft();rememberSelection();if(workspace)projectData.set(projectKey(workspace),{...state,saved:savedSessions});
+  workspace=next.workspace;state=next;selected=null;selectedChat=null;readOnlyView=null;savedSessions=projectData.get(projectKey(workspace))?.saved||[];sidebarSig='';collapsedProjects.delete(projectKey(workspace));
+  localStorage.setItem('misaka-workspace',workspace);const saved=sessionStorage.getItem('misaka-chat:'+workspace);if(saved&&(state.chats||[]).some(s=>s.id===saved&&!['closed','error'].includes(s.status)))selectedChat=saved;
+  restoreDraft();closeDialog();drawState();renderChat();await showView('chat');await loadSaved();return ticket===projectSwitch;}
 async function loadSaved(){const source=workspace;const data=await api('chat_sessions',{all_roles:true});if(source!==workspace)return;savedSessions=data.sessions;drawSidebar();}
 async function resumeSaved(s){if(s.live){const entry=(state.sessions||[]).find(e=>e.path===s.path);if(entry)return openAttached(entry);throw new Error('此记录仍由后台进程使用，请稍后刷新');}const source=workspace;const r=await api('chat_native',{session_path:s.path,...(s.role?{role:s.role}:{})});if(source!==workspace)return;await refreshState();selectChat(r.chat_id);}
-function showProjectPicker(){
-  const box=el('div'),form=el('form'),label=el('label','field','项目文件夹'),input=el('input'),list=el('div','folder-browser'),actions=el('div','btn-row');
+let folderPickerBusy=false;
+async function showProjectPicker(){if(folderPickerBusy)return;folderPickerBusy=true;closePopover();$('#add-project').disabled=true;
+  try{const result=await api('pick_folder',{},310000);if(result.path){await switchProject(result.path);toast('已添加项目 '+baseName(result.path));guard(refreshProjects);}}
+  catch(e){toast(e.message,true);showProjectPathDialog();}finally{folderPickerBusy=false;$('#add-project').disabled=false;}}
+function showProjectPathDialog(){
+  const box=el('div'),form=el('form'),label=el('label','field','项目文件夹'),input=el('input'),actions=el('div','btn-row');
   input.value=workspace;input.required=true;input.setAttribute('aria-label','项目文件夹路径');label.append(input);
-  actions.append(button('打开项目',()=>form.requestSubmit(),'btn primary','folder'),button('浏览文件夹',()=>browse(input.value),'btn'));
+  actions.append(button('添加并打开',()=>form.requestSubmit(),'btn primary','folder'),button('系统选择文件夹…',showProjectPicker,'btn'));
   form.append(label,actions);form.onsubmit=e=>{e.preventDefault();guard(()=>switchProject(input.value));};
-  box.append(form,el('p','hint','打开已有文件夹作为项目。每个项目拥有独立的对话与文件。'),list);list.hidden=true;
-  modal('打开项目文件夹',box);input.focus();
-  let generation=0;
-  async function browse(path){const g=++generation;const data=await api('folders',{path});if(g!==generation)return;input.value=data.path;list.hidden=false;const up=button('',()=>browse(data.parent),'row file-row');up.append(icon('arrow-up'),el('span','row-main','上一级'));list.replaceChildren(up);for(const f of data.entries){const b=button('',()=>browse(f.path),'row file-row');b.append(icon('folder'),el('span','row-main',f.name));list.append(b);}}
+  box.append(form,el('p','hint','添加后，项目会保留在侧栏。每个项目拥有独立的对话与文件。'));
+  modal('输入项目文件夹路径',box);input.focus();
 }
 async function openAttached(session){const id='attached:'+session.id;const ch=chatState(id);ch.meta={...ch.meta,name:session.title||session.role||'任务对话',workspace,role:session.role,status:'ready'};selectChat(id);await refreshAttached(id);}
 async function refreshAttached(id){if(attachedBusy||id!==selectedChat||view!=='chat')return;attachedBusy=true;try{const r=await api('session_snapshot',{session_id:id.slice(9)});if(id!==selectedChat)return;const ch=chatState(id);buildItemsFromHistory(ch,r.messages);ch.streaming=r.state==='working';ch.meta.error=r.error;ch.meta.status=r.state==='saved'?'closed':'ready';ch.meta.paused=r.paused;readOnlyView=r.readonly?id:null;ch.meta.banner=r.readonly?'':r.paused?'任务已暂停。发送 /resume 或在右上角菜单中恢复。':'已连接到原任务。可以直接讨论计划、补充要求；发送 /pause 或 /resume 暂停与恢复。';flushOutbox(id);renderChat();updateChatHeader();}catch(e){if(id===selectedChat){chatState(id).meta.banner=e.message;updateChatHeader();}}finally{attachedBusy=false;}}
@@ -1769,18 +1867,19 @@ async function checkResearchWaiting() {
 /* ---------- 启动 ---------- */
 async function boot(){
   if (localStorage.getItem('misaka-sidebar')==='collapsed'&&innerWidth>860) $('#app').classList.add('sb-collapsed');
+  syncSidebarVisibility();syncRail();
   updateChatHeader();
   if(!token){$('#notice').hidden=false;$('#notice').textContent='请通过 MISAKA GUI 启动器打开页面，以取得本次访问凭证。';$('#connection-text').textContent='等待授权入口';return;}
   try{
     if(localWorkspace){try{state=await api('state',{workspace:localWorkspace});}catch{localStorage.removeItem('misaka-workspace');localWorkspace='';}}
     if(!state)state=await api('state');
-    workspace=state.workspace;rememberProject(workspace);
+    workspace=state.workspace;rememberProject(workspace);await syncProjects(recentProjects,true);
     const savedChat=sessionStorage.getItem('misaka-chat:'+workspace)||sessionStorage.getItem('misaka-chat');
     if(savedChat&&(state.chats||[]).some(c=>c.id===savedChat))selectChat(savedChat);
     drawState();updateChatHeader();
-    await loadSaved();checkResearchWaiting();loadRoster().then(()=>{if(selectedChat)renderChat();});
+    await loadSaved();guard(refreshProjects);checkResearchWaiting();loadRoster().then(()=>{if(selectedChat)renderChat();});
   }catch(e){$('#notice').hidden=false;$('#notice').textContent='启动失败：'+e.message;}
   pollChats();
-  setInterval(()=>{if(guiClosed)return;refreshScreen();if(++refreshTick%6===0){refreshState();if(view==='research')guard(loadResearch);if(refreshTick%24===0)guard(loadSaved);if(refreshTick%12===0)checkResearchWaiting();}if(refreshTick%120===0&&!selectedChat)updateChatHeader();},500);
+  setInterval(()=>{if(guiClosed)return;refreshScreen();if(++refreshTick%6===0){refreshState();if(view==='research')guard(loadResearch);if(refreshTick%24===0){guard(loadSaved);guard(refreshProjects);}if(refreshTick%12===0)checkResearchWaiting();}if(refreshTick%120===0&&!selectedChat)updateChatHeader();},500);
 }
 boot();

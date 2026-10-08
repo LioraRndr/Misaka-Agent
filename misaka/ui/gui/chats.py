@@ -34,6 +34,7 @@ class ChatChannel:
     def __init__(self, chat_id: str, meta: dict, log_path: str):
         self.id = chat_id
         self.meta = meta
+        self.meta.setdefault("updatedAt", time.time())
         self.log_path = log_path
         self.proc: subprocess.Popen | None = None
         self.lock = threading.Lock()
@@ -68,6 +69,7 @@ class ChatChannel:
             self.meta["error"] = payload.get("message", "会话进程异常退出")
         elif kind == "event":
             inner = payload.get("event") or {}
+            self.meta["updatedAt"] = time.time()
             if inner.get("type") == "agent_start":
                 self.meta["streaming"] = True
             elif inner.get("type") in ("agent_end", "auto_retry_end"):
@@ -113,7 +115,7 @@ class ChatChannel:
         return {"id": self.id, **{key: self.meta.get(key) for key in
                                   ("role", "workspace", "sessionId", "sessionFile", "name",
                                    "model", "thinkingLevel", "availableThinkingLevels",
-                                   "streaming", "error", "startedAt")},
+                                   "streaming", "error", "startedAt", "updatedAt")},
                 "status": self.status}
 
 

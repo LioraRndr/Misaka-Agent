@@ -10,6 +10,14 @@
 </head>
 <body>
 <div class="app" id="app">
+<nav class="nav-rail" aria-label="主导航">
+  <button class="rail-item rail-home active" id="rail-home" data-action="new-chat" aria-label="首页"><i data-icon="home"></i><span class="rail-tip" role="tooltip">首页</span></button>
+  <button class="rail-item" id="rail-chats" aria-label="项目与对话" aria-controls="sidebar" aria-expanded="true"><i data-icon="chats"></i><span class="rail-tip" role="tooltip">项目与对话 · Ctrl+B</span></button>
+  <button class="rail-item" data-view="research" aria-label="研究"><i data-icon="research"></i><em id="research-badge" class="rail-badge" hidden></em><span class="rail-tip" role="tooltip">研究</span></button>
+  <button class="rail-item" data-view="documents" aria-label="材料与文件"><i data-icon="library"></i><span class="rail-tip" role="tooltip">材料与文件</span></button>
+  <button class="rail-item" id="rail-tools" aria-label="更多项目工具" aria-haspopup="menu"><i data-icon="more"></i><em id="board-badge" class="rail-badge" hidden></em><span class="rail-tip" role="tooltip">更多项目工具</span></button>
+  <div class="rail-bottom"><button class="rail-item" data-view="settings" aria-label="设置"><i data-icon="settings"></i><span class="rail-tip" role="tooltip">设置</span></button></div>
+</nav>
 <aside class="sidebar" id="sidebar" aria-label="侧栏">
   <div class="sb-head">
     <a class="brand" href="#" data-action="new-chat" aria-label="MISAKA 首页"><img class="logo" src="/Misaka.ico" alt=""><span class="wordmark">Misaka<small>研究工作台</small></span></a>
@@ -20,19 +28,15 @@
     <button class="sb-item new-chat" data-action="new-chat"><i data-icon="compose"></i><span>新对话</span><kbd>Ctrl ⇧ O</kbd></button>
     <label class="sb-search"><i data-icon="search"></i><input id="chat-filter" type="search" placeholder="搜索对话" aria-label="搜索对话" autocomplete="off"><kbd>Ctrl K</kbd></label>
   </div>
-  <nav class="sb-group sb-nav" aria-label="项目工具">
-    <button class="sb-item" data-view="research"><i data-icon="research"></i><span>研究</span><em id="research-badge" class="sb-badge accent" hidden></em></button>
-    <button class="sb-item" data-view="board"><i data-icon="board"></i><span>任务看板</span><em id="board-badge" class="sb-badge" hidden></em></button>
-    <button class="sb-item" data-view="team"><i data-icon="team"></i><span>协作成员</span></button>
-    <button class="sb-item" data-view="documents"><i data-icon="library"></i><span>材料与文件</span></button>
-    <button class="sb-item" data-view="skills"><i data-icon="skills"></i><span>技能库</span></button>
-    <button class="sb-item" data-view="legacy" id="nav-legacy" hidden><i data-icon="terminal"></i><span>外部终端</span><em id="pane-badge" class="sb-badge" hidden></em></button>
-  </nav>
-  <div class="sb-label"><span>对话</span><button class="text-btn" data-action="history" title="全部历史记录">全部历史</button></div>
+  <div class="sb-list-toolbar">
+    <div class="sidebar-views" role="group" aria-label="侧栏视图">
+      <button id="view-projects" aria-pressed="true">项目</button><button id="view-recent" aria-pressed="false">最近</button>
+    </div>
+    <button class="icon-btn" id="add-project" title="添加项目文件夹" aria-label="添加项目文件夹"><i data-icon="plus"></i></button>
+  </div>
   <div id="chat-list" class="chat-list"></div>
   <span id="chat-count" hidden></span>
   <div class="sb-foot">
-    <button class="sb-item" data-view="settings"><i data-icon="settings"></i><span>设置</span></button>
     <div class="connection" title="本地会话服务"><i id="connection-dot"></i><span id="connection-text">正在连接</span><small id="version"></small></div>
   </div>
 </aside>
