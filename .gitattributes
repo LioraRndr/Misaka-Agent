@@ -9,3 +9,6 @@
 
 # Shell scripts should keep LF
 *.sh text eol=lf
+
+# Vendored wheels are zip archives. text=auto must not rewrite them.
+*.whl binary

@@ -1,6 +1,8 @@
 """Shared fixtures for the web tests. The throwaway home comes from the root conftest."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
@@ -13,6 +15,27 @@ def workspace(tmp_path):
 @pytest.fixture(autouse=True)
 def _make_workspace(workspace):
     workspace.mkdir(exist_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def _no_host_browser(monkeypatch):
+    """A browser CLI on the host's PATH must not change which tools a test sees.
+
+    A configured command and the profile's own install still resolve; only the PATH fallback is dropped.
+    """
+    from misaka.core.web.browser import settings
+
+    real = settings.executable
+
+    def executable(name):
+        found = real(name)
+        if not found:
+            return None
+        configured = settings.config().get('command' if name == 'agent-browser' else 'exec_command')
+        managed = settings.home.path('web_tools', settings.current_scope().profile_dir)
+        return found if configured or Path(found).is_relative_to(managed) else None
+
+    monkeypatch.setattr(settings, "executable", executable)
 
 
 @pytest.fixture(autouse=True)

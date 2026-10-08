@@ -34,11 +34,28 @@ class RegisteredApiProvider:
 _api_provider_registry: dict[str, RegisteredApiProvider] = {}
 
 
+# MISAKA: every request to a provider passes the wrappers below, so this is where it is metered
+# against the token cap (``misaka.core.platform.metering``, installed by the process entry). The
+# meter is ``meter(model, context, options, send)``, ``send(options)`` the provider's own call.
+# Pi has no such seam; without one installed the wrappers are pi's.
+_request_meter = None
+
+
+def set_request_meter(meter) -> None:
+    global _request_meter
+    _request_meter = meter
+
+
+def _metered(model, context, options, send):
+    meter = _request_meter
+    return send(options) if meter is None else meter(model, context, options, send)
+
+
 def _wrap_stream(api: Api, stream: ApiStreamFunction) -> ApiStreamFunction:
     def wrapped(model: Model, context: TranscriptContext, options: StreamOptions | None = None) -> AssistantMessageEventStream:
         if model.api != api:
             raise ValueError(f"Mismatched api: {model.api} expected {api}")
-        return stream(model, context, options)
+        return _metered(model, context, options, lambda sent: stream(model, context, sent))
 
     return wrapped
 
@@ -51,7 +68,7 @@ def _wrap_stream_simple(api: Api, stream_simple: ApiStreamSimpleFunction) -> Api
     ) -> AssistantMessageEventStream:
         if model.api != api:
             raise ValueError(f"Mismatched api: {model.api} expected {api}")
-        return stream_simple(model, context, options)
+        return _metered(model, context, options, lambda sent: stream_simple(model, context, sent))
 
     return wrapped
 

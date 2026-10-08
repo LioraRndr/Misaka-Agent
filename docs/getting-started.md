@@ -20,7 +20,7 @@ per token as extra usage, outside your plan's limits.
 | poppler | reading PDFs | `brew install poppler` | `sudo apt install poppler-utils` | `winget install oschwartz10612.Poppler` |
 | ocrmypdf (optional) | scanned PDFs | `brew install ocrmypdf tesseract-lang` | `sudo apt install ocrmypdf tesseract-ocr-chi-sim tesseract-ocr-jpn` | [OCRmyPDF's Windows guide](https://ocrmypdf.readthedocs.io/en/latest/installation.html#installing-on-windows) |
 | DjVuLibre (optional) | DjVu files | `brew install djvulibre` | `sudo apt install djvulibre-bin` | `winget install DjVuLibre.DjView` |
-| LibreOffice (optional) | old `.doc`, `.xls`, `.ppt` files | `brew install --cask libreoffice` | `sudo apt install libreoffice` | `winget install TheDocumentFoundation.LibreOffice` |
+| LibreOffice (optional) | old `.doc`, `.xls`, `.ppt` files; showing a slide, or a Word chart stored as EMF/WMF | `brew install --cask libreoffice` | `sudo apt install libreoffice` | `winget install TheDocumentFoundation.LibreOffice` |
 
 The OCR line installs English, Chinese and Japanese, the languages MISAKA reads scans in by
 default. If something required is missing, the setup wizard tells you which tool and how to
@@ -33,6 +33,12 @@ uv tool install "misaka[providers] @ git+https://github.com/Luciole-Studio/Misak
 ```
 
 Install from this address; the package called `misaka` on PyPI is a different project.
+A GitHub release also ships one prebuilt archive per architecture, with uv, git, ripgrep, fd and
+poppler inside it. macOS and Linux:
+`curl -fsSL https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.sh | sh`.
+Windows PowerShell:
+`irm https://raw.githubusercontent.com/Luciole-Studio/Misaka-Agent/main/scripts/install.ps1 | iex`.
+Homebrew and winget are described in [release/README.md](../release/README.md).
 
 `pip install` and `pipx install` accept the same requirement. The part in brackets chooses the
 optional pieces:
@@ -40,11 +46,10 @@ optional pieces:
 | Extra | Adds |
 |---|---|
 | `providers` | every model provider's SDK. To install one only, use `anthropic`, `openai`, `google`, `bedrock` or `mistral` (OpenRouter and other OpenAI-compatible services use `openai`). |
-| `pageindex` | chapter outlines for long PDFs |
 | `browser` | tools that drive a web browser |
 | `lcm-semantic` | searching past conversations by meaning |
 
-Several at once: `"misaka[providers,pageindex] @ git+https://..."`.
+Several at once: `"misaka[providers,browser] @ git+https://..."`.
 
 ## 3. Run the setup wizard
 

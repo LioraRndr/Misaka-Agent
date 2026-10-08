@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  release:
+    types: [prereleased]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    if: github.event.release.prerelease == true
+    uses: ./.github/workflows/package.yml
+
+  publish:
+    if: github.event.release.prerelease == true
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/artifacts
+          merge-multiple: true
+      - name: Checksums, Homebrew formula, winget manifests
+        run: python scripts/build_release.py --render-checksums dist/artifacts --publish-dir dist/publish
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          tag="${RELEASE_TAG}"
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          if [ "$tag" != "v${version}" ]; then
+            echo "tag ${tag} does not match pyproject version ${version}" >&2
+            exit 1
+          fi
+          if [ "$(gh release view "$tag" --json isPrerelease --jq .isPrerelease)" != "true" ]; then
+            echo "release ${tag} is not a prerelease; leaving its assets unchanged" >&2
+            exit 1
+          fi
+          gh release upload "$tag" \
+            dist/artifacts/misaka-* \
+            dist/publish/SHA256SUMS \
+            dist/publish/misaka.rb \
+            dist/publish/NOTES.md \
+            dist/publish/winget/manifests/l/Luciole-Studio/Misaka/"${version}"/* \
+            --clobber
+      - name: Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+        run: |
+          set -eu
+          repo="${TAP_REPO:-Luciole-Studio/homebrew-tap}"
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set."
+            echo "The formula is attached to this release as misaka.rb."
+            echo "To publish the tap: create https://github.com/${repo} with a Formula/ directory,"
+            echo "then add a fine-grained PAT as the HOMEBREW_TAP_TOKEN secret (contents: write on that repo)."
+            exit 0
+          fi
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${repo}.git" tap
+          mkdir -p tap/Formula
+          cp dist/publish/misaka.rb tap/Formula/misaka.rb
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap add Formula/misaka.rb
+          if git -C tap diff --cached --quiet; then
+            echo "Formula already matches the tap."
+            exit 0
+          fi
+          git -C tap commit -m "misaka ${GITHUB_REF_NAME#v}"
+          git -C tap push

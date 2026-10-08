@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import socket
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -164,6 +165,10 @@ def test_proxy_selection_matches_httpx_not_any_proxy_variable(env, url, selected
     write(proxy_dns=True)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
+    # MISAKA reads proxy variables only, never the OS proxy (Windows registry, macOS network settings),
+    # so keep urllib's platform fallback from leaking the machine's own proxy into the oracle.
+    for fallback in ('getproxies_registry', 'getproxies_macosx_sysconf'):
+        monkeypatch.setattr(urllib.request, fallback, dict, raising=False)
     # The official installed implementation is the route oracle, not a duplicate
     # hand-built expected matcher. An explicit proxy prevents platform fallback.
     mounts = sorted((URLPattern(key), value) for key, value in get_environment_proxies().items())

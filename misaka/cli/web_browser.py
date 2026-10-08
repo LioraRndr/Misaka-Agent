@@ -89,8 +89,11 @@ def run(args):
             if not npm:
                 raise ValueError('Install Node/npm first, then run browser-install again')
             subprocess.run([npm, 'install', '--prefix', str(root), '--save-exact', 'agent-browser@0.26.0'], check=True)
-            cli = root / 'node_modules' / '.bin' / 'agent-browser'
-            subprocess.run([str(cli), 'install'], env=settings.subprocess_env(), check=True)
+            # npm writes a shell script plus agent-browser.cmd/.ps1 on Windows; the bare script is not a Win32 program.
+            cli = shutil.which('agent-browser', path=str(root / 'node_modules' / '.bin'))
+            if not cli:
+                raise ValueError('agent-browser was not found after npm install')
+            subprocess.run([cli, 'install'], env=settings.subprocess_env(), check=True)
         elif name == 'browser-use':
             uv = shutil.which('uv')
             if not uv:
