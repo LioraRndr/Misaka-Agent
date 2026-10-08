@@ -73,7 +73,8 @@ def spent(con, *, task_ids=None):
     scope = None if task_ids is None else set(task_ids)
     for task_id, kind, payload in con.execute(
             "SELECT task_id,kind,payload FROM events "
-            "WHERE kind IN ('harn_event','budget_usage') AND payload LIKE '%totalTokens%'"):
+            "WHERE (kind='budget_usage' OR kind='harn_event' AND payload LIKE '%\"agent_end\"%') "
+            "AND payload LIKE '%totalTokens%'"):
         if scope is not None and task_id not in scope:
             continue
         try:

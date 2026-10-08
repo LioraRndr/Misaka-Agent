@@ -6,6 +6,7 @@ bounded: compaction, the vision bridge, MoA and LCM spent outside it, most of th
 import asyncio
 import json
 import os
+import sqlite3
 import threading
 import time
 from contextlib import closing
@@ -288,6 +289,24 @@ def test_a_request_refused_before_its_reply_began_spends_nothing(board, monkeypa
 def test_an_agent_end_event_carries_no_usage_any_more():
     line = json.dumps({"type": "agent_end", "messages": [{"role": "assistant", "usage": {"totalTokens": 900}}]})
     assert dispatch._compact_event(line) == '{"type": "agent_end"}'
+
+
+def test_a_streamed_delta_is_not_kept_and_not_scanned():
+    """Every streamed token was a board transaction, and each row carried its message's running
+    usage, so every budget check parsed all of them again (0.18.10 sweep)."""
+    usage = {"input": 1, "output": 5, "totalTokens": 51041}
+    delta = json.dumps({"type": "message_update", "usage": usage,
+                        "assistantMessageEvent": {"type": "text_delta", "delta": "I"}})
+    assert dispatch._compact_event(delta) is None
+    whole = json.dumps({"type": "message_end", "message": {"content": 'said "message_update"'}})
+    assert dispatch._compact_event(whole) == whole
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE events (task_id TEXT, kind TEXT, payload TEXT)")
+    con.executemany("INSERT INTO events VALUES ('t', ?, ?)", [
+        ("harn_event", delta),
+        ("harn_event", json.dumps({"type": "agent_end", "messages": [{"usage": {"totalTokens": 7}}]})),
+        ("budget_usage", json.dumps({"totalTokens": 3}))])
+    assert budget.spent(con) == 10
 
 
 def test_a_card_stopped_by_the_cap_waits_ready_instead_of_failing():

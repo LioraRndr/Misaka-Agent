@@ -41,7 +41,17 @@ def _compact_event(line, cap=4000):
     """Cap a harness event line at ``cap`` bytes, anything over it reduced to a summary. An
     ``agent_end`` keeps no usage: every model request is recorded in the ledger by the meter as it
     ends (``misaka.core.platform.metering``), and a total here would count the turn twice -- old
-    rows that carry one are still counted (``budget.spent``), new ones never do."""
+    rows that carry one are still counted (``budget.spent``), new ones never do.
+
+    A ``message_update`` is not kept (None): it is one streamed delta of the message its
+    ``message_end`` records whole, and kept, a card wrote a board transaction per token -- 46,000
+    rows, 22 MB for one run (0.18.10 sweep)."""
+    if '"message_update"' in line:
+        try:
+            if json.loads(line).get("type") == "message_update":
+                return None
+        except ValueError:
+            pass
     if '"agent_end"' in line:
         try:
             if json.loads(line).get("type") == "agent_end":
@@ -251,11 +261,11 @@ def run_task(con, t, cfg, *, say=None):
     try:
         verdict = _run_ally(con, task, generation, lock, usage_db, say) if ally else worker.run_card(
             task, run_dir, profile_dir, cfg["provider"], cfg["default_model"],
-            on_event=lambda line: db.add_event(
+            on_event=lambda line: (event := _compact_event(line)) is not None and db.add_event(
                 con,
                 t["id"],
                 "harn_event",
-                _compact_event(line),
+                event,
                 generation=generation,
                 claim_lock=lock,
             ),
