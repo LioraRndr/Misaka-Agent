@@ -482,6 +482,12 @@ class ResearchPart:
                             return
                         ctx.ui.notify("No active research run.", "info")
                         return
+                    if run["status"] not in runs.ACTIVE:
+                        # Named by id, an ended run was found too, and the driver started below
+                        # drove it again -- turns spent for a stop (0.18.10 sweep).
+                        ctx.ui.notify(f"Research run {run['id']} is already {run['status']}; there is nothing to stop.",
+                                      "info")
+                        return
                     runs.request_stop(con, run["id"])
                     # A waiting-input run has no driver left to observe this request.
                     if not run["driver_lock"]:

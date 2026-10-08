@@ -839,6 +839,26 @@ def _resume(con, run_id, *, driver_lock, clarification):
     return get(con, run_id)
 
 
+def help_waiting(con, row):
+    """True only for a card parked by its own current SendMessage help request."""
+    if row["status"] not in {"blocked", "triage"} or row["block_kind"] != "needs_input":
+        return False
+    try:
+        payload = json.loads(task_store.latest_payload(con, row["id"], row["status"], generation=row["generation"])
+                             or "{}")
+    except (TypeError, ValueError):
+        return False
+    return isinstance(payload, dict) and payload.get("message_id") is not None
+
+
+def parked(con, row):
+    """A card blocked or in triage with no help request of its own waiting on an answer (dispatch's
+    "blocked:" verdict, a missing project folder): nothing moves it on by itself. A node used to
+    fail on it with no decision of Last Order's -- or as "a dependency cycle" -- and no resume
+    reopened it (0.18.10 sweep); it is now a lost card like a failed one."""
+    return row["status"] in {"blocked", "triage"} and not help_waiting(con, row)
+
+
 def reopen_cards(con, run_id, node_id=None):
     """Send the run's (or one node's) stopped, failed and unusable cards back to their Sisters.
     A failed card is retried like a stopped one: without this the node it killed replays the
@@ -851,7 +871,7 @@ def reopen_cards(con, run_id, node_id=None):
         unusable = row["status"] == "done" and (
             task_store.latest_payload(con, row["id"], "research_review_missing", generation=row["generation"])
             or _drift_after_declaration(con, row["id"], int(row["generation"])))
-        if row["status"] not in ("stopped", "failed") and not unusable:
+        if row["status"] not in ("stopped", "failed") and not unusable and not parked(con, row):
             continue
         target = "todo" if task_store.parent_ids(con, row["id"]) else "ready"
         if task_store.reopen_task(
@@ -1643,11 +1663,12 @@ def frozen_refusal(target):
     except (OSError, sqlite3.Error):
         return None
     try:
-        row = con.execute(
-            "SELECT a.kind, a.run_id FROM research_artifacts a JOIN research_runs r ON r.id=a.run_id "
-            "WHERE a.path=? " + ("COLLATE NOCASE " if home.FOLDS_CASE else "") +   # a case variant is the file there
-            "AND a.task_id IS NULL AND r.status!='done' LIMIT 1",
-            (str(Path(target).resolve()),)).fetchone()
+        # Compared as the file system compares names (home.fold): a case variant, or on macOS a
+        # decomposed Unicode spelling, is the same file there and edited it past this check.
+        wanted = home.fold(str(Path(target).resolve()))
+        row = next((found for found in con.execute(
+            "SELECT a.kind, a.run_id, a.path FROM research_artifacts a JOIN research_runs r ON r.id=a.run_id "
+            "WHERE a.task_id IS NULL AND r.status!='done'") if home.fold(found["path"]) == wanted), None)
     except sqlite3.OperationalError:     # a board research has never touched has no such tables
         return None
     finally:

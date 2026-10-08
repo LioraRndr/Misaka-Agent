@@ -84,17 +84,30 @@ class Plan(Params):
         "never shrink it to fit one call."))
 
 
+def _refuse_repeated_ids(tasks):
+    """One call naming a local_id twice: keyed by id, the second used to replace the first unseen."""
+    seen, twice = set(), set()
+    for task in tasks:
+        (twice if task["local_id"] in seen else seen).add(task["local_id"])
+    if twice:
+        raise ValueError(f"local_id {', '.join(sorted(twice))} is given to more than one task in this call.")
+
+
 def merge_plan(recorded, incoming):
     """An append call folded onto the plan recorded for its round: recorded tasks stay in order, an
     incoming task replaces the recorded one with its local_id, new ones follow, decisions add to the
     recorded ones, and every other field keeps its recorded value unless the call gives one. The result is validated as one whole plan, so
     dependencies across the two halves are checked together."""
     merged = dict(recorded)
+    _refuse_repeated_ids(incoming.get("tasks") or [])
     tasks = {task["local_id"]: task for task in recorded.get("tasks") or []}
     for task in incoming.get("tasks") or []:
         tasks[task["local_id"]] = task      # a replacement keeps its recorded position
     merged["tasks"] = list(tasks.values())
-    merged["decisions"] = [*(recorded.get("decisions") or []), *(incoming.get("decisions") or [])]
+    # A decision sent again (a retried call, a full re-send with append to fix one field) is the
+    # same fork, not a second one: both used to open as pending options (0.18.10 sweep).
+    decisions = list(recorded.get("decisions") or [])
+    merged["decisions"] = decisions + [item for item in incoming.get("decisions") or [] if item not in decisions]
     merged["status"] = incoming["status"]
     for key in ("plan_markdown", "reframed_question", "clarifying_questions", "methods", "extensions"):
         if incoming.get(key):
@@ -315,8 +328,14 @@ def tool(con, run, node, *, key, name, description, model, validate, session_dir
             raise ValueError("Research command must come from this phase's Last Order session.")
         if session_file and os.path.realpath(path) != os.path.realpath(session_file):
             raise ValueError("Research command must come from the owning Last Order conversation.")
-        record = runs.replace_action if supersede or prior else runs.record_action
-        accepted = record(con, run, node, key, payload, session_file=path, tool_call_id=call_id)
+        # A plan phase (``merge``) takes a full plan sent again as the plan, as Plan.append says
+        # ("instead of replacing it"): refused, it read "already accepted with different
+        # arguments" and the first plan ran as it was (0.18.10 sweep).
+        record = runs.replace_action if supersede or prior or merge is not None else runs.record_action
+        try:
+            accepted = record(con, run, node, key, payload, session_file=path, tool_call_id=call_id)
+        except ValueError as error:
+            raise ValueError(f"{error} Nothing from this call was recorded.") from error
         text = reply(payload) if reply else f"Accepted {name}. The recorded command is queued for execution."
         return {"content": [{"type": "text", "text": text}],
                 "details": {"run_id": run["id"], "node_id": node["id"], "action_key": key,
