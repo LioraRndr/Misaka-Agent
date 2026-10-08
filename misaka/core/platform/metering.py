@@ -181,7 +181,7 @@ def meter(model: Any, context: Any, options: Any, send) -> AssistantMessageEvent
             return
         lease, granted = reading.get("lease"), int(reading["tokens"])
         streamed, started = 0, False
-        message = None
+        message = terminal = None
         try:
             inner = send(_limited(options, granted - bound - extra))
             renewed = time.monotonic()
@@ -193,6 +193,12 @@ def meter(model: Any, context: Any, options: Any, send) -> AssistantMessageEvent
                 if lease and time.monotonic() - renewed > RENEW_SECONDS:
                     renewed = time.monotonic()
                     await asyncio.to_thread(budget.renew_request_path, current[0], lease)
+                if read_field(event, "type") in ("done", "error"):
+                    # Passed on once the request is settled: it completes the caller's request, and
+                    # a card that exits on its last reply lost the receipt -- its lease was held 15
+                    # minutes, then charged in full (0.18.10 sweep).
+                    terminal = event
+                    continue
                 out.push(event)
             message = await inner.result()
         except Exception as error:  # noqa: BLE001 - a provider that raised instead of reporting still ends the stream
@@ -219,6 +225,8 @@ def meter(model: Any, context: Any, options: Any, send) -> AssistantMessageEvent
                         budget.settle_request_path, current[0], lease, current[1], current[2], used))
                 except Exception:  # a lost receipt must not lose the reply; the lease expires and is charged
                     logger.warning("token ledger: a request's usage (%s tokens) was not recorded", used, exc_info=True)
+        if terminal is not None:
+            out.push(terminal)
         if failure is not None:
             _ended(out, model, "error", failure)
         else:

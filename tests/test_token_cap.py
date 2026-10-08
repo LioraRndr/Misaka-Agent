@@ -256,6 +256,28 @@ def test_a_local_allowance_running_out_does_not_stop_the_run(board, provider):
     assert not budget.exhausted(board.con, 10_000_000, task_id=board.run), "the skill review's budget is not the run's"
 
 
+def test_a_request_is_settled_before_its_caller_has_the_reply(board, provider, monkeypatch):
+    """The reply's last event went on before the receipt: a card that exited on its last reply left
+    its lease held 15 minutes, then charged in full (0.18.10 sweep; seen as a flaky test on Windows)."""
+    settle = budget.settle_request_path
+
+    def slow(*args, **kwargs):
+        time.sleep(0.3)
+        return settle(*args, **kwargs)
+
+    monkeypatch.setattr(budget, "settle_request_path", slow)
+    with budget.usage_context(board.path, board.card, 1, 1_000_000):
+        loop = asyncio.new_event_loop()
+        try:
+            message = loop.run_until_complete(complete_simple(
+                provider.model, {"messages": [{"role": "user", "content": "hi", "timestamp": 0}]}, None))
+            assert message.stopReason == "stop"
+            assert budget.reserved(board.con) == 0
+            assert budget.spent(board.con, task_ids={board.card}) == USED
+        finally:
+            loop.close()
+
+
 def test_a_request_refused_before_its_reply_began_spends_nothing(board, monkeypatch):
     def refuse(model, context, options=None):
         out = AssistantMessageEventStream()
