@@ -84,3 +84,22 @@ def test_a_quotation_that_runs_onto_the_next_page_is_on_its_cited_page(tmp_path,
         "a quotation is located from the page it begins on"
     assert corpus.locate_quote(doc_id, "Eblé, who stood in the river. The retreat", 2,
                                workspace=str(workspace))["status"] == "on_page"
+
+
+def test_quotations_missing_from_a_book_read_it_once(tmp_path, monkeypatch):
+    """Every unfound quotation read and normalised every page again: half a minute for 200 of them
+    in an 800-page book, on the node's event loop (0.18.10 sweep)."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "book.pdf").write_bytes(b"%PDF-1.4\n% stand-in\n")
+    pages = [f"Page {n} of the salt administration records, nothing quoted here." for n in range(1, 60)]
+    monkeypatch.setattr(corpus, "extract_pages", lambda p, meta=None: list(pages))
+    monkeypatch.setattr(corpus, "_pdf_page_labels", lambda p: None)
+    doc_id, _ = corpus.ingest(str(workspace / "book.pdf"), workspace=str(workspace), with_tree=False)
+    reads = []
+    real = corpus._iter_pages
+    monkeypatch.setattr(corpus, "_iter_pages", lambda *a, **k: reads.append(k.get("lo")) or real(*a, **k))
+    for n in range(20):
+        assert corpus.locate_quote(doc_id, f"a sentence the book never wrote, number {n}", 5,
+                                   workspace=str(workspace))["status"] == "not_found"
+    assert reads.count(None) == 1, "the whole book is read once, not once per quotation"

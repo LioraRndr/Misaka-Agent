@@ -222,10 +222,15 @@ def strays() -> list[str]:
 # ``~/.misaka/credentials`` there, and a check that compared names exactly let the variant through
 # (0.18.9 sweep). Linux's do not, and there a variant is another file.
 FOLDS_CASE = sys.platform in ("darwin", "win32")
+FOLDS_UNICODE = sys.platform == "darwin"     # APFS: one name for its NFC and NFD spellings; NTFS: two
 
 
 def fold(text: str) -> str:
-    """``text`` as this platform's file system compares names."""
+    """``text`` as this platform's file system compares names: APFS also takes a name's composed
+    and decomposed Unicode spellings (NFC, NFD) for one, NTFS does not."""
+    if FOLDS_UNICODE:
+        import unicodedata
+        text = unicodedata.normalize("NFC", text)
     return text.casefold() if FOLDS_CASE else text
 
 

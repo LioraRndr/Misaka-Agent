@@ -2355,6 +2355,14 @@ def _folded_spans(text, keep_break_hyphens=False):
     return "".join(folded), spans
 
 
+@functools.lru_cache(maxsize=8192)
+def _normalized_page(text, keep):
+    """A page as quotations are matched against it, worked out once: a run's every unfound
+    quotation read and normalised every page of its document again -- half a minute for 200 of
+    them in an 800-page book, on the event loop (0.18.10 sweep)."""
+    return normalize_for_quote_match(text, keep_break_hyphens=keep)
+
+
 def _locate(text, needle):
     """Return the ``(start, end)`` slice of the raw ``text`` holding an already normalized
     ``needle``, or None. Callers get raw offsets: what is stored and shown is always the page's
@@ -2366,7 +2374,7 @@ def _locate(text, needle):
     wins when it matches, keeping today's matches and offsets unchanged."""
     readings = (False, True) if _HYPHEN_BREAK.search(text) else (False,)
     for keep in readings:
-        if needle not in normalize_for_quote_match(text, keep_break_hyphens=keep):
+        if needle not in _normalized_page(text, keep):
             continue           # cheap reject: one C call per page, the span walk runs only on a hit
         folded, spans = _folded_spans(text, keep_break_hyphens=keep)
         pos = folded.find(needle)
@@ -2404,6 +2412,24 @@ def search_literal(q, limit=10, doc_id=None, workspace=None):
     return hits
 
 
+def _pages_holding(doc_id, workspace, needle):
+    """The pages whose normalised text holds ``needle`` (either reading of a line-break hyphen)."""
+    ddir = resolve_doc(doc_id, workspace=workspace)
+    try:
+        stamp = os.stat(os.path.join(ddir, "meta.json")).st_mtime_ns if ddir else None
+    except OSError:
+        stamp = None
+    return {pg for pg, readings in _normalized_doc(doc_id, workspace, stamp) if any(needle in r for r in readings)}
+
+
+@functools.lru_cache(maxsize=64)
+def _normalized_doc(doc_id, workspace, _stamp):
+    """``(page, (its normalised readings))`` for every page of a document, at one index version."""
+    return tuple((pg, tuple(_normalized_page(text, keep) for keep in
+                            ((False, True) if _HYPHEN_BREAK.search(text) else (False,))))
+                 for pg, text in _iter_pages(doc_id, workspace=workspace))
+
+
 def verify_quote(doc_id, quote, page=None, workspace=None):
     """Verify an exact quotation, optionally on one page, ignoring the differences
     ``normalize_for_quote_match`` folds. The returned offset indexes the raw page, and the claim
@@ -2411,7 +2437,17 @@ def verify_quote(doc_id, quote, page=None, workspace=None):
     needle = normalize_for_quote_match(quote)
     if not needle:
         return None
-    for pg, text in _iter_pages(doc_id, lo=page, hi=page, workspace=workspace):
+    candidates = None
+    if page is None:
+        # The whole document: pages that cannot hold it are set aside on its normalised text,
+        # read once per version of the index, instead of reading and folding every page per quotation.
+        candidates = _pages_holding(doc_id, workspace, needle)
+        if not candidates:
+            return None
+    lo, hi = (page, page) if candidates is None else (min(candidates), max(candidates))
+    for pg, text in _iter_pages(doc_id, lo=lo, hi=hi, workspace=workspace):
+        if candidates is not None and pg not in candidates:
+            continue
         span = _locate(text, needle)
         if not span:
             continue

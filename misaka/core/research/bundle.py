@@ -506,11 +506,12 @@ def _build(collector, *, folder, manifest, sources_dir, title, products, cards=(
             lines.append(f"- `{posix_relpath(source.real, folder)}`")
             lines += [f"  - cited {how}" for how in source.cited]
     # Material means downloads/: a card's own outputs and the node's files are products, not sources.
-    consulted = sorted(r for real in collector.consulted - set(collector.sources)
-                       if (r := rel(real)).split(os.sep)[0] == DOWNLOAD_DIR_NAME)
+    # rel() writes "/" on every platform, and the provenance is looked up by the real path: split
+    # on os.sep and rebuilt from the relative path, nothing was ever listed on Windows (0.18.10 sweep).
+    consulted = sorted((r, real) for real in collector.consulted - set(collector.sources)
+                       if (r := rel(real)).split("/")[0] == DOWNLOAD_DIR_NAME)
     lines += ["", "## Consulted but not cited (left where they are)", ""]
-    lines += [f"- `{r}`" + (f" — {provenance(os.path.join(index.workspace, r))}"
-                            if provenance(os.path.join(index.workspace, r)) else "") for r in consulted] or ["- (none)"]
+    lines += [f"- `{r}`" + (f" — {provenance(real)}" if provenance(real) else "") for r, real in consulted] or ["- (none)"]
     # Looked for again as the bundle is made: the page a quotation is cited on is compared with
     # the page it is on. A mark for the reader, not a judgment on the claim (ledger.locate).
     lines += ["", "## Quotations not where they are cited", ""]

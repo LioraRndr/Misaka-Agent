@@ -12,8 +12,10 @@ never been compared with anything).
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import os
 import re
 from typing import Literal
 
@@ -45,15 +47,33 @@ def findings(con, run_id, *, branch_id=None, task_id=None, limit=None, offset=0)
 _DOC_LOCATOR = re.compile(r"^doc:([0-9a-f]{12})(?:#p(\d+))?$")
 
 
+def _doc_stamp(doc_id, workspace):
+    """When the document's index last changed (a re-read rewrites its meta.json), or None."""
+    from misaka.core.documents import index as corpus
+    ddir = corpus.resolve_doc(doc_id, workspace=workspace)
+    try:
+        return os.stat(os.path.join(ddir, "meta.json")).st_mtime_ns if ddir else None
+    except OSError:
+        return None
+
+
+@functools.lru_cache(maxsize=4096)
+def _located(doc_id, quote, cited, workspace, _stamp):
+    """``corpus.locate_quote``, once per quotation and document version: every node's context and
+    every bundle located every claim of the run again, and a quotation missing from its page reads
+    the whole document -- minutes on the event loop for a run of a few hundred claims (0.18.10 sweep)."""
+    from misaka.core.documents import index as corpus
+    return corpus.locate_quote(doc_id, quote, cited, workspace=workspace)
+
+
 def locate(claim, workspace):
     """Where a claim's quotation is in the corpus document it cites, as one line -- or None for a
     claim that cites no corpus document or quotes nothing."""
     match = _DOC_LOCATOR.match(str(claim["source_file"] or ""))
     if not match or not str(claim["quote"] or "").strip():
         return None
-    from misaka.core.documents import index as corpus
     doc_id, cited = match.group(1), int(match.group(2)) if match.group(2) else None
-    found = corpus.locate_quote(doc_id, claim["quote"], cited, workspace=workspace)
+    found = _located(doc_id, claim["quote"], cited, workspace, _doc_stamp(doc_id, workspace))
     printed = f" (printed p. {found['printed']})" if found.get("printed") else ""
     across = f", running on to p{found['continues_on']}" if found.get("continues_on") else ""
     return {"on_page": f"located on p{found.get('page')}{printed}{across}",

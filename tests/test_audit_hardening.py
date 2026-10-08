@@ -205,3 +205,27 @@ def test_a_node_folder_is_named_by_a_name(bad):
     with pytest.raises(ValueError):
         runs.node_dir(bad)
     assert runs.node_dir("b_0123456789").endswith("b_0123456789")
+
+
+def test_a_page_consulted_but_not_cited_is_listed_on_every_platform(tmp_path):
+    import os
+
+    """Its relative path is written with "/" everywhere; split on os.sep, Windows listed none, and
+    its title was looked up by a path rebuilt with mixed separators (0.18.10 sweep)."""
+    from misaka.core.research import bundle
+    workspace = tmp_path / "project"
+    page = workspace / "downloads" / "pages" / "0c4b.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("x", encoding="utf-8")
+    collector = object.__new__(bundle._Collector)
+    collector.index = bundle._Index(str(workspace))
+    real = str(page.resolve())
+    collector.index.titles[real] = ("The Salt Monopoly", "https://example.org/salt")
+    collector.sources, collector.unresolved, collector.unlocated = {}, [], []
+    collector.consulted = {real}
+    folder = workspace / "final"
+    folder.mkdir()
+    manifest = bundle._build(collector, folder=str(folder), manifest=str(folder / "SOURCES.md"),
+                             sources_dir=os.path.join(str(folder.resolve()), "sources"), title="t", products=[])
+    with open(manifest, encoding="utf-8") as f:
+        assert '`downloads/pages/0c4b.md` — "The Salt Monopoly"' in f.read()
