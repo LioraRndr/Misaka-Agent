@@ -253,7 +253,6 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertNotIn(self.server.token.encode(), body)
         self.assertIn("研究工作台", body.decode("utf-8"))
-        self.assertIn("/Misaka.ico", body.decode("utf-8"))
         icon_status, icon, _ = self.request("GET", "/favicon.ico")
         self.assertEqual(icon_status, 200)
         self.assertEqual(icon[:4], b"\x00\x00\x01\x00")

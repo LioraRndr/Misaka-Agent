@@ -24,7 +24,13 @@
 </nav>
 <aside class="sidebar" id="sidebar" aria-label="侧栏">
   <div class="sb-head">
-    <a class="brand" href="#" data-action="new-chat" aria-label="MISAKA 首页"><img class="logo" src="/Misaka.ico" alt=""><span class="wordmark">Misaka<small>研究工作台</small></span></a>
+    <a class="brand" href="#" data-action="new-chat" aria-label="MISAKA 首页">
+      <svg class="logo" viewBox="120 124 240 240" aria-hidden="true" focusable="false">
+        <defs><mask id="brand-symbol" maskUnits="userSpaceOnUse" x="120" y="124" width="240" height="240"><circle cx="240" cy="244.13" r="115.98" fill="white"/><circle cx="240" cy="157.12" r="29.10" fill="black"/><circle cx="240" cy="293.44" r="72.62" fill="black"/></mask></defs>
+        <circle cx="240" cy="244.13" r="115.98" fill="currentColor" mask="url(#brand-symbol)"/>
+      </svg>
+      <span class="wordmark">Misaka<small>研究工作台</small></span>
+    </a>
     <button class="icon-btn" id="sidebar-toggle" title="收起项目与对话（Ctrl+B）" aria-label="项目与对话" aria-controls="sidebar" aria-expanded="true"><i data-icon="sidebar"></i></button>
   </div>
   <button class="project-switch" id="project-switch" title="切换项目文件夹" aria-label="切换项目文件夹" aria-haspopup="menu"><i data-icon="folder"></i><span class="ps-text"><small>项目</small><b id="project-name">加载项目…</b></span><i data-icon="chevrons" class="ps-caret"></i></button>

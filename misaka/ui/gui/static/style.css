@@ -140,9 +140,7 @@ textarea{resize:vertical}
 /* ---------- 侧栏 ---------- */
 .sb-head{display:flex;align-items:center;justify-content:space-between;padding:2px 2px 12px 6px}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink)}
-.logo{display:block;width:32px;height:32px;border-radius:8px;object-fit:cover;flex:none}
-.brand:hover .logo{transform:rotate(-6deg) scale(1.04)}
-.brand .logo{transition:transform .35s var(--spring)}
+.logo{display:block;width:36px;height:36px;flex:none;color:#cb3862}
 .wordmark{font:italic 25px/1 "Instrument Serif",serif;letter-spacing:-.2px;display:flex;flex-direction:column}
 .wordmark small{font:500 10.5px/1 var(--song);font-style:normal;letter-spacing:3px;color:var(--muted);margin-top:4px}
 .project-switch{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-sm);text-align:left;margin-bottom:12px;transition:border-color .15s,box-shadow .2s}
