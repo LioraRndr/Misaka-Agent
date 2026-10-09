@@ -35,6 +35,18 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 research_args({"goal": "问题", "depth": value})
 
+    def test_open_terminal_uses_selected_project_and_validates_directory(self):
+        folder = self.root / "另一个项目"
+        folder.mkdir()
+        with patch("misaka.ui.gui.server.open_terminal", return_value={"terminal": "cmd"}) as launch:
+            result = self.bridge.dispatch("open_terminal", {"workspace": str(folder)})
+            launch.assert_called_once_with(str(folder.resolve()))
+            self.assertEqual(result["terminal"], "cmd")
+            launch.reset_mock()
+            with self.assertRaises(FileNotFoundError):
+                self.bridge.dispatch("open_terminal", {"workspace": str(folder / "missing")})
+            launch.assert_not_called()
+
     def test_launch_uses_argv_without_shell(self):
         self.bridge.dispatch("command", {"args": ["doc", "find", "中文 & echo test"]})
         method, params = self.bridge.request.call_args.args
@@ -285,7 +297,7 @@ class HTTPTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(payload["native_chat"])
-        self.assertEqual(payload["project_gui"], 8)
+        self.assertEqual(payload["project_gui"], 9)
 
 
 if __name__ == "__main__":

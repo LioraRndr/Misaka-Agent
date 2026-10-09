@@ -28,6 +28,7 @@ from misaka.ui.gui.projects import Projects
 from misaka.ui.gui.session_library import SessionLibrary, path_key
 from misaka.ui.gui.composer import ComposerFiles, referenced_message, skill_catalogue, skill_role
 from misaka.ui.gui.services import ResearchProcesses, Settings
+from misaka.ui.gui.terminals import open_terminal
 from misaka.ui.panel import client
 
 STATIC = Path(__file__).with_name("static")
@@ -39,7 +40,7 @@ COMMANDS = frozenset({"chat", "research", "setup", "init", "board", "allies", "c
 SETTINGS_OPS = frozenset({"overview", "models_overview", "models", "set_key", "logout", "set_default", "verify",
                           "sisters", "create_sister", "remove_sister", "read_role_file", "write_role_file",
                           "set_research", "init_project", "web_overview", "web_save", "web_provider",
-                          "web_enable", "web_browser"})
+                          "web_enable", "web_browser", "terminal", "set_terminal"})
 SETUP_SECTIONS = {"environment", "model", "sisters", "skills", "documents", "web", "research", "project"}
 KEYS = {"enter": "\r", "escape": "\x1b", "up": "\x1b[A", "down": "\x1b[B",
         "right": "\x1b[C", "left": "\x1b[D", "tab": "\t", "backspace": "\x7f",
@@ -365,6 +366,8 @@ class Bridge:
         return skill_catalogue(cwd, role)
 
     def dispatch(self, action, data):
+        if action == "open_terminal":
+            return open_terminal(workspace_path(data.get("workspace", self.workspace)))
         if action == "session_update":
             return self.session_update(data)
         if action == "session_trash":
@@ -755,7 +758,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 8})
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 9})
                 return
             if self.path == "/api/shutdown":
                 self.reply(200, {"message": "网页服务已关闭；网页对话已停止并保存，独立研究进程继续运行"})

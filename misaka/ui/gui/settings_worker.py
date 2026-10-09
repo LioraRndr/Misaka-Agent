@@ -396,6 +396,22 @@ def op_write_role_file(params: dict) -> dict:
 
 # ---- research and project ---------------------------------------------------------------
 
+def op_terminal(_params: dict) -> dict:
+    from misaka.ui.gui.terminals import terminal_settings
+    return terminal_settings()
+
+
+def op_set_terminal(params: dict) -> dict:
+    from misaka.core.settings_manager import SettingsManager
+    from misaka.ui.gui.terminals import validate_terminal
+    value = validate_terminal(params.get("terminal"))
+
+    def mutate(section: dict) -> None:
+        section["terminal"] = value
+    SettingsManager.forRole(None).updateSection("gui", mutate)
+    return {"message": "终端类型已保存", **op_terminal({})}
+
+
 def op_set_research(params: dict) -> dict:
     from misaka.config import env as env_file
     from misaka.core.settings_manager import SettingsManager

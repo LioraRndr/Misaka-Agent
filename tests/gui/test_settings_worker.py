@@ -99,6 +99,20 @@ class SettingsWorkerTests(unittest.TestCase):
                 Settings().call("not_an_op", {}, str(self.workspace))
         self.assertEqual(data["sisters"], [])
 
+    def test_terminal_preference_survives_worker_restart(self):
+        default = self.call("terminal")
+        self.assertTrue(default["ok"], default)
+        self.assertEqual(default["data"]["selected"], "auto")
+        selected = default["data"]["choices"][-1]["id"]
+        saved = self.call("set_terminal", {"terminal": selected})
+        self.assertTrue(saved["ok"], saved)
+        self.assertEqual(self.call("terminal")["data"]["selected"], selected)
+        raw = (self.home / "settings.json").read_bytes()
+        self.assertEqual(json.loads(raw.decode("utf-8"))["gui"]["terminal"], selected)
+        failed = self.call("set_terminal", {"terminal": "cmd & echo unwanted"})
+        self.assertFalse(failed["ok"])
+        self.assertEqual((self.home / "settings.json").read_bytes(), raw)
+
     def test_web_overview_is_readable(self):
         web = self.call("web_overview")
         self.assertTrue(web["ok"], web)

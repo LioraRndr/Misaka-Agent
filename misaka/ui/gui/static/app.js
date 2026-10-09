@@ -833,7 +833,10 @@ function updateChatHeader() {
     else if (snapshot||(attached&&readonly)) label='只读';
     else if (ch&&ch.meta.status==='closed') label='已结束';
     chip.append(label);chip.hidden=!label;
-    $('#chat-actions').hidden=!ch;
+    $('#chat-actions').hidden=false;
+    $('#chat-export').hidden=!ch;$('#chat-menu').hidden=!ch;
+    $('#open-terminal').disabled=!workspace;
+    $('#open-terminal').title='在 '+(workspace||'当前项目目录')+' 打开终端';
   }
   // Composer
   const form=$('#chat-form'), input=$('#chat-input');
@@ -1627,6 +1630,10 @@ $('#chat-model').onclick=e=>guard(()=>showModelPicker(e.currentTarget));
 $('#chat-thinking').onclick=e=>guard(()=>showThinkingPicker(e.currentTarget));
 $('#agent-pick').onclick=e=>guard(()=>showAgentPicker(e.currentTarget));
 $('#chat-menu').onclick=e=>showChatMenu(e.currentTarget);
+$('#open-terminal').onclick=e=>guard(openProjectTerminal,e.currentTarget);
+async function openProjectTerminal() {
+  const r=await api('open_terminal');toast(r.message);
+}
 $('#chat-export').onclick=()=>guard(copyTranscript);
 $('#page-title').onclick=()=>{if($('#page-title').classList.contains('editable'))startRename();};
 $('#resume-snapshot').onclick=e=>guard(resumeCurrent,e.currentTarget);
@@ -1683,7 +1690,7 @@ async function refreshAttached(id){if(attachedBusy||id!==selectedChat||view!=='c
 async function openCard(card){await refreshState();const s=(state.sessions||[]).find(s=>s.task_id===card.id||s.card===card.id||s.task===card.id);if(!s)throw new Error('任务对话正在初始化，请稍后再打开');await openAttached(s);}
 
 /* ---------- 设置中心（原生替代终端设置向导） ---------- */
-const SETTINGS_TABS=[['overview','概览与环境','gauge'],['models','模型与账号','model'],['team','研究团队','team'],['web','联网工具','globe'],['research','研究流程','research'],['project','项目与资料','folder'],['skills','技能','skills'],['appearance','外观','sun'],['advanced','高级','terminal']];
+const SETTINGS_TABS=[['overview','概览与环境','gauge'],['models','模型与账号','model'],['team','研究团队','team'],['web','联网工具','globe'],['research','研究流程','research'],['project','项目与资料','folder'],['skills','技能','skills'],['terminal','终端','terminal'],['appearance','外观','sun'],['advanced','高级','terminal']];
 let settingsTab='overview', settingsCache={}, settingsTicket=0;
 const sapi=(op,params={})=>api('settings',{op,params});
 function openSettings(tab) {settingsTab=SETTINGS_TABS.some(t=>t[0]===tab)?tab:'overview';guard(()=>showView('settings'));}
@@ -1692,7 +1699,7 @@ function drawSettingsShell() {
   for (const [key,label,ic] of SETTINGS_TABS) {const b=el('button','settings-tab'+(key===settingsTab?' active':''));b.type='button';b.append(icon(ic),el('span','',label));b.onclick=()=>{settingsTab=key;drawSettingsShell();};nav.append(b);}
   const body=$('#settings-body'), ticket=++settingsTicket;
   body.replaceChildren(skeleton());
-  const draw={overview:drawOverview,models:drawModels,team:drawTeamSettings,web:drawWeb,research:drawResearchSettings,project:drawProjectSettings,skills:drawSkillsSettings,appearance:drawAppearance,advanced:drawAdvanced}[settingsTab];
+  const draw={overview:drawOverview,models:drawModels,team:drawTeamSettings,web:drawWeb,research:drawResearchSettings,project:drawProjectSettings,skills:drawSkillsSettings,terminal:drawTerminalSettings,appearance:drawAppearance,advanced:drawAdvanced}[settingsTab];
   Promise.resolve().then(()=>draw(ticket)).catch(e=>{if(ticket===settingsTicket)body.replaceChildren(errorBox(e.message,()=>drawSettingsShell()));});
 }
 function skeleton() {const n=el('div','skeleton');n.append(el('div','sk-line w40'),el('div','sk-block'),el('div','sk-line w70'),el('div','sk-line w55'));const s=el('div','sk-note');s.append(el('span','spinner'),'正在读取本机配置…');n.append(s);return n;}
@@ -1927,6 +1934,18 @@ async function drawSkillsSettings(ticket) {
   const review=section('审阅与目录','',el('div','btn-row',button('已启用技能',()=>runCommand(['skills','list'],'已启用技能'),'btn sm'),button('待审阅',()=>runCommand(['skills','pending'],'待审阅技能'),'btn sm'),button('扫描项目',()=>runCommand(['skills','scan'],'扫描项目技能'),'btn sm')),
     el('div','inline-form',id,button('批准',()=>id.value.trim()&&runCommand(['skills','approve',id.value.trim()],'批准技能'),'btn sm primary'),button('拒绝',()=>id.value.trim()&&runCommand(['skills','reject',id.value.trim()],'拒绝技能'),'btn sm')));
   settled(ticket,layers,review);
+}
+
+async function drawTerminalSettings(ticket) {
+  const config=await sapi('terminal');
+  const select=selectInput(config.choices.map(c=>[c.id,c.label+(c.available?'':'（未检测到）')]),config.selected);
+  select.id='terminal-type';
+  const form=el('form','stack');
+  const save=el('button','btn primary','保存');save.type='submit';
+  form.append(fieldInput('终端类型',select,'自动选择会优先使用本机可用的终端。设置对所有项目生效。'),el('div','set-actions',save));
+  form.onsubmit=e=>{e.preventDefault();settingsAction(()=>sapi('set_terminal',{terminal:select.value}),save);};
+  settled(ticket,section('打开终端','在独立窗口中打开，工作目录为当前对话所属的项目文件夹。',form),
+    section('当前项目',workspace,el('div','set-actions',button('打开终端',openProjectTerminal,'btn','terminal'))));
 }
 
 function drawAppearance(ticket) {
