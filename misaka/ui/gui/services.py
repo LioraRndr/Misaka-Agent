@@ -23,7 +23,8 @@ from misaka.ui.gui.settings_worker import MARK
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _NEW_GROUP = 0x00000200 if os.name == "nt" else 0
 WORKER = [sys.executable, "-u", "-X", "utf8", "-m", "misaka.ui.gui.settings_worker"]
-SLOW_OPS = {"verify": 90, "web_overview": 90, "web_save": 60, "web_provider": 60, "web_browser": 60, "web_enable": 60}
+SLOW_OPS = {"verify": 90, "ping_custom": 90, "probe_custom": 60,
+            "web_overview": 90, "web_save": 60, "web_provider": 60, "web_browser": 60, "web_enable": 60}
 
 
 def _env() -> dict:

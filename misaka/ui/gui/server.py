@@ -38,6 +38,7 @@ FONTS = frozenset(p.name for p in FONT_DIR.glob("*.woff2")) if FONT_DIR.is_dir()
 COMMANDS = frozenset({"chat", "research", "setup", "init", "board", "allies", "create",
                       "remove", "skills", "bundles", "moa", "web", "doc", "auth"})
 SETTINGS_OPS = frozenset({"overview", "models_overview", "models", "set_key", "logout", "set_default", "verify",
+                          "probe_custom", "ping_custom", "save_custom", "remove_custom",
                           "sisters", "create_sister", "remove_sister", "read_role_file", "write_role_file",
                           "set_research", "init_project", "web_overview", "web_save", "web_provider",
                           "web_enable", "web_browser", "terminal", "set_terminal"})
@@ -256,7 +257,7 @@ class Bridge:
                 if role in (None, "system"):
                     continue
                 messages.append(to_jsonable(message))
-        return {"messages": messages}
+        return {"messages": messages, "sessionId": entries[0].get("id")}
 
     def project_list(self, data):
         paths = data.get("paths", [])
@@ -430,7 +431,8 @@ class Bridge:
                     or (args[0] == "web" and args[1] == "setup" and args[2:] != ["ddgs", "--install", "--yes"])):
                 raise ValueError("这个命令需要交互，图形界面不支持；请使用设置页中的对应功能")
             return self.jobs.start(workspace_path(data.get("workspace", self.workspace)), args, str(data.get("title", "操作结果"))[:80])
-        if action in {"session_snapshot", "session_input", "session_pause", "session_resume"}:
+        if action in {"session_snapshot", "session_input", "session_pause", "session_resume",
+                      "session_models", "session_set_model", "session_set_thinking", "session_send_now", "session_withdraw"}:
             import asyncio
             from misaka.core.session_catalog import owner_record, _object
             from misaka.core.session_control import request
@@ -448,17 +450,31 @@ class Bridge:
             if not owner.get("control"):
                 raise ValueError("会话已结束，无法发送消息；记录仍可查看")
             operation = {"session_snapshot": "snapshot", "session_input": "input",
-                         "session_pause": "pause", "session_resume": "resume"}[action]
-            params = {"text": referenced_message(required_text(data, "text"), data.get("files"), cwd)} if operation == "input" else {}
-            result = asyncio.run(request(owner, operation, **params))
+                         "session_pause": "pause", "session_resume": "resume", "session_models": "models",
+                         "session_set_model": "set_model", "session_set_thinking": "set_thinking",
+                         "session_send_now": "send_now", "session_withdraw": "withdraw"}[action]
+            params = {key: data.get(key) for key in ("provider", "model", "level", "message_id")}
+            if operation == "input":
+                params = {"text": referenced_message(required_text(data, "text"), data.get("files"), cwd),
+                          "display_text": data.get("text"), "streamingBehavior": data.get("streamingBehavior", "steer"),
+                          "message_id": data.get("message_id"), "files": data.get("files") or []}
+            try:
+                result = asyncio.run(request(owner, operation, **params))
+            except ValueError as error:
+                if "Unknown session operation:" in str(error):
+                    raise ValueError("这个会话由旧版进程运行，尚不支持模型、思考深度或消息队列操作。请等任务结束并关闭原进程后，再用新版继续保存的会话；重开网页不会更新原进程。") from error
+                raise
             if operation == "snapshot":
                 messages = [to_jsonable(m) for entry in result.pop("entries", []) or []
                             for m in session_entry_to_context_messages(entry)]
                 messages = [m for m in messages if m.get("role") != "system"]
                 if result.get("streaming"):
                     messages.append(result["streaming"])
-                return {**result, "messages": messages, "readonly": False}
-            return {"message": "已发送到原会话" if operation == "input" else "已请求暂停" if operation == "pause" else "已恢复"}
+                return {**result, "capabilities": result.get("capabilities", []),
+                        "messages": messages, "readonly": False}
+            if operation in {"models", "set_model", "set_thinking", "send_now", "withdraw"}:
+                return result
+            return {**(result if isinstance(result, dict) else {}), "message": "已发送到原会话" if operation == "input" else "已请求暂停" if operation == "pause" else "已恢复"}
         # Native chats first: they never touch the daemon, so they work before
         # "连接" and cannot be broken by it.
         native = {"chat_native": self.native_chat,
@@ -466,14 +482,15 @@ class Bridge:
                   "chat_snapshot": self.chat_snapshot}
         if action in native:
             return native[action](data)
-        if action == "chat_send":
+        if action == "chat_send" or (action == "chat_send_now" and data.get("text")):
             channel = self.chats._channel(data.get("chat_id"))
-            data = {**data, "text": referenced_message(required_text(data, "text", 262144), data.get("files"), channel.meta["workspace"])}
+            data = {**data, "display_text": data.get("text"), "text": referenced_message(required_text(data, "text", 262144), data.get("files"), channel.meta["workspace"])}
         proxied = {"chat_events": self.chats.events, "chat_send": self.chats.send,
                    "chat_stop": self.chats.stop, "chat_compact": self.chats.compact,
                    "chat_models": self.chats.models, "chat_set_model": self.chats.set_model,
                    "chat_set_thinking": self.chats.set_thinking, "chat_rename": self.chats.rename,
-                   "chat_ui_response": self.chats.ui_response}
+                  "chat_ui_response": self.chats.ui_response, "chat_send_now": self.chats.send_now,
+                  "chat_withdraw": self.chats.withdraw}
         if action in proxied:
             return proxied[action](data)
         if action == "chat_close":
@@ -660,11 +677,16 @@ class Bridge:
                     if len(entries) >= 500:
                         break
                 return {"entries": entries, "path": target.relative_to(cwd).as_posix()}
-            if target.suffix.lower() not in {".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml"}:
+            image_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+            if target.suffix.lower() not in image_types and target.suffix.lower() not in {".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml",
+                                            ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".xml", ".svg", ".rst", ".sql", ".sh", ".ps1"}:
                 raise ValueError("此格式暂不支持预览，请用本机应用打开")
             if target.stat().st_size > 2 * 1024 * 1024:
                 raise ValueError("文件超过 2 MB，请用本机应用打开")
             raw = target.read_bytes()
+            if target.suffix.lower() in image_types:
+                return {"image": "data:" + image_types[target.suffix.lower()] + ";base64," + base64.b64encode(raw).decode("ascii"),
+                        "path": target.relative_to(cwd).as_posix()}
             try:
                 content = raw.decode("utf-8-sig")
             except UnicodeDecodeError:
@@ -758,7 +780,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 9})
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 12})
                 return
             if self.path == "/api/shutdown":
                 self.reply(200, {"message": "网页服务已关闭；网页对话已停止并保存，独立研究进程继续运行"})

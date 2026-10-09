@@ -58,12 +58,15 @@ class ChatChannel:
                 waiter["reply"] = payload
                 waiter["event"].set()
             return
-        if kind == "ready":
+        if kind in {"ready", "session_settings"}:
             self.status = "ready"
             self.meta.update({key: payload[key] for key in
                               ("sessionId", "sessionFile", "cwd", "name", "model",
-                               "thinkingLevel", "availableThinkingLevels", "modelFallbackMessage")
+                               "thinkingLevel", "availableThinkingLevels", "modelFallbackMessage", "pendingPrompts", "capabilities")
                               if key in payload})
+        elif kind == "prompt_queue":
+            self.meta["pendingPrompts"] = payload.get("pendingPrompts", [])
+            self.meta["queuePaused"] = bool(payload.get("queuePaused"))
         elif kind == "fatal":
             self.status = "error"
             self.meta["error"] = payload.get("message", "会话进程异常退出")
@@ -236,7 +239,7 @@ class ChatManager:
                     "status": channel.status, "meta": {key: channel.meta.get(key) for key in
                                                        ("role", "sessionId", "sessionFile", "name", "model",
                                                         "thinkingLevel", "availableThinkingLevels",
-                                                        "streaming", "error")}}
+                                                        "streaming", "error", "pendingPrompts", "capabilities")}}
 
     def request(self, data: dict, op: str, params: dict | None = None, timeout: float = REQUEST_TIMEOUT) -> dict:
         channel = self._channel(data.get("chat_id"))
@@ -260,7 +263,17 @@ class ChatManager:
         images = data.get("images") or []
         if not isinstance(images, list) or len(images) > 6:
             raise ValueError("图片附件最多 6 张")
-        return self.request(data, "prompt", {"text": text, "images": images})
+        return self.request(data, "prompt", {"text": text, "images": images,
+                            "files": data.get("files") or [],
+                            "message_id": data.get("message_id"), "display_text": data.get("display_text"),
+                            "streamingBehavior": data.get("streamingBehavior", "followUp")})
+
+    def send_now(self, data: dict) -> dict:
+        return self.request(data, "send_now", {key: data.get(key) for key in
+                            ("message_id", "text", "display_text", "images", "files") if key in data})
+
+    def withdraw(self, data: dict) -> dict:
+        return self.request(data, "withdraw", {"message_id": data.get("message_id")})
 
     def stop(self, data: dict) -> dict:
         return self.request(data, "stop", {}, timeout=60)

@@ -61,6 +61,8 @@
       <span id="chat-status" class="status-chip" hidden></span>
     </div>
     <div class="topbar-actions" id="chat-actions">
+      <button class="icon-btn" id="notification-toggle" title="开启系统通知" aria-label="开启系统通知"><i data-icon="bell"></i></button>
+      <button class="icon-btn" id="context-toggle" title="展开右侧边栏" aria-label="展开右侧边栏" aria-controls="context-panel" aria-expanded="false"><i data-icon="sidebar"></i></button>
       <button class="icon-btn" id="open-terminal" title="在当前项目目录打开终端" aria-label="打开终端"><i data-icon="terminal"></i></button>
       <button class="icon-btn" id="chat-export" title="复制对话记录" hidden><i data-icon="copy"></i></button>
       <button class="icon-btn" id="chat-menu" title="更多操作" aria-haspopup="menu" hidden><i data-icon="more"></i></button>
@@ -69,6 +71,7 @@
   <div id="notice" class="notice" hidden role="status"></div>
 
   <section id="view-chat" class="view chat-view is-home">
+    <div class="conversation">
     <div id="chat-scroll" class="chat-scroll">
       <div id="chat-stream" class="chat-stream" role="log" aria-label="对话内容" aria-live="polite"></div>
     </div>
@@ -79,6 +82,7 @@
         <p id="home-sub">在 <b id="welcome-project"></b> 中继续你的研究</p>
       </div>
       <div id="chat-banner" class="chat-banner" hidden></div>
+      <div id="message-queue" class="message-queue" hidden aria-label="排队消息" aria-live="polite"></div>
       <div id="readonly-bar" class="readonly-bar" hidden><i data-icon="history"></i><span>这是已保存的历史记录（只读）。</span><button id="resume-snapshot" class="btn primary sm">继续这段对话</button></div>
       <form id="chat-form" class="composer">
         <div id="image-chips" class="image-chips" hidden></div>
@@ -106,6 +110,18 @@
       </div>
     </div>
     <div class="drop-overlay" id="drop-overlay" hidden><div><i data-icon="image"></i><b>松开以添加图片</b><small>最多 6 张，每张不超过 4 MB</small></div></div>
+    </div>
+    <div class="context-slot">
+    <aside id="context-panel" class="context-panel" inert aria-hidden="true" aria-label="右侧边栏">
+      <div class="context-head"><b>工作区</b><button id="context-close" class="icon-btn" aria-label="收起右侧边栏"><i data-icon="x"></i></button></div>
+      <div class="context-tabs" role="tablist" aria-label="工作区内容">
+        <button id="context-files" role="tab" aria-controls="context-body" aria-selected="true">文件</button>
+        <button id="context-tasks" role="tab" aria-controls="context-body" aria-selected="false">任务</button>
+        <button id="context-sisters" role="tab" aria-controls="context-body" aria-selected="false">Sister 对话</button>
+      </div>
+      <div id="context-body" class="context-body" role="tabpanel" aria-labelledby="context-files"></div>
+    </aside>
+    </div>
   </section>
 
   <section id="view-research" class="view page" hidden>

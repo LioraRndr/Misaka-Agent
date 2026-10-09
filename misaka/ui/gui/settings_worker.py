@@ -17,6 +17,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shlex
 import sys
 import threading
@@ -129,6 +130,11 @@ def op_models_overview(_params: dict) -> dict:
 
     cfg = current_config()
     registry = _runtime().registry
+    custom = _custom_catalog()
+    load_error = registry.getError()
+    if load_error and not custom.get("error"):
+        custom = {**custom, "error": load_error[:500]}
+    custom_ids = {item["id"] for item in custom["services"]}
     known = sorted({model.provider for model in registry.getAll()})
     oauth_ids = {p.id for p in registry.getOAuthProviders()}
     providers = []
@@ -138,17 +144,20 @@ def op_models_overview(_params: dict) -> dict:
             extras = _missing_sdk_extras(registry, provider)
         except Exception:  # noqa: BLE001
             extras = []
+        configured = bool(status.configured or status.source)
         providers.append({"id": provider, "name": registry.getProviderDisplayName(provider),
                           "oauth": provider in oauth_ids, "featured": provider in FEATURED_PROVIDERS,
-                          "configured": bool(status.configured or status.source), "source": status.source or "",
-                          "extras": extras, "extras_install": _extras_command(extras) if extras else None})
+                          "configured": configured,
+                          "source": "自定义服务" if provider in custom_ids else (status.source or ""),
+                          "extras": extras, "extras_install": _extras_command(extras) if extras else None,
+                          "custom": provider in custom_ids})
     targets = [{"key": None, "label": "全局默认", "hint": "没有单独设置模型的角色都使用它", "pinned": ""},
                {"key": "last_order", "label": "Last Order", "hint": "研究协调者",
                 "pinned": profiles.pinned_model(os.path.join(cfg["roles_root"], "last_order")) or ""}]
     for sid in roster.roster_names(root=cfg["profiles_root"]):
         targets.append({"key": sid, "label": f"Sister {sid}", "hint": "研究助手",
                         "pinned": profiles.pinned_model(os.path.join(cfg["profiles_root"], sid)) or ""})
-    return {"providers": providers, "targets": targets,
+    return {"providers": providers, "targets": targets, "custom": custom,
             "global": {"provider": cfg.get("provider", ""), "model": cfg.get("default_model", "")}}
 
 
@@ -241,6 +250,461 @@ def op_verify(params: dict) -> dict:
         return "".join(getattr(part, "text", "") for part in reply.content)
     text = asyncio.run(ping())
     return {"message": f"{provider} 已回复：{text.strip()[:40] or '（空回复）'}"}
+
+
+# ---- a service the built-in catalog does not know ---------------------------------------
+
+# What models.json calls `api`. Each one is a wire protocol a gateway can speak;
+# the list endpoint is how the form checks the address and learns model ids.
+CUSTOM_PROTOCOLS = (
+    {"id": "openai-completions", "label": "OpenAI 兼容（Chat Completions）",
+     "hint": "Ollama、LM Studio、vLLM、OneAPI 等。地址一般以 /v1 结尾。",
+     "placeholder": "http://127.0.0.1:11434/v1"},
+    {"id": "openai-responses", "label": "OpenAI Responses",
+     "hint": "使用 OpenAI Responses 接口的服务。地址一般以 /v1 结尾。",
+     "placeholder": "https://api.openai.com/v1"},
+    {"id": "anthropic-messages", "label": "Anthropic 兼容（Messages）",
+     "hint": "Claude 官方或兼容网关。官方地址不带 /v1。",
+     "placeholder": "https://api.anthropic.com"},
+    {"id": "google-generative-ai", "label": "Google Gemini 兼容",
+     "hint": "Gemini 官方或兼容网关。",
+     "placeholder": "https://generativelanguage.googleapis.com/v1beta"},
+)
+_CUSTOM_API_IDS = {item["id"] for item in CUSTOM_PROTOCOLS}
+_PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_ENV_KEY = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+_CATALOG_LIMIT = 400
+
+
+def _models_file() -> str:
+    from misaka.config.engine import get_models_path
+    return get_models_path()
+
+
+def _read_models_document() -> dict:
+    path = _models_file()
+    if not os.path.isfile(path):
+        return {"providers": {}}
+    from misaka.core.model_registry import _strip_json_comments
+    with open(path, encoding="utf-8-sig") as handle:
+        text = handle.read()
+    try:
+        parsed = json.loads(_strip_json_comments(text) or "{}")
+    except json.JSONDecodeError as error:
+        raise ValueError(f"models.json 无法解析：{error.msg}（第 {error.lineno} 行）") from error
+    if not isinstance(parsed, dict):
+        raise ValueError("models.json 的顶层必须是对象")
+    providers = parsed.get("providers", {})
+    if not isinstance(providers, dict):
+        raise ValueError("models.json 的 providers 必须是对象")
+    parsed["providers"] = providers
+    return parsed
+
+
+def _builtin_provider_ids() -> set[str]:
+    from misaka.ai.models import get_providers
+    return set(get_providers())
+
+
+def _is_custom_block(provider_id: str, block: object, builtin: set[str]) -> bool:
+    if provider_id in builtin or not isinstance(block, dict) or not _PROVIDER_ID.fullmatch(provider_id):
+        return False
+    return bool(block.get("baseUrl")) and bool(block.get("api") or block.get("models") or block.get("apiKey"))
+
+
+def _key_hint(api_key: str) -> str:
+    if not api_key:
+        return ""
+    if api_key.startswith("!"):
+        return "由本机命令提供"
+    if _ENV_KEY.fullmatch(api_key):
+        return api_key
+    return "已保存在本机"
+
+
+def _public_model(item: dict) -> dict:
+    published = {"id": item["id"]}
+    for key in ("name", "contextWindow", "maxTokens", "reasoning"):
+        if item.get(key) not in (None, ""):
+            published[key] = item[key]
+    return published
+
+
+def _custom_catalog() -> dict:
+    protocols = [dict(item) for item in CUSTOM_PROTOCOLS]
+    try:
+        document = _read_models_document()
+    except ValueError as error:
+        return {"protocols": protocols, "services": [], "error": str(error)}
+    builtin = _builtin_provider_ids()
+    services = []
+    for provider_id, block in document["providers"].items():
+        if not _is_custom_block(provider_id, block, builtin):
+            continue
+        models = []
+        for item in block.get("models") or []:
+            if isinstance(item, dict) and item.get("id"):
+                models.append(_public_model(item))
+        services.append({
+            "id": provider_id, "name": block.get("name") or provider_id,
+            "api": block.get("api") or "", "base_url": block.get("baseUrl") or "",
+            "has_key": bool(block.get("apiKey")), "key_hint": _key_hint(str(block.get("apiKey") or "")),
+            "models": models,
+        })
+    services.sort(key=lambda item: item["id"])
+    return {"protocols": protocols, "services": services}
+
+
+def _check_base_url(url: object) -> str:
+    from urllib.parse import urlsplit
+    text = str(url or "").strip()
+    if not text or len(text) > 2048:
+        raise ValueError("请填写服务地址")
+    parsed = urlsplit(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("地址必须是 http 或 https，并包含主机名")
+    if parsed.username or parsed.password:
+        raise ValueError("不要把密钥写进地址，请填到 API Key")
+    return text.rstrip("/")
+
+
+def _require_protocol(api: object) -> str:
+    text = str(api or "").strip()
+    if text not in _CUSTOM_API_IDS:
+        raise ValueError("请选择协议")
+    return text
+
+
+def _clean_key(value: object) -> str:
+    key = str(value or "")
+    if any(char in key for char in "\r\n\0"):
+        raise ValueError("API Key 不能包含换行")
+    key = key.strip()
+    if len(key) > 4096:
+        raise ValueError("API Key 过长")
+    return key
+
+
+def _scrub(message: str, key: str) -> str:
+    if key and len(key) >= 8:
+        message = message.replace(key, "******")
+    return message[:500]
+
+
+def _resolved_key(stored: str) -> str:
+    if not stored:
+        return ""
+    from misaka.core.resolve_config_value import resolve_config_value
+    resolved = resolve_config_value(stored)
+    if resolved is None:
+        raise ValueError("API Key 没有解析出来。$NAME 需要环境变量已设置，!命令 需要命令有输出")
+    return resolved
+
+
+def _stored_api_key(provider_id: str) -> str:
+    if not _PROVIDER_ID.fullmatch(provider_id):
+        return ""
+    try:
+        block = _read_models_document()["providers"].get(provider_id)
+    except ValueError:
+        return ""
+    if not isinstance(block, dict):
+        return ""
+    return str(block.get("apiKey") or "")
+
+
+def _key_for_request(params: dict, *, required: bool) -> str:
+    typed = _clean_key(params.get("api_key"))
+    stored = typed or _stored_api_key(str(params.get("provider") or "").strip())
+    resolved = _resolved_key(stored)
+    if required and not resolved:
+        raise ValueError("请填写 API Key。本地服务可以填任意文字，例如 local")
+    return resolved
+
+
+def _catalog_urls(api: str, base: str) -> list[str]:
+    if api in {"openai-completions", "openai-responses"}:
+        return [base if base.endswith("/models") else base + "/models"]
+    if api == "anthropic-messages":
+        if base.endswith("/models"):
+            return [base]
+        if base.endswith("/v1"):
+            return [base + "/models"]
+        return [base + "/v1/models", base + "/models"]
+    if api == "google-generative-ai":
+        return [base if base.endswith("/models") else base + "/models"]
+    raise ValueError("请选择协议")
+
+
+def _catalog_headers(api: str, key: str) -> dict[str, str]:
+    from misaka.ai.utils.user_agent import get_misaka_user_agent
+    headers = {"Accept": "application/json", "User-Agent": get_misaka_user_agent()}
+    if not key:
+        return headers
+    if api == "anthropic-messages":
+        headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    elif api == "google-generative-ai":
+        headers["x-goog-api-key"] = key
+    else:
+        headers["Authorization"] = "Bearer " + key
+    return headers
+
+
+def _parse_model_catalog(payload: object) -> tuple[list[dict], bool]:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("data")
+        if not isinstance(items, list):
+            items = payload.get("models")
+        if not isinstance(items, list):
+            items = []
+    else:
+        items = []
+    found: list[dict] = []
+    seen: set[str] = set()
+    capped = False
+    for item in items:
+        if isinstance(item, str):
+            model_id, name = item.strip(), item.strip()
+        elif isinstance(item, dict):
+            raw = str(item.get("id") or item.get("name") or "").strip()
+            model_id = raw.split("/", 1)[1] if raw.startswith("models/") else raw
+            name = str(item.get("display_name") or item.get("displayName") or model_id).strip()
+            if name.startswith("models/"):
+                name = model_id
+        else:
+            continue
+        if not model_id or model_id in seen or len(model_id) > 256 or any(char in model_id for char in "\r\n\0"):
+            continue
+        seen.add(model_id)
+        found.append({"id": model_id, "name": name or model_id})
+        if len(found) >= _CATALOG_LIMIT:
+            capped = True
+            break
+    return found, capped
+
+
+def _fetch_one(url: str, headers: dict[str, str], key: str) -> tuple[int, object]:
+    import httpx
+    from urllib.parse import urljoin, urlsplit
+    host = (urlsplit(url).hostname or "").lower()
+    loopback = host in {"localhost", "127.0.0.1", "::1"}
+    try:
+        with httpx.Client(timeout=httpx.Timeout(15.0), follow_redirects=False, trust_env=not loopback) as client:
+            current = url
+            origin = urlsplit(current)
+            for _ in range(4):
+                response = client.get(current, headers=headers)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    nxt = urljoin(current, response.headers.get("location") or "")
+                    _check_base_url(nxt)
+                    target = urlsplit(nxt)
+                    # A catalogue request carries the key. Leaving the host, or leaving
+                    # https, would hand that key to somewhere the user did not name.
+                    if (target.hostname or "").lower() != (origin.hostname or "").lower():
+                        raise ValueError("服务把请求重定向到了另一个主机，已中止")
+                    if origin.scheme == "https" and target.scheme != "https":
+                        raise ValueError("服务把请求从 https 重定向到了不安全的地址，已中止")
+                    current = nxt.rstrip("/")
+                    continue
+                body = response.content
+                if len(body) > 1_500_000:
+                    raise ValueError("模型列表过大")
+                parsed = None
+                if body:
+                    try:
+                        parsed = json.loads(body.decode("utf-8-sig"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        parsed = None
+                return response.status_code, parsed
+            raise ValueError("重定向次数过多")
+    except httpx.HTTPError as error:
+        raise ValueError("无法连接这个地址：" + _scrub(str(error), key)) from None
+
+
+def _fetch_model_catalog(api: str, base: str, key: str) -> dict:
+    missing = False
+    for url in _catalog_urls(api, base):
+        status, parsed = _fetch_one(url, _catalog_headers(api, key), key)
+        if status in {401, 403}:
+            raise ValueError(f"地址可达，但密钥被拒绝（HTTP {status}）")
+        if status in {404, 405}:
+            missing = True
+            continue
+        if status < 200 or status >= 300:
+            raise ValueError(f"服务返回 HTTP {status}")
+        if parsed is None:
+            return {"message": "已连通，但响应不是模型列表。可以在下面手动填写模型 ID。", "models": []}
+        models, capped = _parse_model_catalog(parsed)
+        if models:
+            message = f"已连通，获取到 {len(models)} 个模型"
+            if capped:
+                message += "。只列出前 400 个，其余请手动填写 ID"
+            return {"message": message, "models": models}
+        return {"message": "已连通，但响应里没有模型。可以在下面手动填写模型 ID。", "models": []}
+    if missing:
+        return {"message": "地址可达，但没有模型列表接口。可以在下面手动填写模型 ID。", "models": []}
+    raise ValueError("没有拿到模型列表")
+
+
+def op_probe_custom(params: dict) -> dict:
+    return _fetch_model_catalog(
+        _require_protocol(params.get("api")),
+        _check_base_url(params.get("base_url")),
+        _key_for_request(params, required=False),
+    )
+
+
+def op_ping_custom(params: dict) -> dict:
+    api = _require_protocol(params.get("api"))
+    base = _check_base_url(params.get("base_url"))
+    key = _key_for_request(params, required=True)
+    model_id = str(params.get("model") or "").strip()
+    if not model_id or len(model_id) > 256 or any(char in model_id for char in "\r\n\0"):
+        raise ValueError("请选择一个模型")
+    from misaka.ai.stream import complete_simple
+    from misaka.ai.types import Context, Model, ModelCost, SimpleStreamOptions, UserMessage
+    model = Model(
+        id=model_id, name=model_id, api=api, provider="custom", baseUrl=base, reasoning=False,
+        input=["text"], cost=ModelCost(input=0, output=0, cacheRead=0, cacheWrite=0),
+        contextWindow=128000, maxTokens=32,
+    )
+
+    async def ping() -> str:
+        reply = await complete_simple(
+            model, Context(messages=[UserMessage(content="Reply with the single word OK.", timestamp=0)]),
+            SimpleStreamOptions(apiKey=key, maxTokens=32, timeoutMs=30_000),
+        )
+        if reply.stopReason == "error":
+            raise RuntimeError(reply.errorMessage or "请求失败")
+        return "".join(getattr(part, "text", "") for part in reply.content)
+
+    try:
+        text = asyncio.run(ping())
+    except Exception as error:  # noqa: BLE001 - the form shows one line, never the key
+        raise ValueError(_scrub(str(error) or "请求失败", key)) from None
+    return {"message": f"模型已回复：{text.strip()[:40] or '（空回复）'}"}
+
+
+def _clean_models(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        raise ValueError("请至少选择或填写一个模型")
+    models = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            item = {"id": item}
+        if not isinstance(item, dict):
+            raise ValueError("模型格式不正确")
+        model_id = str(item.get("id") or "").strip()
+        if not model_id or len(model_id) > 256 or any(char in model_id for char in "\r\n\0"):
+            raise ValueError("模型 ID 不能为空，且不能包含换行")
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        cleaned = {"id": model_id}
+        name = str(item.get("name") or "").strip()
+        if name and name != model_id:
+            if len(name) > 256:
+                raise ValueError("模型名称过长")
+            cleaned["name"] = name
+        for key in ("contextWindow", "maxTokens"):
+            if item.get(key) in (None, ""):
+                continue
+            try:
+                number = int(item[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{model_id} 的 {key} 不是正整数") from None
+            if number <= 0:
+                raise ValueError(f"{model_id} 的 {key} 必须大于 0")
+            cleaned[key] = number
+        if item.get("reasoning") not in (None, ""):
+            cleaned["reasoning"] = bool(item["reasoning"])
+        models.append(cleaned)
+        if len(models) > _CATALOG_LIMIT:
+            raise ValueError("一次最多保存 400 个模型")
+    if not models:
+        raise ValueError("请至少选择或填写一个模型")
+    return models
+
+
+def _ordered_block(block: dict) -> dict:
+    ordered = {}
+    for key in ("name", "baseUrl", "api", "apiKey", "headers", "compat", "authHeader", "oauth", "models", "modelOverrides"):
+        if key in block:
+            ordered[key] = block[key]
+    for key, value in block.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
+
+
+def _update_models_document(mutate):
+    from filelock import FileLock
+
+    from misaka.utils import atomic
+    path = _models_file()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with FileLock(path + ".lock", timeout=10):
+        document = _read_models_document()
+        result = mutate(document)
+        atomic.write_text(path, json.dumps(document, ensure_ascii=False, indent=2) + "\n", mode=0o600)
+        return result
+
+
+def op_save_custom(params: dict) -> dict:
+    provider_id = str(params.get("provider") or "").strip()
+    if not _PROVIDER_ID.fullmatch(provider_id):
+        raise ValueError("服务 ID 只能使用字母、数字、点、下划线和短横线，并以字母或数字开头")
+    api = _require_protocol(params.get("api"))
+    base = _check_base_url(params.get("base_url"))
+    typed_key = _clean_key(params.get("api_key"))
+    models = _clean_models(params.get("models"))
+    name = str(params.get("name") or "").strip()
+    if name and (len(name) > 80 or any(char in name for char in "\r\n\0")):
+        raise ValueError("显示名称过长或含有换行")
+    builtin = _builtin_provider_ids()
+
+    def mutate(document: dict) -> dict:
+        existing = document["providers"].get(provider_id)
+        if existing is not None and not isinstance(existing, dict):
+            raise ValueError("models.json 里这个服务的配置不是对象")
+        if existing is not None and not _is_custom_block(provider_id, existing, builtin):
+            raise ValueError("这个名称是内置服务商，请换一个，例如 ollama 或 my-gateway")
+        if existing is None and provider_id in builtin:
+            raise ValueError("这个名称是内置服务商，请换一个，例如 ollama 或 my-gateway")
+        block = dict(existing or {})
+        if name:
+            block["name"] = name
+        else:
+            block.pop("name", None)
+        block["baseUrl"] = base
+        block["api"] = api
+        if typed_key:
+            block["apiKey"] = typed_key
+        elif not block.get("apiKey"):
+            raise ValueError("请填写 API Key。本地服务可以填任意文字，例如 local")
+        block["models"] = models
+        document["providers"][provider_id] = _ordered_block(block)
+        return {"message": f"已保存自定义服务 {provider_id}（{len(models)} 个模型）"}
+
+    return _update_models_document(mutate)
+
+
+def op_remove_custom(params: dict) -> dict:
+    provider_id = str(params.get("provider") or "").strip()
+    builtin = _builtin_provider_ids()
+
+    def mutate(document: dict) -> dict:
+        block = document["providers"].get(provider_id)
+        if not _is_custom_block(provider_id, block, builtin):
+            raise ValueError("没有这个自定义服务")
+        document["providers"].pop(provider_id, None)
+        return {"message": f"已移除自定义服务 {provider_id}。如果它是某个角色的默认模型，请另外再选一个"}
+
+    return _update_models_document(mutate)
 
 
 # ---- browser and device sign-in ---------------------------------------------------------

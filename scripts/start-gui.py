@@ -47,7 +47,7 @@ def healthy(url, workspace):
         # version check but cannot serve the current page; restart it instead.
         # project_gui must match server.py's /api/health. Bump both when the
         # server protocol changes, or the launcher will keep an old process.
-        return health.get("version") is not None and health.get("native_chat") is True and health.get("project_gui") == 9
+        return health.get("version") is not None and health.get("native_chat") is True and health.get("project_gui") == 12
     except (OSError, ValueError, urllib.error.URLError):
         return False
 

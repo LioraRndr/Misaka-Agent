@@ -26,6 +26,7 @@ import sys
 import threading
 
 from misaka.modes.jsonl import to_json_event, to_jsonable
+from misaka.core.gui_input_queue import GuiInputQueue
 
 _WRITE_LOCK = threading.Lock()
 
@@ -143,9 +144,9 @@ class ChatHost:
         self.registry = None
         self.cwd = ""
         self.shutting_down = False
-        self._prompt_lock: asyncio.Lock | None = None   # created on the running loop
         self._unsubscribe = None
         self.ui = GuiUIContext()
+        self.input_queue = None
 
     # ---- assembly (the engine.main skeleton, minus every terminal concern) ----
 
@@ -229,6 +230,7 @@ class ChatHost:
             {"cwd": self.cwd, "agentDir": agent_dir, "sessionManager": session_manager},
         )
         self.session = self.runtime.session
+        self._create_input_queue()
         self.registry = self.runtime.services.modelRegistry
         errors = [d for d in self.runtime.diagnostics if d.type == "error"]
         if errors:
@@ -271,8 +273,26 @@ class ChatHost:
 
     async def _rebind(self, _session=None) -> None:
         """After /new, /fork or /tree the runtime hands us a fresh session object."""
+        if self.input_queue is not None:
+            self.input_queue.clear()
         self.session = self.runtime.session
+        self._create_input_queue()
         await self._bind()
+
+    def _create_input_queue(self):
+        self.input_queue = GuiInputQueue(
+            self.session, self._deliver_prompt,
+            changed=lambda: emit({"type": "prompt_queue", "pendingPrompts": self.input_queue.snapshot(),
+                                  "queuePaused": self.input_queue.paused}),
+            failed=lambda error: emit({"type": "prompt_error", "message": str(error)}),
+            settled=lambda: emit({"type": "run_settled"}),
+        )
+
+    async def _deliver_prompt(self, params):
+        await self.session.prompt(params["text"], {
+            "images": params.get("images") or None,
+            "streamingBehavior": params.get("streamingBehavior") or "followUp",
+        })
 
     def _session_status(self) -> dict:
         model = self.session.model
@@ -286,6 +306,9 @@ class ChatHost:
             "availableThinkingLevels": self.session.getAvailableThinkingLevels(),
             "modelFallbackMessage": getattr(self.runtime, "modelFallbackMessage", None),
             "streaming": self.session.isStreaming,
+            "pendingPrompts": self.input_queue.snapshot() if self.input_queue else [],
+            "queuePaused": self.input_queue.paused if self.input_queue else False,
+            "capabilities": ["models", "set_model", "set_thinking", "queue", "send_now", "withdraw"],
         }
 
     def _history(self) -> list:
@@ -308,24 +331,18 @@ class ChatHost:
         images = [_image_content(item) for item in params.get("images") or []]
         if not self.session.sessionName and not text.startswith("/"):
             self.session.setSessionName(text.strip().splitlines()[0][:60])
-        behavior = params.get("streamingBehavior") or "steer"
-        generation = getattr(self, "_prompt_generation", 0)
-        asyncio.get_running_loop().create_task(self._run_prompt(text, images, behavior, generation))
-        return {"accepted": True}
+        result = self.input_queue.submit({**params, "text": text, "images": images})
+        if self.input_queue.paused:
+            self.input_queue.resume(result["message_id"])
+        return result
 
-    async def _run_prompt(self, text: str, images: list, behavior: str, generation: int) -> None:
-        # One prompt at a time; a second one queues here and runs after the first
-        # settles, while the session's own steer/followUp handling orders it inside
-        # a live run. Stop stays reachable: it never waits on this lock.
-        if self._prompt_lock is None:
-            self._prompt_lock = asyncio.Lock()
-        async with self._prompt_lock:
-            if self.shutting_down or generation != getattr(self, "_prompt_generation", 0):
-                return
-            try:
-                await self.session.prompt(text, {"images": images or None, "streamingBehavior": behavior})
-            except Exception as error:  # noqa: BLE001 - reported to the user, runner lives on
-                emit({"type": "prompt_error", "message": str(error) or type(error).__name__})
+    async def op_send_now(self, params):
+        if params.get("text"):
+            params = {**params, "message_id": self.op_prompt(params)["message_id"]}
+        return await self.input_queue.send_now(params.get("message_id"))
+
+    def op_withdraw(self, params):
+        return self.input_queue.withdraw(params.get("message_id"))
 
     def op_ui_response(self, params: dict) -> dict:
         if not self.ui.resolve(str(params.get("id", "")), params.get("value")):
@@ -333,7 +350,7 @@ class ChatHost:
         return {"resolved": True}
 
     async def op_stop(self, _params: dict) -> dict:
-        self._prompt_generation = getattr(self, "_prompt_generation", 0) + 1
+        self.input_queue.pause()
         self.ui.cancel_all()
         await self.session.abort()
         return {"stopped": True}
@@ -360,6 +377,7 @@ class ChatHost:
         if model is None:
             raise ValueError("没有这个模型")
         await self.session.setModel(model, persist=bool(params.get("persist")))
+        emit({"type": "session_settings", **self._session_status()})
         return self._session_status()
 
     async def op_set_thinking(self, params: dict) -> dict:
@@ -367,6 +385,7 @@ class ChatHost:
         if level not in self.session.getAvailableThinkingLevels():
             raise ValueError("当前模型不支持这个思考等级")
         self.session.setThinkingLevel(level, persist=bool(params.get("persist")))
+        emit({"type": "session_settings", **self._session_status()})
         return self._session_status()
 
     async def op_rename(self, params: dict) -> dict:
@@ -382,10 +401,10 @@ class ChatHost:
     def op_snapshot(self, _params: dict) -> dict:
         return {"messages": self._history(), "meta": self._session_status()}
 
-    ASYNC_OPS = {"stop": op_stop, "compact": op_compact,
+    ASYNC_OPS = {"stop": op_stop, "compact": op_compact, "send_now": op_send_now,
                  "set_model": op_set_model, "set_thinking": op_set_thinking, "rename": op_rename}
     SYNC_OPS = {"prompt": op_prompt, "models": op_models, "skills": op_skills, "status": op_status, "snapshot": op_snapshot,
-                "ui_response": op_ui_response}
+                "ui_response": op_ui_response, "withdraw": op_withdraw}
 
     async def _execute(self, request: dict, handler, params: dict) -> None:
         try:
@@ -441,6 +460,8 @@ class ChatHost:
             await self._dispose()
 
     async def _dispose(self):
+        if self.input_queue is not None:
+            self.input_queue.clear()
         try:
             if self.runtime is not None:
                 await self.runtime.dispose()

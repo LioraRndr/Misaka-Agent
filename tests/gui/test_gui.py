@@ -144,6 +144,16 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.bridge.dispatch("chat_snapshot", {"path": str(not_session)})
 
+    def test_settings_ops_include_custom_services(self):
+        from misaka.ui.gui.server import SETTINGS_OPS
+        from misaka.ui.gui.services import SLOW_OPS
+        from misaka.ui.gui.settings_worker import OPS
+        for name in ("probe_custom", "ping_custom", "save_custom", "remove_custom"):
+            self.assertIn(name, SETTINGS_OPS)
+            self.assertIn(name, OPS)
+        self.assertGreaterEqual(SLOW_OPS["probe_custom"], 45)
+        self.assertGreaterEqual(SLOW_OPS["ping_custom"], 45)
+
 
 class NativeChatManagerTests(unittest.TestCase):
     def setUp(self):
@@ -297,7 +307,7 @@ class HTTPTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(payload["native_chat"])
-        self.assertEqual(payload["project_gui"], 9)
+        self.assertEqual(payload["project_gui"], 12)
 
 
 if __name__ == "__main__":
