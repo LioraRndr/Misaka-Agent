@@ -912,3 +912,17 @@ select:disabled{opacity:.6;cursor:wait}
 @media(max-width:1200px){.chat-view.context-open .cb-right{gap:3px}.chat-view.context-open #model-label{max-width:100px;overflow:hidden;text-overflow:ellipsis}.chat-view.context-open .composer-bar{flex-wrap:wrap;gap:6px}.chat-view.context-open .cb-right{margin-left:auto}}
 @media(max-width:1000px){.context-slot{position:absolute;inset:0 0 0 auto;z-index:20;--context-w:min(520px,100%);width:var(--context-w);pointer-events:none}.context-open .context-slot{pointer-events:auto}.context-panel{width:calc(100% - 16px);margin:8px;height:calc(100% - 16px);box-shadow:var(--shadow-lg)}}
 @media(prefers-reduced-motion:reduce){.context-slot,.context-panel,.context-slot:not(:has(.context-panel[aria-hidden=false])) .context-panel{transition:none}}
+
+/* Provider shortlists stay bounded even when a gateway has hundreds of models. */
+.provider-row .row-actions{flex-wrap:wrap;justify-content:flex-end;max-width:65%}
+.provider-models{display:flex;flex-direction:column;gap:12px;height:min(660px,calc(84vh - 100px))}
+.provider-models>:not(.provider-model-list){flex-shrink:0}
+.provider-models .set-actions{margin-top:0}
+.provider-models .pick-tools{align-items:center;flex-wrap:wrap}
+.model-selection-filter{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:13px;cursor:pointer}
+.provider-model-list{display:flex;flex-direction:column;gap:6px;flex:1;min-height:64px;overflow:auto;padding:2px}
+.provider-model-list .row-main{overflow-wrap:anywhere}
+.provider-models .dialog-actions{margin-top:4px}
+@media(max-width:640px){.provider-row{align-items:flex-start;flex-direction:column}.provider-row .row-actions{max-width:100%;justify-content:flex-start}}
+
+@media(max-height:650px){.provider-models{gap:6px}.provider-models>p:first-child{display:none}.provider-models input[type=search]{height:36px}}

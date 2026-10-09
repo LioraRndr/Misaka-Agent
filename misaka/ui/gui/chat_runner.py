@@ -360,11 +360,13 @@ class ChatHost:
         await self.session.compact(instructions if isinstance(instructions, str) else None)
         return {"compacted": True}
 
-    def op_models(self, _params: dict) -> dict:
+    async def op_models(self, _params: dict) -> dict:
+        await self.registry.refresh({"allowNetwork": False})
         models = []
-        for model in self.registry.getAvailable():
-            models.append({**_model_summary(model), "configured": self.registry.hasConfiguredAuth(model)})
-        return {"models": models, "current": _model_summary(self.session.model)}
+        from misaka.ui.gui.model_preferences import visible_models
+        for model in visible_models(self.registry.getAvailable()):
+            models.append({**_model_summary(model), "providerName": self.registry.getProviderDisplayName(model.provider), "configured": self.registry.hasConfiguredAuth(model)})
+        return {"models": models, "shortlisted": True, "current": _model_summary(self.session.model)}
 
     def op_skills(self, _params: dict) -> dict:
         from misaka.core.skills.wiring.skills import SkillsPart, _runtime_name, _slash_entries
@@ -373,6 +375,7 @@ class ChatHost:
                            for e in _slash_entries(part._entries())]}
 
     async def op_set_model(self, params: dict) -> dict:
+        await self.registry.refresh({"allowNetwork": False})
         model = self.registry.find(str(params.get("provider", "")), str(params.get("id", "")))
         if model is None:
             raise ValueError("没有这个模型")
@@ -402,8 +405,8 @@ class ChatHost:
         return {"messages": self._history(), "meta": self._session_status()}
 
     ASYNC_OPS = {"stop": op_stop, "compact": op_compact, "send_now": op_send_now,
-                 "set_model": op_set_model, "set_thinking": op_set_thinking, "rename": op_rename}
-    SYNC_OPS = {"prompt": op_prompt, "models": op_models, "skills": op_skills, "status": op_status, "snapshot": op_snapshot,
+                 "models": op_models, "set_model": op_set_model, "set_thinking": op_set_thinking, "rename": op_rename}
+    SYNC_OPS = {"prompt": op_prompt, "skills": op_skills, "status": op_status, "snapshot": op_snapshot,
                 "ui_response": op_ui_response, "withdraw": op_withdraw}
 
     async def _execute(self, request: dict, handler, params: dict) -> None:

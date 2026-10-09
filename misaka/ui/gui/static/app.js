@@ -1086,19 +1086,21 @@ async function showModelPicker(anchor=$('#chat-model'),targetId=selectedChat) {
   if(ch&&(isSnapshot(targetId)||!sessionSupports(targetId,'models')))return toast(legacySessionHint,true);
   const source=ch?.meta.workspace||workspace;
   let models, current;
-  if (ch) {const data=await sessionApi(targetId,'models',{},source);if(!anchor.isConnected)return;models=data.models||[];current=data.current;localStorage.setItem('misaka-models',JSON.stringify(models));}
-  else {models=jsonStored('misaka-models',[]);current=homeModel;}
+  if (ch) {const data=await sessionApi(targetId,'models',{},source);if(!anchor.isConnected)return;models=data.models||[];current=data.current;
+    if(!data.shortlisted){const enabled=await sapi('models',{configured_only:true});const allowed=new Map((enabled.models||[]).map(m=>[m.provider+'/'+m.id,m]));models=models.filter(m=>allowed.has(m.provider+'/'+m.id)).map(m=>({...m,providerName:allowed.get(m.provider+'/'+m.id).providerName}));if(!anchor.isConnected)return;}
+  }
+  else {const data=await sapi('models',{configured_only:true});if(!anchor.isConnected||source!==workspace||targetId!==selectedChat)return;models=data.models||[];current=homeModel;}
   const box=el('div');
   if (!models.length) {
-    box.append(el('div','menu-note','开始第一段对话后，就能在这里为每个会话单独切换模型。当前默认：'+(state?.model||'尚未配置')));
-    box.append(menuItem({icon:'settings',label:'登录模型服务',hint:'在设置中登录并选择默认模型',onClick:()=>openSettings('models')}));
+    box.append(el('div','menu-note','还没有启用模型，请在设置中获取列表并勾选。当前默认：'+(state?.model||'尚未配置')));
+    box.append(menuItem({icon:'settings',label:'管理启用模型',hint:'登录服务商，获取列表并勾选常用模型',onClick:()=>openSettings('models')}));
     openPopover(anchor,box,{prefer:'top',align:'end',width:300});return;
   }
   if (models.length>7) box.append(menuSearch(box,'搜索模型'));
   if (!ch) box.append(menuItem({icon:'model',label:'默认模型',hint:state?.model||'沿用全局设置',checked:!homeModel,onClick:()=>{homeModel=null;updateChatHeader();}}));
   const groups={};for(const m of models)(groups[m.provider]??=[]).push(m);
   for (const [provider,list] of Object.entries(groups)) {
-    box.append(el('div','menu-head',provider));
+    box.append(el('div','menu-head',list[0].providerName||provider));
     for (const m of list) {
       const isCurrent=!!(current&&current.provider===m.provider&&current.id===m.id);
       box.append(menuItem({label:m.name||m.id,hint:m.id+(m.contextWindow?' · '+fmtTokens(m.contextWindow)+' 上下文':''),tag:m.configured===false?'未配置':'',checked:isCurrent,onClick:async()=>{
@@ -1107,7 +1109,8 @@ async function showModelPicker(anchor=$('#chat-model'),targetId=selectedChat) {
       }}));
     }
   }
-  box.append(el('div','menu-note','只影响当前会话。默认模型可在「设置与工具」中修改。'));
+  box.append(el('div','menu-sep'),menuItem({icon:'settings',label:'管理启用模型',hint:'按服务商勾选常用模型',onClick:()=>openSettings('models')}));
+  box.append(el('div','menu-note','只影响当前会话。默认模型可在设置中修改。'));
   openPopover(anchor,box,{prefer:'top',align:'end',width:320});
 }
 function showThinkingPicker(anchor=$('#chat-thinking'),targetId=selectedChat) {
@@ -1772,6 +1775,7 @@ async function refreshAttached(id){if(attachedBusy||id!==selectedChat||view!=='c
 async function openCard(card){await refreshState();const s=(state.sessions||[]).find(s=>s.task_id===card.id||s.card===card.id||s.task===card.id);if(!s)throw new Error('任务对话正在初始化，请稍后再打开');await openAttached(s);}
 
 /* ---------- 设置中心（原生替代终端设置向导） ---------- */
+let modelSettingsTarget='';
 const SETTINGS_TABS=[['overview','概览与环境','gauge'],['models','模型与账号','model'],['team','研究团队','team'],['web','联网工具','globe'],['research','研究流程','research'],['project','项目与资料','folder'],['skills','技能','skills'],['terminal','终端','terminal'],['appearance','外观','sun'],['advanced','高级','terminal']];
 let settingsTab='overview', settingsCache={}, settingsTicket=0;
 const sapi=(op,params={})=>api('settings',{op,params});
@@ -1827,31 +1831,34 @@ async function drawModels(ticket) {
   const row=p=>{
     const r=el('div','provider-row'+(p.configured?' on':''));
     const main=el('div','row-main');const name=el('strong','',p.name);main.append(name);
-    const meta=el('small');meta.append(p.configured?'已配置 · '+(p.source||'凭证已保存'):'未配置',p.oauth?' · 支持浏览器登录':'');main.append(meta);
+    const meta=el('small');meta.append(p.configured?'已配置 · '+(p.source||'凭证已保存'):'未配置',p.oauth?' · 支持浏览器登录':'',p.configured?` · ${p.enabled?p.selected_count+' 个模型已启用':'对话菜单未启用'}`:'');main.append(meta);
     if(p.extras?.length&&p.extras_install){main.append(el('small','warn-text','缺少这个服务商的组件（'+p.extras.join('、')+'）'),codeLine(p.extras_install.command));}
     const actions=el('div','row-actions');
     if(p.id==='amazon-bedrock')actions.append(el('small','hint','使用本机 AWS 凭证'));
     else {if(p.oauth)actions.append(button('浏览器登录',()=>startLogin(p),'btn sm'+(p.configured?'':' primary'),'globe'));
       actions.append(button(p.oauth?'API Key':'填写 API Key',()=>apiKeyDialog(p),'btn sm'+(p.oauth||p.configured?'':' primary')));
       if(p.configured&&p.source&&!/环境|env/i.test(p.source))actions.append(button('',()=>confirmAction('移除登录信息','移除 '+p.name+' 在本机保存的凭证。环境变量中的密钥不受影响。',()=>settingsAction(()=>sapi('logout',{provider:p.id}))),'icon-btn','x'));}
+    if(p.configured)actions.append(button('测试连接',()=>testProvider(p),'btn sm','refresh'),button('获取 / 管理模型',()=>manageProviderModels(p),'btn sm','model'));
     r.append(main,actions);return r;
   };
   const featured=data.providers.filter(p=>!p.custom&&(p.featured||p.configured)), rest=data.providers.filter(p=>!p.custom&&!p.featured&&!p.configured);
   featured.forEach(p=>list.append(row(p)));
   showAll.onclick=()=>{rest.forEach(p=>list.append(row(p)));showAll.remove();};
-  const login=section('模型服务','有 ChatGPT Plus/Pro、Claude 等订阅可以直接浏览器登录；也可以填写按量计费的 API Key。密钥只保存在本机。',list,rest.length?showAll:null);
+  const login=section('模型服务','有 ChatGPT Plus/Pro、Claude 等订阅可以直接浏览器登录；也可以填写按量计费的 API Key。密钥只保存在本机。登录后获取列表，勾选需要的模型即可在对话中选择。',list,rest.length?showAll:null);
   // default model form
-  const targetSel=selectInput(data.targets.map(t=>[t.key||'',t.label+(t.pinned?'（'+t.pinned+'）':t.key?'（跟随全局）':'')]),'');
+  if(!data.targets.some(t=>(t.key||'')===modelSettingsTarget))modelSettingsTarget='';
+  const targetSel=selectInput(data.targets.map(t=>[t.key||'',t.label+(t.pinned?'（'+t.pinned+'）':t.key?'（跟随全局）':'')]),modelSettingsTarget);
   const providerSel=el('select'), modelSel=el('select'), info=el('p','hint');
   const configured=data.providers.filter(p=>p.configured);
   const fillProviders=current=>{providerSel.replaceChildren();for(const p of [...configured,...data.providers.filter(p=>!p.configured)]){const o=el('option','',p.name+(p.configured?'':'（未配置）'));o.value=p.id;if(p.id===current)o.selected=true;providerSel.append(o);}};
-  const loadModels=async(current)=>{modelSel.replaceChildren(el('option','','正在读取…'));modelSel.disabled=true;
-    try{const r=await sapi('models',{provider:providerSel.value});modelSel.replaceChildren();for(const m of r.models){const o=el('option','',m.name&&m.name!==m.id?m.name+' · '+m.id:m.id);o.value=m.id;if(m.id===current)o.selected=true;modelSel.append(o);}if(!r.models.length)modelSel.append(el('option','','这个服务商没有可选模型'));}
-    catch(e){modelSel.replaceChildren(el('option','',e.message));}finally{modelSel.disabled=false;}};
+  let modelRequest=0;
+  const loadModels=async(current)=>{const request=++modelRequest;modelSel.replaceChildren(el('option','','正在读取…'));modelSel.disabled=true;save.disabled=true;test.disabled=true;
+    try{const r=await sapi('models',{provider:providerSel.value,enabled_only:true});if(request!==modelRequest)return;modelSel.replaceChildren();for(const m of r.models){const o=el('option','',m.name&&m.name!==m.id?m.name+' · '+m.id:m.id);o.value=m.id;if(m.id===current)o.selected=true;modelSel.append(o);}if(!r.models.length){const o=el('option','','请先获取列表并启用模型');o.value='';modelSel.append(o);}}
+    catch(e){if(request!==modelRequest)return;const o=el('option','',e.message);o.value='';modelSel.replaceChildren(o);}finally{if(request===modelRequest){modelSel.disabled=false;save.disabled=!modelSel.value;test.disabled=!modelSel.value;}}};
   const syncTarget=()=>{const t=data.targets.find(t=>(t.key||'')===targetSel.value);const ref=t.pinned||(data.global.provider+'/'+data.global.model);const [prov,...rest]=ref.split('/');fillProviders(prov);loadModels(rest.join('/'));
     info.textContent=t.key?(t.pinned?`${t.label} 当前单独使用 ${t.pinned}。`:`${t.label} 当前跟随全局默认（${data.global.provider} / ${data.global.model}）。`)+'只影响这个角色。':`全局默认：${data.global.provider} / ${data.global.model}。没有单独设置的角色都使用它。`;
     follow.hidden=!t.key||!t.pinned;};
-  targetSel.onchange=syncTarget;providerSel.onchange=()=>loadModels('');
+  targetSel.onchange=()=>{modelSettingsTarget=targetSel.value;syncTarget();};providerSel.onchange=()=>loadModels('');
   const save=button('保存为默认',()=>settingsAction(()=>sapi('set_default',{target:targetSel.value||null,provider:providerSel.value,model:modelSel.value})),'btn primary','check');
   const test=button('测试连接',()=>settingsAction(()=>sapi('verify',{provider:providerSel.value,model:modelSel.value}),null,false),'btn','refresh');
   const follow=button('改为跟随全局',()=>settingsAction(()=>sapi('set_default',{target:targetSel.value})),'btn ghost');
@@ -1918,7 +1925,9 @@ function customService(data) {
     const row=el('div','provider-row on'), main=el('div','row-main'), actions=el('div','row-actions');
     const proto=(custom.protocols.find(p=>p.id===s.api)||{}).label||s.api||'未设协议';
     main.append(el('strong','',s.name||s.id), el('small','custom-meta',`${proto} · ${s.base_url} · ${s.models.length} 个模型${s.key_hint?' · '+s.key_hint:''}`));
-    actions.append(button('编辑',()=>fill(s),'btn sm','pencil'),
+    const provider=data.providers.find(p=>p.id===s.id)||{id:s.id,name:s.name||s.id,configured:true};
+    main.append(el('small','',provider.enabled?`${provider.selected_count} 个模型已启用`:'对话菜单未启用'));
+    actions.append(button('获取 / 管理模型',()=>manageProviderModels(provider),'btn sm','model'),button('测试连接',()=>testProvider(provider),'btn sm','refresh'),button('编辑',()=>fill(s),'btn sm','pencil'),
       button('',()=>confirmAction('移除自定义服务','从本机 models.json 移除 '+s.id+'。已经设成默认模型的角色需要另外再选。',()=>settingsAction(()=>sapi('remove_custom',{provider:s.id})),{label:'移除',danger:true}),'icon-btn','x'));
     row.append(main,actions); saved.append(row);
   }
@@ -1942,11 +1951,56 @@ function customService(data) {
   const body=[custom.error?el('p','warn-text',custom.error):null, saved.childElementCount?saved:null, grid, hint, actions, found].filter(Boolean);
   return section('自定义服务','选择协议，填写地址和密钥。测试连通会向这个地址请求模型列表；保存后可在下方设为默认模型。密钥只写在本机的 models.json。', ...body);
 }
+async function testProvider(p,model='') {
+  const r=await api('settings',{op:'test_provider',params:{provider:p.id,model}},100000);
+  toast(r.message);return r;
+}
+async function manageProviderModels(p) {
+  const body=el('div','provider-models'),note=el('p','hint','正在读取模型目录…'),status=el('p','hint');
+  const enabled=el('input');enabled.type='checkbox';enabled.setAttribute('aria-label','在对话菜单中启用该服务商');
+  const toggle=el('label','toggle-row');toggle.append(enabled,el('span','','在对话菜单中启用该服务商'));
+  const search=textInput('','搜索模型名称或 ID');search.type='search';search.setAttribute('aria-label','搜索可启用模型');
+  const onlySelected=el('input');onlySelected.type='checkbox';const filter=el('label','model-selection-filter');filter.append(onlySelected,'只看已选');
+  const rows=el('div','provider-model-list'),tools=el('div','pick-tools'),actions=el('div','dialog-actions');
+  let catalog=[],chosen=new Set(),busy=false;
+  const count=()=>{status.textContent=`已选 ${chosen.size} / ${catalog.length} 个模型${enabled.checked?'':' · 服务商未启用'}`;};
+  const filtered=()=>{const q=search.value.trim().toLowerCase();return catalog.filter(m=>(!onlySelected.checked||chosen.has(m.id))&&(!q||(m.name+' '+m.id).toLowerCase().includes(q)));};
+  const render=()=>{
+    rows.replaceChildren();
+    const visible=filtered();
+    for(const m of visible){
+      const row=el('label','toggle-row'),cb=el('input'),main=el('span','row-main');cb.type='checkbox';cb.checked=chosen.has(m.id);cb.value=m.id;
+      cb.setAttribute('aria-label','启用 '+m.id);
+      main.append(el('strong','',m.name||m.id),el('small','',m.id+(m.contextWindow?' · '+fmtTokens(m.contextWindow)+' 上下文':'')));
+      cb.onchange=()=>{if(cb.checked){chosen.add(m.id);enabled.checked=true;}else chosen.delete(m.id);if(onlySelected.checked)render();else count();};
+      row.append(cb,main);rows.append(row);
+    }
+    if(!visible.length)rows.append(el('p','hint',catalog.length?'没有符合筛选条件的模型':'点击「获取模型列表」读取目录。'));
+    count();
+  };
+  search.oninput=render;onlySelected.onchange=render;enabled.onchange=count;
+  const run=async(fn)=>{if(busy)return;busy=true;fetch.disabled=test.disabled=save.disabled=true;try{return await fn();}catch(e){note.textContent=e.message;throw e;}finally{busy=false;fetch.disabled=test.disabled=save.disabled=false;}};
+  const fetch=button('获取模型列表',()=>run(async()=>{
+    note.textContent='正在从服务获取模型列表…';
+    const r=await api('settings',{op:'fetch_provider_models',params:{provider:p.id}},100000);
+    catalog=r.models||[];note.textContent=r.message;render();
+  }),'btn','refresh');
+  const test=button('测试连接',()=>run(async()=>{note.textContent='正在测试连接…';const r=await testProvider(p,[...chosen][0]||'');note.textContent=r.message;}),'btn','refresh');
+  const save=button('保存启用选择',()=>run(async()=>{
+    const r=await sapi('save_model_selection',{provider:p.id,enabled:enabled.checked,models:[...chosen]});
+    closeDialog();toast(r.message);settingsCache={};if(view==='settings')drawSettingsShell();
+  }),'btn primary','check');
+  tools.append(button('选择筛选结果',()=>{filtered().forEach(m=>chosen.add(m.id));if(chosen.size)enabled.checked=true;render();},'text-btn'),button('清空选择',()=>{chosen.clear();render();},'text-btn'),filter);
+  actions.append(button('取消',closeDialog,'btn ghost'),save);
+  body.append(el('p','hint','勾选常用模型。对话与 Sister 的模型菜单按服务商分类，只显示已启用项。'),toggle,el('div','set-actions',test,fetch),note,search,tools,status,rows,el('p','hint',p.id==='openrouter'?'测试连接只检查凭证，不生成回复。':'测试连接会发送一个极小的请求，可能产生少量用量。'),actions);
+  modal(p.name+' · 启用模型',body);
+  await run(async()=>{const r=await sapi('provider_models',{provider:p.id});catalog=r.models||[];chosen=new Set(r.selected||[]);enabled.checked=!!r.enabled;note.textContent=r.message;render();});
+}
 function apiKeyDialog(p) {
   const form=el('form'), key=textInput('','粘贴 API Key','password'), actions=el('div','dialog-actions');
   actions.append(button('取消',closeDialog,'btn ghost'),button('保存',()=>form.requestSubmit(),'btn primary'));
   form.append(el('p','hint','密钥保存在本机的 MISAKA 凭证文件中，不会发送到别处。'),fieldInput(p.name+' API Key',key),actions);
-  form.onsubmit=e=>{e.preventDefault();settingsAction(async()=>{const r=await sapi('set_key',{provider:p.id,key:key.value});closeDialog();return r;});};
+  form.onsubmit=e=>{e.preventDefault();guard(async()=>{const r=await sapi('set_key',{provider:p.id,key:key.value});key.value='';toast(r.message);closeDialog();settingsCache={};drawSettingsShell();await manageProviderModels({...p,configured:true});});};
   modal('填写 API Key',form);key.focus();
 }
 let loginId=null;
@@ -1974,7 +2028,7 @@ async function startLogin(p) {
         else{const f=el('form','inline-form'),i=textInput('',pr.kind==='manual_code'?'如果浏览器没有自动完成，把页面上的代码粘贴到这里':'',pr.kind==='secret'?'password':'text');f.append(i,button('提交',()=>f.requestSubmit(),'btn primary'));f.onsubmit=e=>{e.preventDefault();if(i.value.trim())guard(()=>api('login_answer',{login_id:id,prompt_id:pr.id,value:i.value.trim()}));};promptBox.append(f);setTimeout(()=>i.focus(),50);}}}
     if(s.status==='running'){status.replaceChildren(el('span','spinner'),pr?'等待你的输入':'等待浏览器完成登录…');}
     else{status.replaceChildren(icon(s.status==='done'?'check':'alert'),s.message||(s.status==='done'?'登录成功':'登录失败'));status.className='status-chip '+(s.status==='done'?'ok':'warn');promptBox.replaceChildren();loginId=null;
-      if(s.status==='done'){toast(s.message||'登录成功');settingsCache={};if(view==='settings')drawSettingsShell();setTimeout(closeDialog,900);}return;}
+      if(s.status==='done'){toast(s.message||'登录成功');settingsCache={};if(view==='settings')drawSettingsShell();setTimeout(()=>guard(()=>manageProviderModels({...p,configured:true})),900);}return;}
     await sleep(800);
   }
 }
@@ -1990,7 +2044,7 @@ async function drawTeamSettings(ticket) {
     const actions=el('div','row-actions');
     actions.append(button('专长',()=>roleFileEditor(s.id,'DESCRIBE.md','Sister '+s.id+' 的专长（DESCRIBE.md）','Last Order 按这里的描述分配任务。'),'btn sm','pencil'),
       button('性格与声音',()=>roleFileEditor(s.id,'SOUL.md','Sister '+s.id+' 的 SOUL.md','她说话与工作的方式。'),'btn sm'),
-      button('模型',()=>{settingsTab='models';drawSettingsShell();},'btn sm','model'),
+      button('模型',()=>{modelSettingsTarget=s.id;settingsTab='models';drawSettingsShell();},'btn sm','model'),
       button('',()=>confirmAction('移除 Sister '+s.id,'移除她的配置文件夹。历史任务卡、工作区与对话记录会保留；有未完成的任务时无法移除。',()=>settingsAction(()=>sapi('remove_sister',{id:s.id})),{label:'移除',danger:true}),'icon-btn','x'));
     card.append(head,el('p','',s.description||'尚未填写专长'),actions);list.append(card);
   }

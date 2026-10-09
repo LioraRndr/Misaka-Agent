@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from misaka.config import CFG, VERSION, current_config, home, sisters
 from misaka.ui.gui.chats import ChatManager
+from misaka.ui.gui.revision import source_revision
 from misaka.ui.gui.jobs import Jobs
 from misaka.ui.gui.projects import Projects
 from misaka.ui.gui.session_library import SessionLibrary, path_key
@@ -37,7 +38,7 @@ FONTS = frozenset(p.name for p in FONT_DIR.glob("*.woff2")) if FONT_DIR.is_dir()
 # Full native commands are available in an interactive pane, never through a shell.
 COMMANDS = frozenset({"chat", "research", "setup", "init", "board", "allies", "create",
                       "remove", "skills", "bundles", "moa", "web", "doc", "auth"})
-SETTINGS_OPS = frozenset({"overview", "models_overview", "models", "set_key", "logout", "set_default", "verify",
+SETTINGS_OPS = frozenset({"overview", "models_overview", "models", "set_key", "logout", "set_default", "verify", "provider_models", "fetch_provider_models", "test_provider", "save_model_selection",
                           "probe_custom", "ping_custom", "save_custom", "remove_custom",
                           "sisters", "create_sister", "remove_sister", "read_role_file", "write_role_file",
                           "set_research", "init_project", "web_overview", "web_save", "web_provider",
@@ -706,6 +707,7 @@ class GUIServer(ThreadingHTTPServer):
         self.origin = f"http://127.0.0.1:{self.server_port}"
         # Keep the frontend paired with this running backend across source updates.
         self.assets = {name: (STATIC / name).read_bytes() for name in ("index.html", "app.js", "style.css")}
+        self.source_revision = source_revision()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -780,7 +782,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 12})
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 12,
+                                 "source_revision": self.server.source_revision})
                 return
             if self.path == "/api/shutdown":
                 self.reply(200, {"message": "网页服务已关闭；网页对话已停止并保存，独立研究进程继续运行"})

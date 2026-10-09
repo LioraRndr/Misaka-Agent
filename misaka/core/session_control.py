@@ -195,11 +195,14 @@ class SessionControl:
         self._check_input_owner()
         if operation == "models":
             registry = self.session._modelRegistry
-            return {"models": [{"provider": m.provider, "id": m.id, "name": m.name,
+            await registry.refresh({"allowNetwork": False})
+            from misaka.ui.gui.model_preferences import visible_models
+            return {"models": [{"provider": m.provider, "providerName": registry.getProviderDisplayName(m.provider), "id": m.id, "name": m.name,
                                 "reasoning": bool(m.reasoning), "contextWindow": m.contextWindow,
-                                "configured": registry.hasConfiguredAuth(m)} for m in registry.getAvailable()],
-                    "current": self._settings()["model"]}
+                                "configured": registry.hasConfiguredAuth(m)} for m in visible_models(registry.getAvailable())],
+                    "shortlisted": True, "current": self._settings()["model"]}
         if operation == "set_model":
+            await self.session._modelRegistry.refresh({"allowNetwork": False})
             model = self.session._modelRegistry.find(str(command.get("provider", "")), str(command.get("model", "")))
             if model is None:
                 raise ValueError("没有这个模型")

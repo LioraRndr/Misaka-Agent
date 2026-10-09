@@ -308,6 +308,8 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["native_chat"])
         self.assertEqual(payload["project_gui"], 12)
+        self.assertEqual(payload["source_revision"], self.server.source_revision)
+        self.assertEqual(len(payload["source_revision"]), 64)
 
 
 if __name__ == "__main__":

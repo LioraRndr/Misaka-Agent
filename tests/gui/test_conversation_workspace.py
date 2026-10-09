@@ -26,7 +26,7 @@ class Session:
         self.sessionId = "test"
         self.sessionFile = "test.jsonl"
         self.sessionName = "Test"
-        self._modelRegistry = SimpleNamespace(find=Mock(return_value=self.model), getAvailable=lambda: [self.model], hasConfiguredAuth=lambda m: True)
+        self._modelRegistry = SimpleNamespace(refresh=AsyncMock(), find=Mock(return_value=self.model), getAvailable=lambda: [self.model], hasConfiguredAuth=lambda m: True, getProviderDisplayName=lambda p: p)
 
     async def waitForIdle(self):
         await self.idle.wait()
@@ -55,6 +55,9 @@ class Session:
 class QueueTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.session = Session()
+        chosen = patch("misaka.ui.gui.model_preferences.preferences", return_value={"test": {"enabled": True, "models": ["first"]}})
+        chosen.start()
+        self.addCleanup(chosen.stop)
         self.errors, self.settled = [], []
         self.queue = GuiInputQueue(self.session, lambda p: self.session.prompt(p["text"], p),
                                    failed=self.errors.append, settled=lambda: self.settled.append(True))
@@ -235,6 +238,18 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
             result = await host.op_set_thinking({"level": "high"})
             self.assertEqual(result["thinkingLevel"], "high")
             self.assertEqual(emitted.call_args.args[0]["type"], "session_settings")
+
+    async def test_model_menu_refreshes_auth_and_custom_models_without_network(self):
+        host = ChatHost({"workspace": "."})
+        host.session = self.session
+        host.registry = self.session._modelRegistry
+        host.registry.getAvailable = lambda: []
+        async def refresh(_options):
+            host.registry.getAvailable = lambda: [self.session.model]
+        host.registry.refresh.side_effect = refresh
+        result = await host.op_models({})
+        self.assertEqual(result["models"][0]["id"], self.session.model.id)
+        host.registry.refresh.assert_awaited_once_with({"allowNetwork": False})
 
     async def test_original_owner_exposes_models_and_thinking(self):
         control = SessionControl(self.session, SimpleNamespace(spec=None))

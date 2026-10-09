@@ -151,6 +151,11 @@ def op_models_overview(_params: dict) -> dict:
                           "source": "自定义服务" if provider in custom_ids else (status.source or ""),
                           "extras": extras, "extras_install": _extras_command(extras) if extras else None,
                           "custom": provider in custom_ids})
+    from misaka.ui.gui.model_preferences import preferences, initial_refs, selection
+    stored, refs = preferences(), initial_refs()
+    for item in providers:
+        chosen = selection(item["id"], registry.getAll(), stored=stored, refs=refs)
+        item.update(enabled=chosen["enabled"], selected_count=len(chosen["models"]))
     targets = [{"key": None, "label": "全局默认", "hint": "没有单独设置模型的角色都使用它", "pinned": ""},
                {"key": "last_order", "label": "Last Order", "hint": "研究协调者",
                 "pinned": profiles.pinned_model(os.path.join(cfg["roles_root"], "last_order")) or ""}]
@@ -170,8 +175,13 @@ def op_models(params: dict) -> dict:
     current = cfg["default_model"] if cfg["provider"] == provider else None
     models = Wizard._model_choices([m for m in registry.getAll() if m.provider == provider], current)
     if params.get("configured_only"):
-        models = Wizard._model_choices([m for m in registry.getAll() if registry.hasConfiguredAuth(m)], None)
-    return {"models": [{"provider": m.provider, "id": m.id, "name": m.name or m.id,
+        models = [m for m in registry.getAll() if registry.hasConfiguredAuth(m)]
+    if params.get("configured_only") or params.get("enabled_only"):
+        from misaka.ui.gui.model_preferences import visible_models
+        if params.get("enabled_only"):
+            models = [m for m in registry.getAll() if m.provider == provider]
+        models = visible_models(models)
+    return {"models": [{"provider": m.provider, "providerName": registry.getProviderDisplayName(m.provider), "id": m.id, "name": m.name or m.id,
                         "reasoning": bool(getattr(m, "reasoning", False)),
                         "contextWindow": getattr(m, "contextWindow", None)} for m in models]}
 
@@ -250,6 +260,160 @@ def op_verify(params: dict) -> dict:
         return "".join(getattr(part, "text", "") for part in reply.content)
     text = asyncio.run(ping())
     return {"message": f"{provider} 已回复：{text.strip()[:40] or '（空回复）'}"}
+
+
+# ---- provider catalogue and the GUI shortlist -------------------------------------------
+
+
+def _provider_catalog(registry, provider: str) -> list[dict]:
+    from misaka.config.product import setting
+    saved = setting("gui", "modelCatalog", {})
+    cached = saved.get(provider, []) if isinstance(saved, dict) else []
+    catalog = {m.id: {"id": m.id, "name": m.name or m.id, "contextWindow": m.contextWindow,
+                      "maxTokens": m.maxTokens, "reasoning": bool(m.reasoning), "input": list(m.input)}
+               for m in registry.getAll() if m.provider == provider}
+    if isinstance(cached, list) and cached:
+        from misaka.ui.gui.model_preferences import selection
+        selected = set(selection(provider, registry.getAll())["models"])
+        catalog = {key: value for key, value in catalog.items() if key in selected}
+    for item in cached if isinstance(cached, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            catalog[item["id"]] = {**catalog.get(item["id"], {}), **item}
+    return sorted(catalog.values(), key=lambda m: (m.get("name") or m["id"]).casefold())
+
+
+def op_provider_models(params: dict) -> dict:
+    from misaka.ui.gui.model_preferences import selection
+    provider = str(params.get("provider") or "")
+    registry = _runtime().registry
+    if provider not in {m.provider for m in registry.getAll()}:
+        raise ValueError("未知的服务商")
+    chosen = selection(provider, registry.getAll())
+    return {"models": _provider_catalog(registry, provider), "selected": chosen["models"], "enabled": chosen["enabled"],
+            "message": "已保存的目录；点击获取模型列表可更新。"}
+
+
+def _provider_auth(provider: str, model_id: str = ""):
+    registry = _runtime(read_only=False).registry
+    models = [m for m in registry.getAll() if m.provider == provider]
+    if not models:
+        raise ValueError("未知的服务商")
+    if not model_id:
+        from misaka.ui.gui.model_preferences import selection
+        model_id = next(iter(selection(provider, models)["models"]), "")
+    model = next((m for m in models if m.id == model_id), models[0])
+    auth = asyncio.run(registry.getApiKeyAndHeaders(model))
+    if not auth.get("ok"):
+        raise ValueError(auth.get("error") or "请先登录或填写 API Key")
+    return registry, model, auth
+
+
+def op_fetch_provider_models(params: dict) -> dict:
+    from misaka.core.settings_manager import SettingsManager
+    provider = str(params.get("provider") or "")
+    registry, model, auth = _provider_auth(provider)
+    # Subscription bridges do not necessarily expose /models. Never query an
+    # unrelated public API with a subscription token.
+    if model.api not in _CUSTOM_API_IDS:
+        return {**op_provider_models(params),
+                "message": "这个登录方式没有模型列表接口，已读取内置模型目录。"}
+    base = _check_base_url(model.baseUrl)
+    key = auth.get("apiKey") or ""
+    headers = {**_catalog_headers(model.api, key), **(auth.get("headers") or {})}
+    catalog = None
+    from urllib.parse import urlencode
+    for url in _catalog_urls(model.api, base):
+        gathered, seen = {}, set()
+        while url and len(gathered) < 2000:
+            if url in seen or len(seen) >= 20:
+                raise ValueError("模型列表分页过多，请稍后重试")
+            seen.add(url)
+            status, payload = _fetch_one(url, headers, key)
+            if status in {404, 405} and not gathered:
+                break
+            if status in {401, 403}:
+                raise ValueError(f"地址可达，但凭证被拒绝（HTTP {status}）")
+            if not 200 <= status < 300 or payload is None:
+                raise ValueError(f"获取模型列表失败（HTTP {status}）")
+            page, capped = _parse_model_catalog(payload, 2001)
+            gathered.update((m["id"], m) for m in page)
+            if capped or len(gathered) > 2000:
+                raise ValueError("目录超过 2000 个模型，请使用更小的目录")
+            url = ""
+            if isinstance(payload, dict):
+                if payload.get("nextPageToken"):
+                    url = _catalog_urls(model.api, base)[0] + "?" + urlencode({"pageToken": payload["nextPageToken"]})
+                elif payload.get("has_more") and page:
+                    url = _catalog_urls(model.api, base)[0] + "?" + urlencode({"after_id": page[-1]["id"], "limit": 1000})
+        if url:
+            raise ValueError("目录超过 2000 个模型，请使用更小的目录")
+        if gathered:
+            catalog = list(gathered.values())
+            break
+    if not catalog:
+        raise ValueError("服务没有返回可用于对话的模型列表；可以使用已保存的目录。")
+    def mutate(section):
+        all_catalogs = dict(section.get("modelCatalog") or {})
+        all_catalogs[provider] = catalog
+        section["modelCatalog"] = all_catalogs
+    SettingsManager.forRole(None).updateSection("gui", mutate)
+    chosen = op_provider_models(params)
+    # A successful refresh is authoritative for available choices. Keep already
+    # selected entries visible so users can explicitly remove retired models.
+    from misaka.ui.gui.model_preferences import selection
+    selection_data = selection(provider, registry.getAll())
+    selected_ids = set(selection_data["models"])
+    missing = [m for m in chosen["models"] if m["id"] in selected_ids and m["id"] not in {c["id"] for c in catalog}]
+    return {"models": sorted(catalog + missing, key=lambda m: (m.get("name") or m["id"]).casefold()),
+            "selected": selection_data["models"], "enabled": selection_data["enabled"], "message": f"已从服务获取 {len(catalog)} 个模型，勾选后保存即可用于对话。"}
+
+
+def op_test_provider(params: dict) -> dict:
+    provider = str(params.get("provider") or "")
+    _registry, model, auth = _provider_auth(provider, str(params.get("model") or ""))
+    if provider == "openrouter":
+        key = auth.get("apiKey") or ""
+        status, payload = _fetch_one(model.baseUrl.rstrip("/") + "/key",
+                                     _catalog_headers("openai-completions", key), key)
+        if not 200 <= status < 300 or not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise ValueError(f"OpenRouter 凭证测试失败（HTTP {status}）")
+        return {"message": "OpenRouter 连接正常，凭证有效。"}
+    try:
+        return op_verify({"provider": provider, "model": model.id})
+    except Exception as error:
+        raise ValueError(_scrub(str(error), auth.get("apiKey") or "")) from None
+
+
+def op_save_model_selection(params: dict) -> dict:
+    from misaka.core.settings_manager import SettingsManager
+    provider = str(params.get("provider") or "")
+    registry = _runtime().registry
+    if provider not in {m.provider for m in registry.getAll()}:
+        raise ValueError("未知的服务商")
+    ids = params.get("models")
+    if not isinstance(ids, list) or len(ids) > 2000 or any(not isinstance(v, str) for v in ids):
+        raise ValueError("请选择有效的模型")
+    ids = list(dict.fromkeys(ids))
+    catalog = {m["id"]: m for m in _provider_catalog(registry, provider)}
+    if any(v not in catalog for v in ids):
+        raise ValueError("选择中有未知模型，请重新获取模型列表")
+    # Newly discovered models need to be resolvable by actual chat/Sister runtimes.
+    if not isinstance(params.get("enabled", True), bool):
+        raise ValueError("启用状态必须是布尔值")
+    additions = [catalog[v] for v in ids if registry.find(provider, v) is None]
+    if additions:
+        def import_models(data):
+            block = data.setdefault("providers", {}).setdefault(provider, {})
+            existing = {m["id"]: m for m in block.get("models", [])}
+            existing.update((m["id"], m) for m in additions)
+            block["models"] = list(existing.values())
+        _update_models_document(import_models)
+    def mutate(section):
+        choices = dict(section.get("modelSelection") or {})
+        choices[provider] = {"enabled": params.get("enabled", True), "models": ids}
+        section["modelSelection"] = choices
+    SettingsManager.forRole(None).updateSection("gui", mutate)
+    return {"message": f"已保存 {provider} 的 {len(ids)} 个模型"}
 
 
 # ---- a service the built-in catalog does not know ---------------------------------------
@@ -451,7 +615,7 @@ def _catalog_headers(api: str, key: str) -> dict[str, str]:
     return headers
 
 
-def _parse_model_catalog(payload: object) -> tuple[list[dict], bool]:
+def _parse_model_catalog(payload: object, limit: int = _CATALOG_LIMIT) -> tuple[list[dict], bool]:
     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
@@ -471,7 +635,7 @@ def _parse_model_catalog(payload: object) -> tuple[list[dict], bool]:
         elif isinstance(item, dict):
             raw = str(item.get("id") or item.get("name") or "").strip()
             model_id = raw.split("/", 1)[1] if raw.startswith("models/") else raw
-            name = str(item.get("display_name") or item.get("displayName") or model_id).strip()
+            name = str(item.get("display_name") or item.get("displayName") or (item.get("name") if item.get("id") else None) or model_id).strip()
             if name.startswith("models/"):
                 name = model_id
         else:
@@ -479,8 +643,33 @@ def _parse_model_catalog(payload: object) -> tuple[list[dict], bool]:
         if not model_id or model_id in seen or len(model_id) > 256 or any(char in model_id for char in "\r\n\0"):
             continue
         seen.add(model_id)
-        found.append({"id": model_id, "name": name or model_id})
-        if len(found) >= _CATALOG_LIMIT:
+        record = {"id": model_id, "name": name or model_id}
+        if isinstance(item, dict):
+            architecture = item.get("architecture") or {}
+            if architecture.get("output_modalities") and "text" not in architecture["output_modalities"]:
+                continue
+            methods = item.get("supportedGenerationMethods")
+            if isinstance(methods, list) and "generateContent" not in methods:
+                continue
+            for key, raw in (("contextWindow", item.get("context_length") or item.get("inputTokenLimit")),
+                             ("maxTokens", (item.get("top_provider") or {}).get("max_completion_tokens") or item.get("outputTokenLimit"))):
+                if isinstance(raw, int) and raw > 0:
+                    record[key] = raw
+            if "input_modalities" in architecture:
+                inputs = [v for v in architecture["input_modalities"] if v in {"text", "image"}]
+                record["input"] = inputs or ["text"]
+            if "supported_parameters" in item:
+                record["reasoning"] = "reasoning" in (item.get("supported_parameters") or [])
+            pricing = item.get("pricing")
+            if isinstance(pricing, dict):
+                try:
+                    record["cost"] = {"input": max(0, float(pricing.get("prompt") or 0) * 1_000_000),
+                                      "output": max(0, float(pricing.get("completion") or 0) * 1_000_000),
+                                      "cacheRead": 0, "cacheWrite": 0}
+                except (TypeError, ValueError):
+                    pass
+        found.append(record)
+        if len(found) >= limit:
             capped = True
             break
     return found, capped
@@ -510,7 +699,7 @@ def _fetch_one(url: str, headers: dict[str, str], key: str) -> tuple[int, object
                     current = nxt.rstrip("/")
                     continue
                 body = response.content
-                if len(body) > 1_500_000:
+                if len(body) > 8_000_000:
                     raise ValueError("模型列表过大")
                 parsed = None
                 if body:

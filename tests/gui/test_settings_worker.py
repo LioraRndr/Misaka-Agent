@@ -94,6 +94,20 @@ class SettingsWorkerTests(unittest.TestCase):
         saved = json.loads((self.home / "settings.json").read_text(encoding="utf-8"))
         self.assertTrue(saved["research"]["plan_approval"])
 
+    def test_sister_model_pin_crosses_providers_and_can_follow_global_again(self):
+        before = self.call("models_overview")["data"]["global"]
+        created = self.call("create_sister", {"id": "10087", "model": "anthropic/claude-opus-5"})
+        self.assertTrue(created["ok"], created)
+        self.assertEqual(self.call("sisters")["data"]["sisters"][0]["model"], "anthropic/claude-opus-5")
+        changed = self.call("set_default", {"target": "10087", "provider": "google", "model": "gemini-2.5-flash"})
+        self.assertTrue(changed["ok"], changed)
+        overview = self.call("models_overview")["data"]
+        self.assertEqual(overview["global"], before)
+        self.assertEqual(next(t for t in overview["targets"] if t["key"] == "10087")["pinned"], "google/gemini-2.5-flash")
+        cleared = self.call("set_default", {"target": "10087"})
+        self.assertTrue(cleared["ok"], cleared)
+        self.assertEqual(self.call("sisters")["data"]["sisters"][0]["model"], "")
+
     def test_unknown_op_and_service_call(self):
         failed = self.call("not_an_op")
         self.assertFalse(failed["ok"])

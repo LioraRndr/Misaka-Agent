@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import socket
 import subprocess
@@ -23,6 +24,8 @@ SOURCE = Path(__file__).resolve().parents[1]
 RUNTIME = SOURCE / ".gui-runtime"
 REMEMBERED = RUNTIME / "workspace.txt"
 URL_PATTERN = re.compile(r"http://127\.0\.0\.1:\d+/#token=[A-Za-z0-9_-]+")
+# This launcher may run in plain Python, without the provider dependencies installed.
+source_revision = runpy.run_path(str(SOURCE / "misaka" / "ui" / "gui" / "revision.py"))["source_revision"]
 
 
 def url_in_log(path):
@@ -47,7 +50,11 @@ def healthy(url, workspace):
         # version check but cannot serve the current page; restart it instead.
         # project_gui must match server.py's /api/health. Bump both when the
         # server protocol changes, or the launcher will keep an old process.
-        return health.get("version") is not None and health.get("native_chat") is True and health.get("project_gui") == 12
+        # Protocol compatibility alone cannot detect an old process serving its
+        # startup snapshot after a local edit. Match the actual GUI sources too.
+        return (health.get("version") is not None and health.get("native_chat") is True
+                and health.get("project_gui") == 12
+                and health.get("source_revision") == source_revision(SOURCE))
     except (OSError, ValueError, urllib.error.URLError):
         return False
 
@@ -121,6 +128,13 @@ def resolve_workspace(explicit):
     return path
 
 
+def runtime_logs():
+    # A source update can leave the old process alive, with its log handles open.
+    # Give each source revision its own logs instead of truncating those files.
+    revision = source_revision(SOURCE)[:12]
+    return RUNTIME / f"gui-{revision}.log", RUNTIME / f"gui-error-{revision}.log"
+
+
 def main():
     parser = argparse.ArgumentParser(description="启动 MISAKA 中文界面")
     parser.add_argument("--workspace", default=None)
@@ -128,13 +142,12 @@ def main():
     args = parser.parse_args()
     workspace = resolve_workspace(args.workspace)
     RUNTIME.mkdir(exist_ok=True)
-    log = RUNTIME / "gui.log"
-    errors = RUNTIME / "gui-error.log"
+    log, errors = runtime_logs()
     # These logs are UTF-8. Refuse unknown bytes before any truncating write.
     for path in (log, errors):
         if path.exists():
             path.read_bytes().decode("utf-8", errors="strict")
-    url = url_in_log(log)
+    url = url_in_log(log) or url_in_log(RUNTIME / "gui.log")
     if not url or not healthy(url, workspace):
         # Keep the browser origin stable across restarts so recent projects survive.
         port = int(url.split(":")[2].split("/")[0]) if url else 9155
@@ -146,7 +159,7 @@ def main():
         env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONPATH": str(SOURCE)}
         python = interpreter(env)
         with log.open("wb") as output, errors.open("wb") as error:
-            process = subprocess.Popen([python, "-u", "-m", "misaka.ui.gui.server", "--no-browser",
+            process = subprocess.Popen([python, "-u", "-X", "utf8", "-m", "misaka.ui.gui.server", "--no-browser",
                                         "--port", str(port), "--workspace", str(workspace)], cwd=str(SOURCE), env=env,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=error,
                                        close_fds=True, start_new_session=True,
