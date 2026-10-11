@@ -172,10 +172,11 @@
   </section>
 
   <section id="view-skills" class="view page" hidden>
-    <header class="page-head"><div><span class="eyebrow">Capabilities</span><h1>技能库</h1><p>使用现有的分层技能系统，查看、扫描和管理成员的技能。</p></div></header>
+    <header class="page-head"><div><span class="eyebrow">Capabilities</span><h1>技能库</h1><p>修改写回这次读到的技能目录。批准前先看将要写入的路径。</p></div></header>
+    <div id="skill-reviews" class="stack" hidden></div>
     <div class="tool-grid">
       <button class="card tool-card" data-command='["skills","list"]'><i data-icon="skills"></i><h3>已启用技能</h3><p>查看 Sister 当前可用的技能栈</p></button>
-      <button class="card tool-card" data-command='["skills","pending"]'><i data-icon="clock"></i><h3>待审阅技能</h3><p>检查等待批准的技能变更</p></button>
+      <button class="card tool-card" id="open-skill-reviews" type="button"><i data-icon="clock"></i><h3>待审阅技能</h3><p>查看等待批准的修改，以及将要写入的路径</p></button>
       <button class="card tool-card" data-command='["skills","scan"]'><i data-icon="search"></i><h3>扫描项目</h3><p>发现项目中可以复用的技能</p></button>
       <button class="card tool-card" data-command='["bundles","list"]'><i data-icon="layers"></i><h3>技能组合</h3><p>查看角色专属的技能组合</p></button>
       <button class="card tool-card" data-settings="skills"><i data-icon="settings"></i><h3>技能层与来源</h3><p>查看技能目录、审批与可选目录</p></button>

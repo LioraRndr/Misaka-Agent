@@ -815,6 +815,10 @@ select:disabled{opacity:.6;cursor:wait}
 .needs-bar svg.i{color:var(--accent)}
 .needs-bar span{flex:1}
 .node.waiting{border-color:var(--accent-line);background:var(--accent-soft)}
+.skill-review h3{font-size:16px;margin:0 0 8px}
+.skill-review .path-list p{margin:10px 0 4px;color:var(--muted);font-size:13px}
+.skill-review code{display:block;font-size:12.5px;line-height:1.45;word-break:break-all;margin:2px 0}
+.review-diff{max-height:240px;overflow:auto;font:12px/1.5 var(--mono);white-space:pre;background:var(--surface-2,var(--hover));padding:10px 12px;border-radius:8px}
 .pending-run{border-style:dashed}
 .pending-run small{display:inline-flex;align-items:center;gap:6px}
 /* 对话中的交互卡片 */

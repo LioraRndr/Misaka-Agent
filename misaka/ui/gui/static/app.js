@@ -1519,6 +1519,7 @@ async function showView(name) {
   if(name==='team')await loadTeam();
   if(name==='research')await loadResearch();
   if(name==='documents')await loadDocuments();
+  if(name==='skills')await loadSkillReviews();
   if(name==='settings')drawSettingsShell();
 }
 
@@ -1676,6 +1677,7 @@ document.addEventListener('click',e=>{const b=e.target.closest('button,a[data-ac
   if(b.dataset.action==='history')guard(showNativeHistory,b);
   if(b.dataset.key)guard(()=>queueInput('key',{key:b.dataset.key}),b);
   if(b.dataset.settings){e.preventDefault();openSettings(b.dataset.settings);}
+  if(b.id==='open-skill-reviews'){e.preventDefault();guard(()=>showView('skills'));}
   if(b.dataset.command)guard(()=>runCommand(JSON.parse(b.dataset.command),b.querySelector('h3')?.textContent||'MISAKA 命令'),b);});
 $('#sidebar-open').onclick=toggleSidebar;$('#sidebar-toggle').onclick=toggleSidebar;$('#rail-trash').onclick=()=>guard(showTrash);$('#scrim').onclick=()=>setSidebarOpen(false);
 function focusChatSearch(){setSidebarOpen(true);$('#chat-filter').focus();$('#chat-filter').select();}
@@ -2147,11 +2149,12 @@ async function drawSkillsSettings(ticket) {
   const P=ov.paths;
   const layers=section('技能层','技能是带 SKILL.md 的文件夹，角色在需要时读取。按优先顺序：',
     check(null,'角色自己的技能',P.roles+'/<角色>/skills/'),check(null,'所有角色共享',P.shared_skills),
-    check(P.external_names?true:null,'与其他 Agent 工具共享（只读）',P.external_names?(P.external+'：'+(P.external_names.join('、')||'空')):'~/.agents/skills 不存在；其他 Agent 工具创建后会自动出现'));
-  const id=textInput('','待审技能编号');
-  const review=section('审阅与目录','',el('div','btn-row',button('已启用技能',()=>runCommand(['skills','list'],'已启用技能'),'btn sm'),button('待审阅',()=>runCommand(['skills','pending'],'待审阅技能'),'btn sm'),button('扫描项目',()=>runCommand(['skills','scan'],'扫描项目技能'),'btn sm')),
-    el('div','inline-form',id,button('批准',()=>id.value.trim()&&runCommand(['skills','approve',id.value.trim()],'批准技能'),'btn sm primary'),button('拒绝',()=>id.value.trim()&&runCommand(['skills','reject',id.value.trim()],'拒绝技能'),'btn sm')));
+    check(P.external_names?true:null,'与其他 Agent 工具共享',P.external_names?(P.external+'：修改写回这次读到的那一份'):'~/.agents/skills 不存在；其他 Agent 工具创建后会自动出现'));
+  const reviewHost=el('div','stack');
+  const review=section('等待批准','技能库页面也有同样的审批卡。每条列出将写入的源目录，以及正在运行的卡片手里的副本。',reviewHost,
+    el('div','btn-row',button('已启用技能',()=>runCommand(['skills','list'],'已启用技能'),'btn sm'),button('扫描项目',()=>runCommand(['skills','scan'],'扫描项目技能'),'btn sm')));
   settled(ticket,layers,review);
+  loadSkillReviews(reviewHost);
 }
 
 async function drawTerminalSettings(ticket) {
@@ -2182,6 +2185,64 @@ function drawAdvanced(ticket) {
   const panes=projectPanes();
   const ext=panes.length?section('外部终端进程','由终端版 MISAKA 启动的进程。',el('div','set-actions',button('查看 '+panes.length+' 个进程',()=>showView('legacy'),'btn','terminal'))):null;
   settled(ticket, section('本机信息','',summary), cmd, ext, section('网页服务','关闭后网页对话停止并保存；后台研究继续运行。',el('div','set-actions',button('关闭网页服务',shutdownGui,'btn ghost danger','power'))));
+}
+
+// A staged skill write needs a person. The card lists every path that would change.
+let skillReviewSeen=new Set();
+function skillReviewCards(items){
+  const box=el('div','stack');
+  if(!items.length){box.append(el('p','muted','没有等待批准的技能修改。'));return box;}
+  for(const item of items){
+    const card=el('article','card skill-review');
+    card.append(el('h3','',item.summary||'技能修改'),el('p','muted','编号 '+item.id));
+    const paths=el('div','path-list');
+    paths.append(el('p','','将写入的源目录'));
+    for(const p of item.sources||[]) paths.append(el('code','',p));
+    if(!(item.sources||[]).length) paths.append(el('code','','（这条记录没有绑定路径）'));
+    paths.append(el('p','','启动时的副本'));
+    if((item.copies||[]).length){for(const p of item.copies) paths.append(el('code','',p));}
+    else paths.append(el('code','','当前没有正在使用的副本。下一轮会从源目录重新读取。'));
+    card.append(paths);
+    if(item.diff) card.append(el('pre','review-diff',item.diff));
+    if(item.error) card.append(el('p','run-error',item.error));
+    if(!item.error) card.append(el('div','set-actions',
+      button('批准',()=>decideSkill(item.id,'approve'),'btn sm primary','check'),
+      button('拒绝',()=>decideSkill(item.id,'reject'),'btn sm','x')));
+    box.append(card);
+  }
+  return box;
+}
+async function loadSkillReviews(host){
+  const data=await api('skill_reviews',{diff:true});
+  const items=data.items||[];
+  const page=$('#skill-reviews');
+  if(page){page.hidden=!items.length;page.replaceChildren();if(items.length)page.append(el('h2','','等待批准'),skillReviewCards(items));}
+  if(host) host.replaceChildren(skillReviewCards(items));
+  return items;
+}
+async function decideSkill(id,decision){
+  const result=await api('skill_decide',{id,decision});
+  const paths=[...(result.paths||[]),...(result.copies||[])];
+  toast(decision==='approve'?(paths.length?'已写入 '+paths.length+' 个路径':'已批准'):'已拒绝');
+  if(result.copy_errors?.length) toast(result.copy_errors[0],true);
+  skillReviewSeen.delete(id);
+  if(view==='skills') await loadSkillReviews();
+  if(view==='settings') drawSettingsShell();
+}
+async function checkSkillReviews(){
+  try{
+    const data=await api('skill_reviews');
+    const items=data.items||[];
+    const ids=new Set(items.map(item=>item.id));
+    for(const item of items){
+      if(skillReviewSeen.has(item.id)) continue;
+      const where=(item.sources||[])[0]||'';
+      toast('有技能修改等待批准');
+      systemNotify('技能修改等待批准',(item.summary||'技能修改')+(where?'\n'+where:''),'skill-'+item.id,()=>guard(()=>showView('skills')));
+    }
+    skillReviewSeen=ids;
+    if(view==='skills') await loadSkillReviews();
+  }catch{}
 }
 
 // Plan approval is the one moment a run needs the person; surface it wherever they are.
@@ -2344,6 +2405,6 @@ async function boot(){
     await loadSaved();guard(refreshProjects);checkResearchWaiting();loadRoster().then(()=>{if(selectedChat)renderChat();});
   }catch(e){$('#notice').hidden=false;$('#notice').textContent='启动失败：'+e.message;}
   pollChats();
-  setInterval(()=>{if(guiClosed)return;refreshScreen();if(++refreshTick%6===0){refreshState();if(view==='research')guard(loadResearch);if(refreshTick%24===0){guard(loadSaved);guard(refreshProjects);}if(refreshTick%12===0)checkResearchWaiting();}if(refreshTick%120===0&&!selectedChat)updateChatHeader();},500);
+  setInterval(()=>{if(guiClosed)return;refreshScreen();if(++refreshTick%6===0){refreshState();if(view==='research')guard(loadResearch);if(refreshTick%24===0){guard(loadSaved);guard(refreshProjects);}if(refreshTick%12===0){checkResearchWaiting();checkSkillReviews();}}if(refreshTick%120===0&&!selectedChat)updateChatHeader();},500);
 }
 boot();

@@ -378,6 +378,15 @@ class Bridge:
                                        if s.get("deleted_at")], key=lambda s: s["deleted_at"], reverse=True)}
         if action == "composer_skills":
             return self.composer_skills(data)
+        if action == "skill_reviews":
+            from misaka.core.skills.review import pending_items
+            return {"items": pending_items(with_diff=bool(data.get("diff")))}
+        if action == "skill_decide":
+            from misaka.core.skills.review import decide
+            decision = data.get("decision")
+            if decision not in {"approve", "reject"}:
+                raise ValueError("只能批准或拒绝")
+            return decide(str(data.get("id") or ""), decision)
         if action == "composer_files":
             cwd = workspace_path(data.get("workspace", self.workspace))
             query = data.get("query", "")

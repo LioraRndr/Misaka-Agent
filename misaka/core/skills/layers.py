@@ -210,12 +210,12 @@ def project_skill_tree_fingerprint(root):
 
 
 def external_skills_dirs():
-    """The read-only external directories: ``~/.agents/skills`` (the cross-harness global
-    location pi mounts, always on when it exists) followed by whatever ``external_dirs``
-    in the ``skills`` section of settings.json lists (hermes get_external_skills_dirs): ``~`` and ``$VAR`` expanded, a
-    relative path taken from ``~/.misaka``, only directories that exist, duplicates and the
-    shared layer dropped. They appear in the index; new skills are always written to the
-    role's own layer."""
+    """External skill directories. ``~/.agents/skills`` (the cross-harness global
+    location, always on when it exists) is followed by ``external_dirs`` in the
+    ``skills`` section of settings.json: ``~`` and ``$VAR`` expanded, a relative path
+    taken from ``~/.misaka``, only directories that exist, duplicates and the shared
+    layer dropped. They appear in the index. An approved edit is written back to the
+    directory the skill was loaded from. New skills are created in the role's own layer."""
     raw = load_skills_config().get("external_dirs") or []
     if isinstance(raw, str):
         raw = [raw]
