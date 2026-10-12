@@ -613,7 +613,10 @@ function turnSegments(turn, ch, live) {
   return segs;
 }
 function segSig(seg, ch, live) {
-  if (seg.type==='tools') return 'tools:'+seg.calls.map(c=>[c.id,toolNameOf(c),toolState(c,ch,live),JSON.stringify(toolArgs(c)??'').length,(ch.results[c.id]?.content||[]).length].join(',')).join('|');
+  if (seg.type==='tools') return 'tools:'+seg.calls.map(c=>{
+    const d=ch.results[c.id]?.details, stage=d?.staged&&d.pending_id?d.pending_id+':'+(skillDecisions.get(d.pending_id)||'')+':'+(skillDiffState.get(d.pending_id)?.loaded?skillDiffState.get(d.pending_id).text.length:0):'';
+    return [c.id,toolNameOf(c),toolState(c,ch,live),JSON.stringify(toolArgs(c)??'').length,(ch.results[c.id]?.content||[]).length,stage].join(',');
+  }).join('|');
   if (seg.type==='text'||seg.type==='thinking') return seg.type+':'+seg.text.length+':'+seg.live;
   return seg.type+':'+(seg.text||seg.label||'');
 }
@@ -666,7 +669,7 @@ function toolsSeg(seg, ch, live) {
     const call=seg.calls[0], d=el('details','toolchain single tc-step '+status), sum=el('summary');
     toolStepSummary(call, states[0], sum, ch);d.append(sum, toolDetail(call, ch));
     trackDetails(d,sum,'ts:'+call.id,false);
-    return d;
+    return skillReviewWrap(d, seg, ch);
   }
   const d=el('details','toolchain '+status), sum=el('summary'), ic=el('span','tc-icon');
   ic.append(running?el('span','spinner'):icon(status==='error'?'alert':status==='done'?'check':'wrench'));
@@ -678,7 +681,18 @@ function toolsSeg(seg, ch, live) {
   seg.calls.forEach((call,i)=>{const step=el('details','tc-step '+states[i]), s=el('summary');toolStepSummary(call,states[i],s,ch);step.append(s,toolDetail(call,ch));trackDetails(step,s,'ts:'+call.id,false);steps.append(step);});
   d.append(sum, steps);
   trackDetails(d,sum,'tc:'+seg.calls[0].id,running);
-  return d;
+  return skillReviewWrap(d, seg, ch);
+}
+function skillReviewWrap(node, seg, ch) {
+  const cards=[];
+  for (const call of seg.calls) {
+    const details=ch.results[call.id]?.details;
+    if (toolNameOf(call)==='skill_manage'&&details?.staged&&details.pending_id) cards.push(inlineSkillCard(details));
+  }
+  if (!cards.length) return node;
+  const wrap=el('div','stack');
+  wrap.append(node, ...cards);
+  return wrap;
 }
 function segmentNode(seg, ch, live, key) {
   if (seg.type==='text') return textSeg(seg);
@@ -2189,6 +2203,27 @@ function drawAdvanced(ticket) {
 
 // A staged skill write needs a person. The card lists every path that would change.
 let skillReviewSeen=new Set();
+const skillDecisions=new Map();
+const skillDiffState=new Map();
+function inlineSkillCard(details){
+  const id=details.pending_id, card=el('article','card skill-review');
+  card.append(el('h3','',details.gist||'技能修改等待批准'));
+  const paths=el('div','path-list'), sources=details.destinations||[], copies=details.copies||[];
+  paths.append(el('p','','将写入的源目录'));
+  if(sources.length){for(const p of sources)paths.append(el('code','',p));}else paths.append(el('code','','（这条记录没有绑定路径）'));
+  paths.append(el('p','','启动时的副本'));
+  if(copies.length){for(const p of copies)paths.append(el('code','',p));}else paths.append(el('code','','当前没有正在使用的副本。下一轮会从源目录重新读取。'));
+  card.append(paths);
+  const decided=skillDecisions.get(id);
+  if(decided){card.append(el('p','',decided==='approve'?'已批准，已写入上面的路径。':'已拒绝，正式文件没有改。'));return card;}
+  const diff=skillDiffState.get(id);
+  if(diff?.text)card.append(el('pre','review-diff',diff.text));
+  else if(!diff){skillDiffState.set(id,{loaded:false,text:''});api('skill_reviews',{diff:true}).then(data=>{const item=(data.items||[]).find(i=>i.id===id);skillDiffState.set(id,{loaded:true,text:item?.diff||''});if(view==='chat')renderChat();}).catch(()=>skillDiffState.set(id,{loaded:true,text:''}));}
+  card.append(el('div','set-actions',
+    button('批准',()=>decideSkill(id,'approve'),'btn sm primary','check'),
+    button('拒绝',()=>decideSkill(id,'reject'),'btn sm','x')));
+  return card;
+}
 function skillReviewCards(items){
   const box=el('div','stack');
   if(!items.length){box.append(el('p','muted','没有等待批准的技能修改。'));return box;}
@@ -2222,10 +2257,12 @@ async function loadSkillReviews(host){
 }
 async function decideSkill(id,decision){
   const result=await api('skill_decide',{id,decision});
+  skillDecisions.set(id,decision);
   const paths=[...(result.paths||[]),...(result.copies||[])];
   toast(decision==='approve'?(paths.length?'已写入 '+paths.length+' 个路径':'已批准'):'已拒绝');
   if(result.copy_errors?.length) toast(result.copy_errors[0],true);
   skillReviewSeen.delete(id);
+  if(view==='chat') renderChat();
   if(view==='skills') await loadSkillReviews();
   if(view==='settings') drawSettingsShell();
 }

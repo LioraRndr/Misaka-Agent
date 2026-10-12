@@ -835,7 +835,7 @@ def manage(action=None, name=None, *, profile_dir, content=None, file_path=None,
                         detail += "\n启动时的副本：\n" + "\n".join(copies)
                     return {"success": True, "staged": True, "pending_id": staged["id"], "gist": gist,
                             "destinations": shown, "copies": copies,
-                            "message": note + "\n" + detail + "\n在图形界面的「技能库」页面批准或拒绝。"}
+                            "message": note + "\n" + detail + "\n批准或拒绝的卡片就在这条对话里。技能库页面也能处理同一条。"}
             from .vendor.skill_provenance import get_current_write_origin
             evidence = {"profile_dir": profile_dir, "workspace": workspace,
                         "operations": canonical, "bound_operations": bound, "write_origin": payload["write_origin"],
