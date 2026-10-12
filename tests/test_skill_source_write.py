@@ -5,6 +5,10 @@ import tempfile
 import types
 from pathlib import Path
 
+import pytest
+
+from misaka.core.skills import write as skill_write
+
 from misaka.config import home
 from misaka.core.skills import layers, manage, review, sandbox
 from misaka.core.skills.vendor.skill_provenance import (
@@ -51,6 +55,21 @@ def _allow(external):
 
 def _place():
     return Path(tempfile.mkdtemp(prefix="skill-src-"))
+
+
+def test_a_nested_skill_snapshot_survives_windows_path_spelling():
+    root = _place()
+    skill = root / "skill"
+    (skill / "references").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("top", encoding="utf-8")
+    (skill / "references" / "note.md").write_text("nested", encoding="utf-8")
+    image = skill_write.tree_image(skill)
+    dest = root / "restored"
+    skill_write._materialize(dest, image)
+    assert (dest / "references" / "note.md").read_text(encoding="utf-8") == "nested"
+    with pytest.raises(ValueError, match="Duplicate or invalid path"):
+        skill_write._checked_snapshot([{"path": "references\\note.md", "sha256": "a" * 64, "mode": 0o644}])
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def test_an_edit_returns_to_the_loaded_directory_and_the_startup_copy():
