@@ -30,6 +30,7 @@ from misaka.ui.gui.session_library import SessionLibrary, path_key
 from misaka.ui.gui.composer import ComposerFiles, referenced_message, skill_catalogue, skill_role
 from misaka.ui.gui.services import ResearchProcesses, Settings
 from misaka.ui.gui.terminals import open_terminal
+from misaka.ui.gui.workbench import git_changes, git_diff, open_path
 from misaka.ui.panel import client
 
 STATIC = Path(__file__).with_name("static")
@@ -43,6 +44,13 @@ SETTINGS_OPS = frozenset({"overview", "models_overview", "models", "set_key", "l
                           "sisters", "create_sister", "remove_sister", "read_role_file", "write_role_file",
                           "set_research", "init_project", "web_overview", "web_save", "web_provider",
                           "web_enable", "web_browser", "terminal", "set_terminal"})
+# Text the side panel can preview. Secrets such as .env stay out on purpose.
+PREVIEW_TEXT = frozenset({".md", ".markdown", ".txt", ".csv", ".tsv", ".json", ".jsonl", ".log", ".py", ".pyi", ".yaml", ".yml", ".toml",
+                          ".ini", ".cfg", ".conf", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".html", ".htm",
+                          ".css", ".scss", ".less", ".xml", ".svg", ".rst", ".tex", ".bib", ".r", ".rmd", ".qmd", ".ipynb", ".sql",
+                          ".sh", ".bash", ".zsh", ".ps1", ".psm1", ".bat", ".cmd", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".java",
+                          ".kt", ".go", ".rs", ".rb", ".php", ".lua", ".swift", ".m", ".jl", ".scala", ".dart", ".gradle", ".diff", ".patch"})
+PREVIEW_NAMES = frozenset({"Dockerfile", "Makefile", "LICENSE", "README", "CHANGELOG", "Procfile", ".gitignore", ".editorconfig"})
 SETUP_SECTIONS = {"environment", "model", "sisters", "skills", "documents", "web", "research", "project"}
 KEYS = {"enter": "\r", "escape": "\x1b", "up": "\x1b[A", "down": "\x1b[B",
         "right": "\x1b[C", "left": "\x1b[D", "tab": "\t", "backspace": "\x7f",
@@ -370,6 +378,12 @@ class Bridge:
     def dispatch(self, action, data):
         if action == "open_terminal":
             return open_terminal(workspace_path(data.get("workspace", self.workspace)))
+        if action == "open_path":
+            return open_path(workspace_path(data.get("workspace", self.workspace)), str(data.get("path", ".")), bool(data.get("reveal")))
+        if action == "git_changes":
+            return git_changes(workspace_path(data.get("workspace", self.workspace)))
+        if action == "git_diff":
+            return git_diff(workspace_path(data.get("workspace", self.workspace)), required_text(data, "path", 4096))
         if action == "session_update":
             return self.session_update(data)
         if action == "session_trash":
@@ -683,25 +697,30 @@ class Bridge:
                 for p in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.casefold())):
                     if p.name.startswith(".") or not p.resolve().is_relative_to(cwd):
                         continue
-                    entries.append({"name": p.name, "path": p.relative_to(cwd).as_posix(), "directory": p.is_dir()})
+                    try:
+                        info = p.stat()
+                    except OSError:
+                        continue
+                    entries.append({"name": p.name, "path": p.relative_to(cwd).as_posix(), "directory": p.is_dir(),
+                                    "size": None if p.is_dir() else info.st_size, "modified": info.st_mtime})
                     if len(entries) >= 500:
                         break
-                return {"entries": entries, "path": target.relative_to(cwd).as_posix()}
+                return {"entries": entries, "path": target.relative_to(cwd).as_posix(), "truncated": len(entries) >= 500}
             image_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
-            if target.suffix.lower() not in image_types and target.suffix.lower() not in {".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml",
-                                            ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".xml", ".svg", ".rst", ".sql", ".sh", ".ps1"}:
+            if target.suffix.lower() not in image_types and target.suffix.lower() not in PREVIEW_TEXT and target.name not in PREVIEW_NAMES:
                 raise ValueError("此格式暂不支持预览，请用本机应用打开")
-            if target.stat().st_size > 2 * 1024 * 1024:
+            info = target.stat()
+            if info.st_size > 2 * 1024 * 1024:
                 raise ValueError("文件超过 2 MB，请用本机应用打开")
             raw = target.read_bytes()
+            meta = {"path": target.relative_to(cwd).as_posix(), "size": info.st_size, "modified": info.st_mtime}
             if target.suffix.lower() in image_types:
-                return {"image": "data:" + image_types[target.suffix.lower()] + ";base64," + base64.b64encode(raw).decode("ascii"),
-                        "path": target.relative_to(cwd).as_posix()}
+                return {"image": "data:" + image_types[target.suffix.lower()] + ";base64," + base64.b64encode(raw).decode("ascii"), **meta}
             try:
                 content = raw.decode("utf-8-sig")
             except UnicodeDecodeError:
                 raise ValueError("文件不是 UTF-8，已停止预览以避免乱码；原文件未修改") from None
-            return {"content": content, "path": target.relative_to(cwd).as_posix()}
+            return {"content": content, **meta}
         raise ValueError("未知操作")
 
 
@@ -791,7 +810,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 12,
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 13,
                                  "source_revision": self.server.source_revision})
                 return
             if self.path == "/api/shutdown":
