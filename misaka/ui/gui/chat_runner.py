@@ -24,11 +24,20 @@ import json
 import os
 import sys
 import threading
+import uuid
 
 from misaka.modes.jsonl import to_json_event, to_jsonable
 from misaka.core.gui_input_queue import GuiInputQueue
 
 _WRITE_LOCK = threading.Lock()
+
+# A side question ("/btw") borrows the conversation so far but never joins it. It keeps
+# the main tool declarations so the provider's prompt cache still matches, and refuses
+# every call that is not a read.
+SIDE_NOTE = ("（侧边对话：用户顺带提出一个旁支问题，问答不会写入主对话。请结合以上对话直接、简洁地回答。"
+             "需要时只能读取或搜索资料，不要修改、创建或删除文件，也不要运行命令。）\n\n")
+SIDE_TOOLS = frozenset({"read", "grep", "find", "ls", "web_fetch", "web_search", "x_search"})
+SIDE_LIMIT = 6
 
 
 def emit(payload: dict) -> None:
@@ -54,6 +63,40 @@ def _image_content(value: dict) -> dict:
     if not isinstance(mime, str) or not mime.startswith("image/"):
         raise ValueError("仅支持图片附件")
     return {"type": "image", "data": data, "mime": mime}
+
+
+def _field(value, key):
+    return value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+
+
+def _settled_messages(messages) -> list:
+    """The longest prefix whose tool calls all have results: a side question asked while
+    the main run is mid-call must not inherit a call the provider would reject."""
+    pending, cut = set(), 0
+    for index, message in enumerate(messages):
+        role = _field(message, "role")
+        if role == "assistant":
+            pending |= {_field(block, "id") for block in _field(message, "content") or []
+                        if _field(block, "type") == "toolCall"}
+        elif role == "toolResult":
+            pending.discard(_field(message, "toolCallId"))
+        if not pending:
+            cut = index + 1
+    return list(messages[:cut])
+
+
+def _without_side_note(message):
+    """The browser shows the question as typed, not the instruction riding in front of it."""
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return message
+    content = message.get("content")
+    if isinstance(content, str):
+        return {**message, "content": content.removeprefix(SIDE_NOTE)}
+    if isinstance(content, list):
+        return {**message, "content": [{**block, "text": str(block.get("text", "")).removeprefix(SIDE_NOTE)}
+                                       if isinstance(block, dict) and block.get("type") == "text" else block
+                                       for block in content]}
+    return message
 
 
 def _model_summary(model) -> dict | None:
@@ -147,6 +190,7 @@ class ChatHost:
         self._unsubscribe = None
         self.ui = GuiUIContext()
         self.input_queue = None
+        self.sides: dict[str, dict] = {}
 
     # ---- assembly (the engine.main skeleton, minus every terminal concern) ----
 
@@ -308,7 +352,8 @@ class ChatHost:
             "streaming": self.session.isStreaming,
             "pendingPrompts": self.input_queue.snapshot() if self.input_queue else [],
             "queuePaused": self.input_queue.paused if self.input_queue else False,
-            "capabilities": ["models", "set_model", "set_thinking", "queue", "send_now", "withdraw"],
+            "capabilities": ["models", "set_model", "set_thinking", "queue", "send_now", "withdraw",
+                             "fork", "rewind", "side"],
         }
 
     def _history(self) -> list:
@@ -402,12 +447,155 @@ class ChatHost:
         return self._session_status()
 
     def op_snapshot(self, _params: dict) -> dict:
-        return {"messages": self._history(), "meta": self._session_status()}
+        return {"messages": self._history(), "meta": self._session_status(),
+                "sides": [{"id": side_id, "streaming": side["agent"].state.isStreaming,
+                           "messages": [_without_side_note(to_jsonable(m))
+                                        for m in side["agent"].state.messages[side["base"]:]
+                                        if _field(m, "role") not in (None, "system")]}
+                          for side_id, side in self.sides.items()]}
+
+    # ---- branches: fork a turn into a new chat, take back the last turn, restore it ----
+
+    def op_fork(self, params: dict) -> dict:
+        from misaka.ui.gui.branching import fork_file, turn_end
+        manager = self.session.sessionManager
+        leaf = turn_end(manager.getBranch(), params.get("timestamp"))
+        if self.session.isStreaming and leaf == manager.getLeafId():
+            raise ValueError("这一轮回复还没有结束，请等它完成后再分叉")
+        source = self.session.sessionFile
+        if not source or not os.path.isfile(source):
+            raise ValueError("这段对话还没有保存，请等第一条回复完成后再分叉")
+        return {"session_path": fork_file(source, leaf_id=leaf, name=params.get("name"))}
+
+    async def op_rewind(self, params: dict) -> dict:
+        """Move the leaf to just before the last user message. Nothing is deleted: the
+        turn stays in the session tree, so ``restore`` can return to it."""
+        from misaka.ui.gui.branching import last_user_entry
+        if self.session.isStreaming or self.input_queue.snapshot():
+            raise ValueError("请等当前回复和排队消息处理完再撤回")
+        manager = self.session.sessionManager
+        target = last_user_entry(manager.getBranch())
+        if target is None:
+            raise ValueError("没有可以撤回的对话")
+        expected = params.get("timestamp")
+        if expected is not None and _field(target["message"], "timestamp") != expected:
+            raise ValueError("对话已经更新，请刷新后再撤回")
+        leaf = manager.getLeafId()
+        result = await self.session.navigateTree(str(target["id"]))
+        if result.get("cancelled"):
+            raise ValueError("扩展取消了这次撤回")
+        self._pin_leaf()
+        content = _field(target["message"], "content")
+        images = [{"data": _field(block, "data"), "mime": _field(block, "mimeType") or "image/png"}
+                  for block in (content if isinstance(content, list) else []) if _field(block, "type") == "image"]
+        emit({"type": "history", "messages": self._history()})
+        return {"text": result.get("editorText") or "", "images": images, "leaf_id": leaf}
+
+    async def op_restore(self, params: dict) -> dict:
+        """Return to the leaf a rewind left. A reply started since then is stopped first;
+        it stays in the tree as an abandoned branch."""
+        leaf = params.get("leaf_id")
+        if not isinstance(leaf, str) or self.session.sessionManager.getEntry(leaf) is None:
+            raise ValueError("找不到撤回前的对话，无法还原")
+        if self.session.isStreaming:
+            self.input_queue.pause()
+            self.ui.cancel_all()
+            await self.session.abort()
+        await self.session.navigateTree(leaf)
+        self._pin_leaf()
+        emit({"type": "history", "messages": self._history()})
+        return {"restored": True}
+
+    def _pin_leaf(self) -> None:
+        """A reopened session resumes at its file's last entry, and moving the leaf writes
+        nothing. Restating the name records the position without touching the context."""
+        manager = self.session.sessionManager
+        name = manager.getSessionName()
+        if name and manager.getLeafId() is not None:
+            manager.appendSessionInfo(name)
+
+    # ---- side conversations ----
+
+    def _side_agent(self):
+        from misaka.agent.agent import Agent
+        from misaka.agent.types import BeforeToolCallResult
+
+        main = self.session.agent
+
+        async def read_only(context, _signal=None):
+            name = _field(context.toolCall, "name")
+            if name in SIDE_TOOLS:
+                return None
+            return BeforeToolCallResult(block=True, reason=f"侧边对话只读，不能使用 {name}；请只读取或搜索资料后作答。")
+
+        return Agent({
+            "initialState": {"systemPrompt": "", "model": main.state.model, "thinkingLevel": main.state.thinkingLevel,
+                             "tools": list(main.state.tools), "messages": _settled_messages(main.state.messages)},
+            "convertToLlm": main.convertToLlm, "streamFn": main.streamFn, "beforeToolCall": read_only,
+            # Its own routing id: the main session's cache warmer must not adopt this context.
+            "sessionId": f"{self.session.sessionId}-side", "transport": main.transport,
+            "thinkingBudgets": main.thinkingBudgets, "maxRetryDelayMs": main.maxRetryDelayMs,
+        })
+
+    def op_side(self, params: dict) -> dict:
+        text = params.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > 262144:
+            raise ValueError("问题不能为空，且不能超过 262144 个字符")
+        side_id = params.get("side_id")
+        side = self.sides.get(side_id) if isinstance(side_id, str) else None
+        if side is None:
+            idle = [key for key, value in self.sides.items() if not value["agent"].state.isStreaming]
+            while len(self.sides) >= SIDE_LIMIT and idle:
+                self.op_side_close({"side_id": idle.pop(0)})
+            if len(self.sides) >= SIDE_LIMIT:
+                raise ValueError("侧边对话太多，请先停止其中一个")
+            side_id, agent = uuid.uuid4().hex[:10], self._side_agent()
+            side = {"agent": agent, "base": len(agent.state.messages), "task": None}
+            agent.subscribe(self._side_listener(side_id))
+            self.sides[side_id] = side
+            text = SIDE_NOTE + text
+        if side["task"] is not None and not side["task"].done():
+            raise ValueError("侧边对话还在回复，请稍候或先停止")
+        side["task"] = asyncio.get_running_loop().create_task(self._run_side(side_id, side["agent"], text))
+        return {"side_id": side_id}
+
+    def _side_listener(self, side_id: str):
+        def on_event(event, _signal=None) -> None:
+            try:
+                payload = to_json_event(event)
+                if isinstance(payload, dict) and "message" in payload:
+                    payload["message"] = _without_side_note(payload["message"])
+                emit({"type": "side_event", "side": side_id, "event": payload})
+            except Exception:  # noqa: BLE001, S110 - optional UI events must not interrupt the stream
+                pass
+        return on_event
+
+    async def _run_side(self, side_id: str, agent, text: str) -> None:
+        try:
+            await agent.prompt(text)
+        except Exception as error:  # noqa: BLE001 - the browser shows the failure in the side panel
+            emit({"type": "side_error", "side": side_id, "message": str(error) or type(error).__name__})
+
+    async def op_side_stop(self, params: dict) -> dict:
+        side = self.sides.get(params.get("side_id"))
+        if side is not None:
+            side["agent"].abort()
+            await side["agent"].waitForIdle()
+        return {"stopped": side is not None}
+
+    def op_side_close(self, params: dict) -> dict:
+        side = self.sides.pop(params.get("side_id"), None)
+        if side is not None:
+            side["agent"].abort()
+            emit({"type": "side_closed", "side": params.get("side_id")})
+        return {"closed": side is not None}
 
     ASYNC_OPS = {"stop": op_stop, "compact": op_compact, "send_now": op_send_now,
-                 "models": op_models, "set_model": op_set_model, "set_thinking": op_set_thinking, "rename": op_rename}
+                 "models": op_models, "set_model": op_set_model, "set_thinking": op_set_thinking, "rename": op_rename,
+                 "rewind": op_rewind, "restore": op_restore, "side_stop": op_side_stop}
     SYNC_OPS = {"prompt": op_prompt, "skills": op_skills, "status": op_status, "snapshot": op_snapshot,
-                "ui_response": op_ui_response, "withdraw": op_withdraw}
+                "ui_response": op_ui_response, "withdraw": op_withdraw, "fork": op_fork,
+                "side": op_side, "side_close": op_side_close}
 
     async def _execute(self, request: dict, handler, params: dict) -> None:
         try:
@@ -465,6 +653,8 @@ class ChatHost:
     async def _dispose(self):
         if self.input_queue is not None:
             self.input_queue.clear()
+        for side in self.sides.values():
+            side["agent"].abort()
         try:
             if self.runtime is not None:
                 await self.runtime.dispose()

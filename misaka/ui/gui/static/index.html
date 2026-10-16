@@ -92,6 +92,8 @@
           <div class="cb-left">
             <button type="button" class="icon-btn round" id="attach-btn" title="添加图片（也可粘贴或拖入）" aria-label="添加图片"><i data-icon="plus"></i></button>
             <input type="file" id="attach-input" accept="image/*" multiple hidden>
+            <button type="button" class="icon-btn round" id="rewind-btn" title="撤回上一轮" aria-label="撤回上一轮" hidden><i data-icon="undo"></i></button>
+            <button type="button" class="pill-btn restore-btn" id="restore-btn" title="还原刚才撤回的那一轮" hidden><i data-icon="redo"></i><span>还原</span></button>
             <button type="button" class="pill-btn" id="agent-pick" title="选择对话对象" aria-haspopup="menu"><span class="mini-seal" id="agent-seal">L</span><span id="agent-label">Last Order</span><i data-icon="chevron-down"></i></button>
           </div>
           <div class="cb-right">
@@ -122,6 +124,7 @@
           <button id="context-files" role="tab" data-context-tab="files" aria-controls="context-body" aria-selected="false" title="文件：浏览与预览项目文件（Ctrl+Alt+3）"><i data-icon="folder"></i><span>文件</span></button>
           <button id="context-tasks" role="tab" data-context-tab="tasks" aria-controls="context-body" aria-selected="false" title="任务：任务卡与等待确认的研究（Ctrl+Alt+4）"><i data-icon="task"></i><span>任务</span><em class="ctx-badge" hidden></em></button>
           <button id="context-sisters" role="tab" data-context-tab="sisters" aria-controls="context-body" aria-selected="false" title="Sisters：与 Sister 并行对话（Ctrl+Alt+5）"><i data-icon="team"></i><span>Sisters</span><em class="ctx-badge" hidden></em></button>
+          <button id="context-side" role="tab" data-context-tab="side" aria-controls="context-body" aria-selected="false" title="侧边对话：带着当前上下文顺带提问，只读，不写入主对话（Ctrl+Alt+6 · /btw）"><i data-icon="chats"></i><span>侧边对话</span></button>
         </div>
         <div class="context-head-actions">
           <button id="context-wide" class="icon-btn" title="加宽侧栏" aria-label="加宽侧栏" aria-pressed="false"><i data-icon="expand"></i></button>

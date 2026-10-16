@@ -177,19 +177,7 @@ class Bridge:
                 raise ValueError("未知的 Sister；请从协作成员列表选择")
             spec["role"] = role
         if data.get("session_path"):
-            path = os.path.abspath(required_text(data, "session_path", 1024))
-            if not path.endswith(".jsonl") or not Path(path).is_file():
-                raise ValueError("会话文件不存在，请刷新历史列表")
-            if path in self._live_pane_session_paths():
-                raise ValueError("该会话正在终端窗格中运行；请先在那个窗格中继续，或关闭它")
-            from misaka.core.session_manager import read_session_header
-            header = read_session_header(path)
-            if not header.get("cwd") or os.path.normcase(workspace_path(header["cwd"])) != os.path.normcase(spec["workspace"]):
-                raise ValueError("该会话属于其他项目，请先切换到它的项目文件夹")
-            from misaka.config import sessions as sessions_cfg
-            bucket = Path(sessions_cfg.chat_dir(spec.get("role"), spec["workspace"])).resolve()
-            if not Path(path).resolve().is_relative_to(bucket):
-                raise ValueError("请从当前项目对应成员的历史列表恢复会话；任务记录只能查看")
+            path = self._saved_session(required_text(data, "session_path", 1024), spec.get("role"), spec["workspace"])
             for channel in self.chats.channels.values():
                 source = channel.meta.get("sessionFile") or channel.meta.get("sourceSession")
                 if source and os.path.normcase(os.path.abspath(source)) == os.path.normcase(path) and channel.status in {"starting", "ready"}:
@@ -198,6 +186,45 @@ class Bridge:
         if data.get("continue"):
             spec["continue"] = True
         return self.chats.create(spec)
+
+    def _saved_session(self, value, role, workspace):
+        """A session file this project's chat for ``role`` may continue or fork."""
+        path = os.path.abspath(value)
+        if not path.endswith(".jsonl") or not Path(path).is_file():
+            raise ValueError("会话文件不存在，请刷新历史列表")
+        if path in self._live_pane_session_paths():
+            raise ValueError("该会话正在终端窗格中运行；请先在那个窗格中继续，或关闭它")
+        from misaka.core.session_manager import read_session_header
+        header = read_session_header(path)
+        if not header.get("cwd") or os.path.normcase(workspace_path(header["cwd"])) != os.path.normcase(workspace):
+            raise ValueError("该会话属于其他项目，请先切换到它的项目文件夹")
+        from misaka.config import sessions as sessions_cfg
+        bucket = Path(sessions_cfg.chat_dir(role, workspace)).resolve()
+        if not Path(path).resolve().is_relative_to(bucket):
+            raise ValueError("请从当前项目对应成员的历史列表恢复会话；任务记录只能查看")
+        return path
+
+    def fork_chat(self, data):
+        """Start a new chat from one finished turn; the source conversation is untouched.
+
+        A live chat forks from its runner, which knows where a rewind left the
+        conversation; a saved or ended one forks from its file.
+        """
+        name = data.get("name") if isinstance(data.get("name"), str) else None
+        chat_id = data.get("chat_id")
+        channel = self.chats.channels.get(chat_id) if isinstance(chat_id, str) else None
+        if channel is not None and channel.status == "ready":
+            role, workspace = channel.meta.get("role"), channel.meta["workspace"]
+            path = self.chats.fork(data)["session_path"]
+        else:
+            role = data.get("role") or None
+            if role and role not in sisters():
+                raise ValueError("未知的 Sister；请从协作成员列表选择")
+            workspace = workspace_path(data.get("workspace", self.workspace))
+            source = self._saved_session(required_text(data, "path", 1024), role, workspace)
+            from misaka.ui.gui.branching import fork_file
+            path = fork_file(source, timestamp=data.get("timestamp"), name=name)
+        return self.native_chat({"workspace": workspace, "session_path": path, **({"role": role} if role else {})})
 
     def saved_chat_sessions(self, data):
         if data.get("all_roles"):
@@ -503,7 +530,8 @@ class Bridge:
         # "连接" and cannot be broken by it.
         native = {"chat_native": self.native_chat,
                   "chat_sessions": self.saved_chat_sessions,
-                  "chat_snapshot": self.chat_snapshot}
+                  "chat_snapshot": self.chat_snapshot,
+                  "chat_fork": self.fork_chat}
         if action in native:
             return native[action](data)
         if action == "chat_send" or (action == "chat_send_now" and data.get("text")):
@@ -514,7 +542,9 @@ class Bridge:
                    "chat_models": self.chats.models, "chat_set_model": self.chats.set_model,
                    "chat_set_thinking": self.chats.set_thinking, "chat_rename": self.chats.rename,
                   "chat_ui_response": self.chats.ui_response, "chat_send_now": self.chats.send_now,
-                  "chat_withdraw": self.chats.withdraw}
+                  "chat_withdraw": self.chats.withdraw, "chat_rewind": self.chats.rewind,
+                  "chat_restore": self.chats.restore, "chat_side": self.chats.side,
+                  "chat_side_stop": self.chats.side_stop, "chat_side_close": self.chats.side_close}
         if action in proxied:
             return proxied[action](data)
         if action == "chat_close":
@@ -810,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/health":
                 # native_chat lets the launcher detect and replace a pre-refactor
                 # server process that would otherwise pass the version check.
-                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 13,
+                self.reply(200, {"version": VERSION, "pid": os.getpid(), "native_chat": True, "project_gui": 14,
                                  "source_revision": self.server.source_revision})
                 return
             if self.path == "/api/shutdown":

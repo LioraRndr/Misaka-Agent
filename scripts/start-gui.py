@@ -53,7 +53,7 @@ def healthy(url, workspace):
         # Protocol compatibility alone cannot detect an old process serving its
         # startup snapshot after a local edit. Match the actual GUI sources too.
         return (health.get("version") is not None and health.get("native_chat") is True
-                and health.get("project_gui") == 13
+                and health.get("project_gui") == 14
                 and health.get("source_revision") == source_revision(SOURCE))
     except (OSError, ValueError, urllib.error.URLError):
         return False

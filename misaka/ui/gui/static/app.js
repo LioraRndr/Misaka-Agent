@@ -103,6 +103,8 @@ const ICONS = {
   'collapse-all':'<path d="m7 11 5-5 5 5"/><path d="m7 18 5-5 5 5"/>',
   'folder-open':'<path d="M3.5 18V7.5a2 2 0 0 1 2-2h3.7l2 2h6.3a2 2 0 0 1 2 2V11"/><path d="M3.5 18 6 12.2a1.5 1.5 0 0 1 1.4-.9h13.1a1 1 0 0 1 .9 1.4L19.2 18a1.5 1.5 0 0 1-1.4 1H4.5a1 1 0 0 1-1-1Z"/>',
   table:'<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M3.5 14.5h17M10 9.5v10"/>',
+  undo:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo:'<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   keyboard:'<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>',
 };
 function icon(name, cls='') {
@@ -243,8 +245,8 @@ function messageImages(message) {return (Array.isArray(message?.content)?message
 function buildItemsFromHistory(ch, messages) {
   ch.items=[];ch.results={};ch.exec={};ch.streaming=false;
   for (const m of messages||[]) {
-    if (m.role==='user') ch.items.push({kind:'user', text:messageText(m), images:messageImages(m)});
-    else if (m.role==='assistant') ch.items.push({kind:'assistant', blocks:m.content||[], streaming:false, stopReason:m.stopReason, errorMessage:m.errorMessage, usage:m.usage});
+    if (m.role==='user') ch.items.push({kind:'user', text:messageText(m), images:messageImages(m), ts:m.timestamp});
+    else if (m.role==='assistant') ch.items.push({kind:'assistant', blocks:m.content||[], streaming:false, stopReason:m.stopReason, errorMessage:m.errorMessage, usage:m.usage, ts:m.timestamp});
     else if (m.role==='toolResult') ch.results[m.toolCallId]={content:m.content||[], isError:!!m.isError, toolName:m.toolName,details:m.details};
     else if(m.display!==false) ch.items.push({kind:'note', title:m.customType||m.role||'消息', text:m.output||messageText(m),details:m.details});
   }
@@ -259,8 +261,9 @@ function applyChatEvent(ch, ev) {
   if(!ch.items)ch.items=[];
   if (ev.type==='prompt_queue') {ch.meta.pendingPrompts=ev.pendingPrompts||[];ch.meta.queuePaused=!!ev.queuePaused;const ids=new Set(ch.meta.pendingPrompts.map(p=>p.id));ch.outbox=ch.outbox.filter(o=>!ids.has(o.message_id));return;}
   if (ev.type==='session_settings') {Object.assign(ch.meta,ev);return;}
-  if (ev.type==='run_settled') {if(ch.live&&!ch.suppressCompletion)notifyChat(ch,'对话已完成','回复已完成，点击返回对话');ch.suppressCompletion=false;return;}
-  if (ev.type==='ready') {ch.meta={...ch.meta, ...ev}; if(ch.items) ch.items=[]; return;}
+  if (ev.type==='run_settled') {if(ch.live&&!ch.suppressCompletion)notifyChat(ch,'对话已完成','回复已完成，点击返回对话');ch.suppressCompletion=false;if(ch.rewound?.sent&&!ch.restoring)ch.rewound=null;return;}
+  if (ev.type==='ready') {ch.meta={...ch.meta, ...ev}; if(ch.items) ch.items=[]; ch.rewound=null; return;}
+  if (ev.type==='side_event'||ev.type==='side_error'||ev.type==='side_closed') {applySideEvent(ch,ev);return;}
   if (ev.type==='history') {buildItemsFromHistory(ch, ev.messages); return;}
   if (ev.type==='prompt_error') {ch.items.push({kind:'error', text:ev.message||'发送失败'}); return;}
   if (ev.type==='extension_error') {ch.items.push({kind:'error', text:'扩展：'+(ev.message||'未知错误')}); return;}
@@ -275,7 +278,7 @@ function applyChatEvent(ch, ev) {
   switch (e.type) {
     case 'message_start': {
       const m=e.message||{};
-      if (m.role==='user') ch.items.push({kind:'user', text:messageText(m), images:messageImages(m)});
+      if (m.role==='user') ch.items.push({kind:'user', text:messageText(m), images:messageImages(m), ts:m.timestamp});
       else if (m.role==='assistant') ensureAssistant(ch);
       else if(m.display!==false&&m.role!=='toolResult')ch.items.push({kind:'note',title:m.customType||m.role||'消息',text:messageText(m),details:m.details});
       break;
@@ -301,7 +304,7 @@ function applyChatEvent(ch, ev) {
       const last=ch.items[ch.items.length-1];
       const item=(last&&last.kind==='assistant')?last:{kind:'assistant', blocks:[], streaming:false};
       if (item!==last) ch.items.push(item);
-      item.blocks=m.content||[]; item.streaming=false; item.stopReason=m.stopReason; item.errorMessage=m.errorMessage; item.usage=m.usage;
+      item.blocks=m.content||[]; item.streaming=false; item.stopReason=m.stopReason; item.errorMessage=m.errorMessage; item.usage=m.usage; item.ts=m.timestamp;
       break;
     }
     case 'tool_execution_start': {
@@ -807,27 +810,31 @@ function turnSpec(turn, ch, key, live, animate) {
       const segs=turnSegments(turn, ch, live);
       reconcile(node.firstElementChild, segs.map((seg,i)=>({key:'seg:'+i+':'+seg.type, sig:segSig(seg,ch,live), build:()=>segmentNode(seg,ch,live,key+':'+i)})), animate);
       const foot=node.lastElementChild, text=turnText(turn), usage=usageText([...turn.items].reverse().find(i=>i.usage)?.usage);
-      const main=renderingChatId===selectedChat, edits=!live&&main?turnEdits(turn,ch):{files:[]};
-      const footSig=live?'':text.length+'|'+usage+'|'+edits.files.join('|')+'|'+edits.adds+'|'+edits.dels;
+      const main=renderingChatId===selectedChat, edits=!live&&main?turnEdits(turn,ch):{files:[]}, chatId=renderingChatId, fork=live?null:forkPoint(turn,chatId);
+      const footSig=live?'':text.length+'|'+usage+'|'+edits.files.join('|')+'|'+edits.adds+'|'+edits.dels+'|'+(fork??'');
       if (foot._sig===footSig) return;
-      foot._sig=footSig;foot.replaceChildren();foot.hidden=live||!text&&!edits.files.length;
+      foot._sig=footSig;foot.replaceChildren();foot.hidden=live||!text&&!edits.files.length&&fork==null;
       if (edits.files.length) {
         const chip=button('',()=>{changesScope='chat';for(const f of edits.files)expandedChanges.add('chat:'+f);return activateContext('changes');},'turn-edits');
         chip.append(icon('diff'),el('span','',edits.files.length===1?'修改了 '+baseName(edits.files[0]):'修改了 '+edits.files.length+' 个文件'),diffStat(edits.adds,edits.dels),icon('chevron-right'));
         chip.title=edits.files.join('\n')+'\n在右侧查看改动';foot.append(chip);
       }
-      if (!live&&text) {const tools=el('div','msg-tools'), copy=el('button','icon-btn');copy.type='button';copy.title='复制回复';copy.append(icon('copy'));copy.onclick=()=>copyText(text,copy);tools.append(copy);foot.append(tools);if(usage)foot.append(el('span','usage',usage));}
+      if (!live&&(text||fork!=null)) {const tools=el('div','msg-tools');
+        if (text) {const copy=el('button','icon-btn');copy.type='button';copy.title='复制回复';copy.append(icon('copy'));copy.onclick=()=>copyText(text,copy);tools.append(copy);}
+        if (fork!=null) {const branch=el('button','icon-btn');branch.type='button';branch.title='从这里分叉：新对话包含到这条回复为止的内容，原对话保持不变';branch.setAttribute('aria-label','从这条回复分叉出新对话');branch.append(icon('branch'));branch.onclick=()=>guard(()=>forkTurn(chatId,fork),branch);tools.append(branch);}
+        foot.append(tools);if(usage)foot.append(el('span','usage',usage));}
     }};
 }
 function userNode(item,source=workspace) {
   const structured=structuredMessage(item,source);if(structured)return structured;
-  const node=el('article','msg-user'+(item.pending?' pending':''));
+  const node=el('article','msg-user'+(item.pending?' pending':'')), {text:body,quotes}=splitQuotes(item.text);
   if (item.images?.length) {const imgs=el('div','user-images');
     for (const img of item.images) {const thumb=el('img','image-thumb');thumb.src='data:'+(img.mimeType||img.mime||'image/png')+';base64,'+img.data;thumb.onclick=()=>lightbox(thumb.src);imgs.append(thumb);}
     node.append(imgs);}
-  if (item.text) {
-    const bubble=el('div','bubble'), text=el('div','user-text',item.text);bubble.append(text);
-    if (item.text.length>700||item.text.split('\n').length>10) {bubble.classList.add('clamped');const more=el('button','expand','展开全文');more.type='button';more.onclick=()=>{const c=bubble.classList.toggle('clamped');more.textContent=c?'展开全文':'收起';};bubble.append(more);}
+  if (quotes.length) node.append(quoteRow(quotes));
+  if (body) {
+    const bubble=el('div','bubble'), text=el('div','user-text',body);bubble.append(text);
+    if (body.length>700||body.split('\n').length>10) {bubble.classList.add('clamped');const more=el('button','expand','展开全文');more.type='button';more.onclick=()=>{const c=bubble.classList.toggle('clamped');more.textContent=c?'展开全文':'收起';};bubble.append(more);}
     node.append(bubble);
   }
   const meta=el('div','msg-meta');
@@ -971,7 +978,7 @@ function chatFlags() {
 }
 function sendMode() {
   const {ch}=chatFlags(), text=$('#chat-input').value.trim();
-  if (ch&&ch.streaming&&!ch.meta.paused&&!ch.stopping&&!text&&!pendingImages.length) return 'stop';
+  if (ch&&ch.streaming&&!ch.meta.paused&&!ch.stopping&&!text&&!pendingImages.length&&!pendingQuotes.length) return 'stop';
   return 'send';
 }
 function updateSendButton() {
@@ -979,7 +986,7 @@ function updateSendButton() {
   send.classList.toggle('stop',mode==='stop');
   const {ch,attached}=chatFlags();
   send.title=mode==='stop'?(attached?'暂停任务（Esc）':'停止回复（Esc）'):ch?.meta.paused?'发送并恢复任务（Enter）':ch?.streaming&&!ch.stopping?'排队发送（Enter）':'发送（Enter）';
-  send.disabled=readonly||(mode==='send'&&!$('#chat-input').value.trim());
+  send.disabled=readonly||(mode==='send'&&!$('#chat-input').value.trim()&&!pendingQuotes.length);
 }
 function updateChatHeader() {
   const {ch, snapshot, attached, readonly, native}=chatFlags();
@@ -1036,12 +1043,13 @@ function updateChatHeader() {
   const queued=ch?ch.queued||ch.outbox.filter(o=>o.sent&&!o.silent&&ch.streaming).length:0;
   const hint=$('#chat-hint');hint.replaceChildren('Enter 发送 · Shift+Enter 换行 · / 选择技能与指令 · @ 引用项目文件 · Ctrl+/ 快捷键');
   if (queued) {hint.append(' · ');hint.append(el('b','',queued+' 条消息排队中'));}
+  if (ch?.rewound&&!ch.rewound.sent) {hint.append(' · ');hint.append(el('b','','已撤回上一轮，可点“还原”恢复'));}
   // Banner (tasks, model fallback)
   const banner=$('#chat-banner'), bannerText=attached&&!readonly&&!sessionSupports(selectedChat,'models')?legacySessionHint:ch?.meta.banner||(native&&ch.meta.modelFallbackMessage)||'';
   banner.hidden=!bannerText||(!!ch&&readonly);
   if (bannerText) banner.replaceChildren(icon(attached?'task':'alert'),el('span','',bannerText));
   if (!ch) {$('#greeting').textContent=greetingText();$('#welcome-project').textContent=workspace?baseName(workspace):'当前项目';$('#home-sub').lastChild.textContent=homeRole?' 中与 Sister '+homeRole+' 开始对话':' 中继续你的研究';}
-  updateSendButton();
+  updateSendButton();updateRewindControls();
   drawMessageQueue();
   updateContextBadges();drawContextLive();
 }
@@ -1050,7 +1058,7 @@ function shortModel(name) {return name?String(name).split('/').pop():'';}
 /* ---------- 原生会话：长轮询与发送队列 ---------- */
 async function pollChats() {
   while (!guiClosed) {
-    const ids=Object.keys(chats).filter(id=>!isAttached(id)&&!isSnapshot(id)&&!['closed','error'].includes(chats[id].meta.status));
+    const ids=Object.keys(chats).filter(id=>!isAttached(id)&&!isSnapshot(id)&&!isSide(id)&&!['closed','error'].includes(chats[id].meta.status));
     await Promise.allSettled(ids.map(pollOneChat));
     if(isAttached(selectedChat)&&view==='chat')await refreshAttached(selectedChat);
     if(isAttached(contextThread?.id)&&contextOpen)await refreshContextAttached();
@@ -1062,7 +1070,7 @@ async function pollOneChat(id) {
     try {
       const source=ch.meta.workspace||workspace;
       const res=await api('chat_events', {workspace:source,chat_id:id, cursor:ch.cursor, wait:1});
-      if (res.reset) {const snapshot=await api('chat_replay',{workspace:source,chat_id:id});buildItemsFromHistory(ch,snapshot.messages);ch.cursor=snapshot.cursor;ch.meta={...ch.meta,...snapshot.meta};ch.streaming=!!snapshot.meta.streaming;scheduleRender();return;}
+      if (res.reset) {const snapshot=await api('chat_replay',{workspace:source,chat_id:id});buildItemsFromHistory(ch,snapshot.messages);restoreSides(ch,snapshot.sides);ch.cursor=snapshot.cursor;ch.meta={...ch.meta,...snapshot.meta};ch.streaming=!!snapshot.meta.streaming;scheduleRender();return;}
       ch.live=ch.cursor>0;
       for (const ev of res.events) applyChatEvent(ch, ev);
       const name=ch.meta.name;
@@ -1103,7 +1111,7 @@ async function flushOutbox(id) {
     ch.outbox=ch.outbox.filter(o=>o!==next);
     toast('消息未能发送：'+e.message,true);
     if(contextThread?.id===id)restoreWithdrawn(id,next,true);
-    if (id===selectedChat&&!$('#chat-input').value.trim()) {$('#chat-input').value=next.text;pendingImages=next.images||[];pendingReferences=(next.files||[]).map(path=>({path,workspace:source,token:'@'+JSON.stringify(path)}));drawChips();autoSize();}
+    if (id===selectedChat&&!$('#chat-input').value.trim()) {const parsed=splitQuotes(next.text);$('#chat-input').value=parsed.text;pendingQuotes=parsed.quotes;pendingImages=next.images||[];pendingReferences=(next.files||[]).map(path=>({path,workspace:source,token:'@'+JSON.stringify(path)}));drawChips();autoSize();}
   } finally {ch.flushing=false;scheduleRender();}
   if (ch.outbox.some(o=>!o.sent)) flushOutbox(id);
 }
@@ -1135,12 +1143,12 @@ function goHome(role) {
   syncContext();
   setTimeout(()=>$('#chat-input').focus(),60);
 }
-async function startFromHome(text) {
-  const images=pendingImages.map(({data,mime})=>({data,mime})),files=composerFiles(),references=[...pendingReferences],role=homeRole,source=workspace,input=$('#chat-input');
-  input.value='';pendingImages=[];pendingReferences=[];drawChips();autoSize();drafts.delete(draftKey());
+async function startFromHome(typed) {
+  const quotes=[...pendingQuotes],text=composeOutgoing(typed,quotes),images=pendingImages.map(({data,mime})=>({data,mime})),files=composerFiles(),references=[...pendingReferences],role=homeRole,source=workspace,input=$('#chat-input');
+  input.value='';pendingImages=[];pendingReferences=[];pendingQuotes=[];drawChips();autoSize();drafts.delete(draftKey());
   let result;
   try {result=await api('chat_native', role?{role}:{});}
-  catch (e) {if(source===workspace&&!input.value){input.value=text;pendingImages=images;pendingReferences=references;drawChips();autoSize();}throw e;}
+  catch (e) {if(source===workspace&&!input.value){input.value=typed;pendingImages=images;pendingReferences=references;pendingQuotes=quotes;drawChips();autoSize();}throw e;}
   const ch=chatState(result.chat_id);
   ch.items=[];ch.meta={workspace:source,status:'starting',role,name:text.startsWith('/')?'':text.split('\n')[0].slice(0,40)};
   ch.outbox=[{text,images,files,silent:text.startsWith('/'),sent:false,at:Date.now()}];
@@ -1361,7 +1369,7 @@ async function openSnapshot(path, title, role=null) {
   ch.meta={name:title, title, model:null, role, sessionPath:path, sessionId:data.sessionId};
   renderedChat=null;selectChat(id);
 }
-const SLASH=[['/new','新建对话'],['/skill ','搜索并选择技能',true],['/model','切换模型'],['/thinking','调整思考深度'],['/compact','压缩上下文'],['/rename','重命名会话'],['/history','打开历史会话'],['/export','复制对话记录'],['/research','打开研究工作流'],['/board','查看任务看板'],['/team','查看协作成员'],['/files','浏览材料与文件'],['/settings','打开设置与工具'],['/open','快速打开项目文件（Ctrl+P）'],['/changes','查看本次对话改动的文件'],['/keys','查看键盘快捷键'],['/sister ','与指定 Sister 对话（交给会话处理）',true],['/session','查看用量与会话信息（交给会话处理）'],['/help','查看全部指令']];
+const SLASH=[['/new','新建对话'],['/skill ','搜索并选择技能',true],['/model','切换模型'],['/thinking','调整思考深度'],['/btw ','侧边对话：带着当前上下文顺带问一句，不修改文件',true],['/compact','压缩上下文'],['/rename','重命名会话'],['/history','打开历史会话'],['/export','复制对话记录'],['/research','打开研究工作流'],['/board','查看任务看板'],['/team','查看协作成员'],['/files','浏览材料与文件'],['/settings','打开设置与工具'],['/open','快速打开项目文件（Ctrl+P）'],['/changes','查看本次对话改动的文件'],['/keys','查看键盘快捷键'],['/sister ','与指定 Sister 对话（交给会话处理）',true],['/session','查看用量与会话信息（交给会话处理）'],['/help','查看全部指令']];
 function showCommandHelp() {
   const box=el('div','list-card');
   for (const [command,description] of SLASH) {const row=el('div','row'), info=el('div','row-main');info.append(el('strong','',command.trim()),el('small','',description));row.append(icon('chevron-right'),info);box.append(row);}
@@ -1370,7 +1378,7 @@ function showCommandHelp() {
 }
 let slashIndex=0,suggestionTicket=0,suggestionTimer=null,suggestionDismissed='',suggestionData=null,suggestionItems=[];
 const skillCatalogues=new Map();
-let pendingReferences=[];
+let pendingReferences=[],pendingQuotes=[];
 function composerContext(){
   const input=$('#chat-input'),before=input.value.slice(0,input.selectionStart);
   const at=before.match(/(?:^|\s)@([^\s@"]*)$/);
@@ -1455,23 +1463,25 @@ function composerFiles(){return pendingReferences.filter(f=>samePath(f.workspace
 /* ---------- 输入框 ---------- */
 let pendingImages=[];
 function autoSize() {const t=$('#chat-input');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,innerHeight*.4)+'px';}
-const nativeCommands={'/new':()=>goHome(),'/model':()=>showModelPicker(),'/thinking':()=>showThinkingPicker(),'/compact':()=>chatFlags().native?compactChat():null,'/rename':startRename,'/history':showNativeHistory,'/export':()=>selectedChat?copyTranscript():null,'/research':()=>showView('research'),'/board':()=>showView('board'),'/team':()=>showView('team'),'/files':()=>showView('documents'),'/settings':()=>showView('settings'),'/open':showQuickOpen,'/changes':()=>activateContext('changes'),'/keys':showShortcuts,'/help':showCommandHelp};
+const nativeCommands={'/new':()=>goHome(),'/model':()=>showModelPicker(),'/thinking':()=>showThinkingPicker(),'/compact':()=>chatFlags().native?compactChat():null,'/rename':startRename,'/history':showNativeHistory,'/export':()=>selectedChat?copyTranscript():null,'/research':()=>showView('research'),'/board':()=>showView('board'),'/team':()=>showView('team'),'/files':()=>showView('documents'),'/settings':()=>showView('settings'),'/open':showQuickOpen,'/changes':()=>activateContext('changes'),'/keys':showShortcuts,'/help':showCommandHelp,'/btw':()=>openSideChat()};
 async function submitChat() {
-  const input=$('#chat-input'), text=input.value.trim();
-  if (!text) {if(pendingImages.length)toast('请输入一句说明再发送图片',true);return;}
+  const input=$('#chat-input'), typed=input.value.trim();
+  if (!typed&&!pendingQuotes.length) {if(pendingImages.length)toast('请输入一句说明再发送图片',true);return;}
   $('#slash-menu').hidden=true;
   const {ch, readonly, attached}=chatFlags();
   if (ch&&readonly) {toast('这是只读的记录；请先选择“继续这段对话”。',true);return;}
-  if (attached&&['/pause','/resume'].includes(text)) {await api(text==='/pause'?'session_pause':'session_resume',{session_id:selectedChat.slice(9)});input.value='';autoSize();return;}
-  if (text.startsWith('/')) {
-    const command=text.split(/\s+/)[0].toLowerCase();
-    if (nativeCommands[command]&&!text.includes(' ')) {input.value='';autoSize();updateSendButton();await nativeCommands[command]();return;}
+  if (attached&&['/pause','/resume'].includes(typed)) {await api(typed==='/pause'?'session_pause':'session_resume',{session_id:selectedChat.slice(9)});input.value='';autoSize();return;}
+  if (/^\/btw\s/i.test(typed)) {const quotes=[...pendingQuotes];await openSideChat({text:typed.replace(/^\/btw\s*/i,''),quotes});input.value='';pendingQuotes=[];drawChips();autoSize();saveDraft();return;}
+  if (typed.startsWith('/')) {
+    const command=typed.split(/\s+/)[0].toLowerCase();
+    if (nativeCommands[command]&&!typed.includes(' ')) {input.value='';autoSize();updateSendButton();await nativeCommands[command]();return;}
   }
-  if (!ch) return startFromHome(text);
-  const id=selectedChat, images=pendingImages.map(({data,mime})=>({data,mime})),files=composerFiles();
+  if (!ch) return startFromHome(typed);
+  const id=selectedChat, text=composeOutgoing(typed,pendingQuotes), images=pendingImages.map(({data,mime})=>({data,mime})),files=composerFiles();
   if (attached&&images.length) throw new Error('任务对话暂不支持图片，请在普通对话中发送');
   ch.outbox.push({text,images,files,silent:text.startsWith('/'),queued:ch.streaming||ch.outbox.length>0,sent:false,at:Date.now()});
-  input.value='';pendingImages=[];pendingReferences=[];drawChips();autoSize();drafts.delete(draftKey());
+  if (ch.rewound) ch.rewound.sent=true;
+  input.value='';pendingImages=[];pendingReferences=[];pendingQuotes=[];drawChips();autoSize();drafts.delete(draftKey());
   forceScroll=true;scheduleRender();updateSendButton();
   await flushOutbox(id);
 }
@@ -1483,8 +1493,9 @@ function drawChips() {
     const remove=el('button','chip-remove');remove.type='button';remove.title='移除图片';remove.append(icon('x'));remove.onclick=()=>{pendingImages.splice(index,1);drawChips();};
     chip.append(thumb,remove);wrap.append(chip);
   }
+  pendingQuotes.forEach((q,i)=>wrap.append(quoteChip(q,i,()=>{pendingQuotes=pendingQuotes.filter(x=>x!==q);drawChips();saveDraft();},()=>{drawChips();saveDraft();})));
   for(const ref of pendingReferences){const chip=el('span','file-chip');chip.title=ref.path;const remove=button('',()=>{pendingReferences=pendingReferences.filter(f=>f!==ref);$('#chat-input').value=$('#chat-input').value.replace(ref.token,'');drawChips();autoSize();},'chip-remove','x');remove.setAttribute('aria-label','移除文件引用 '+ref.path);chip.append(icon('file'),button(ref.path,()=>openContextFile(ref.path),'text-btn'),remove);wrap.append(chip);}
-  wrap.hidden=!pendingImages.length&&!pendingReferences.length;updateSendButton();
+  wrap.hidden=!pendingImages.length&&!pendingReferences.length&&!pendingQuotes.length;updateSendButton();
 }
 function addImageFile(file) {
   if (!file.type.startsWith('image/')) {toast('仅支持图片附件',true);return;}
@@ -1812,9 +1823,9 @@ $('#chat-input').addEventListener('keydown',e=>{
     if (e.key==='Tab'||(e.key==='Enter'&&!e.shiftKey)) {e.preventDefault();acceptSlash();return;}
     if (e.key==='Escape') {e.preventDefault();menu.hidden=true;suggestionDismissed=e.target.value;++suggestionTicket;return;}
   }
-  if (e.key==='Enter'&&!e.shiftKey&&!e.altKey) {e.preventDefault();if($('#chat-input').value.trim())$('#chat-form').requestSubmit();}
+  if (e.key==='Enter'&&!e.shiftKey&&!e.altKey) {e.preventDefault();if($('#chat-input').value.trim()||pendingQuotes.length)$('#chat-form').requestSubmit();}
   else if (e.key==='Escape'&&chatFlags().ch?.streaming) {e.preventDefault();stopChat();}
-  else if (e.key==='ArrowUp'&&!e.target.value&&selectedChat) {const last=[...(chatState(selectedChat).items||[])].reverse().find(i=>i.kind==='user');if(last?.text){e.preventDefault();e.target.value=last.text;autoSize();updateSendButton();}}
+  else if (e.key==='ArrowUp'&&!e.target.value&&selectedChat) {const last=[...(chatState(selectedChat).items||[])].reverse().find(i=>i.kind==='user');if(last?.text){e.preventDefault();const parsed=splitQuotes(last.text);e.target.value=parsed.text;pendingQuotes=parsed.quotes;drawChips();autoSize();updateSendButton();}}
 });
 $('#chat-input').addEventListener('paste',e=>{for(const file of e.clipboardData?.files||[]){e.preventDefault();addImageFile(file);}});
 $('#attach-btn').onclick=()=>$('#attach-input').click();
@@ -1842,7 +1853,7 @@ document.addEventListener('keydown',e=>{
   const mod=e.ctrlKey||e.metaKey, key=e.key.toLowerCase();
   if (mod&&e.shiftKey&&key==='o') {e.preventDefault();goHome();}
   else if (mod&&e.altKey&&e.code==='KeyB') {e.preventDefault();if(view!=='chat')guard(()=>showView('chat'));setContextOpen(!contextOpen||view!=='chat');}
-  else if (mod&&e.altKey&&/^Digit[1-5]$/.test(e.code)) {e.preventDefault();const tab=CONTEXT_TABS[Number(e.code.slice(5))-1][0];if(view!=='chat')guard(()=>showView('chat'));guard(()=>activateContext(tab));}
+  else if (mod&&e.altKey&&/^Digit[1-6]$/.test(e.code)) {e.preventDefault();const tab=CONTEXT_TABS[Number(e.code.slice(5))-1][0];if(view!=='chat')guard(()=>showView('chat'));guard(()=>activateContext(tab));}
   else if (mod&&!e.shiftKey&&!e.altKey&&key==='p') {e.preventDefault();if(!$('#dialog').open)guard(showQuickOpen);}
   else if (mod&&(e.code==='Slash'||key==='/')) {e.preventDefault();showShortcuts();}
   else if (mod&&!e.shiftKey&&key==='b') {e.preventDefault();toggleSidebar();}
@@ -1866,8 +1877,8 @@ async function refreshProjects(){if(projectsBusy)return;projectsBusy=true;
   }finally{projectsBusy=false;sidebarSig='';drawSidebar();}}
 function rememberSelection(){if(selectedChat&&!isSnapshot(selectedChat))sessionStorage.setItem('misaka-chat:'+workspace,selectedChat);}
 function draftKey(){return workspace+'|'+(selectedChat||'new');}
-function saveDraft(){drafts.set(draftKey(),{text:$('#chat-input').value,images:[...pendingImages],references:[...pendingReferences]});}
-function restoreDraft(){const d=drafts.get(draftKey());$('#chat-input').value=d?.text||'';pendingImages=[...(d?.images||[])];pendingReferences=[...(d?.references||[])];suggestionData=null;suggestionDismissed='';++suggestionTicket;$('#slash-menu').hidden=true;drawChips();autoSize();updateSendButton();}
+function saveDraft(){drafts.set(draftKey(),{text:$('#chat-input').value,images:[...pendingImages],references:[...pendingReferences],quotes:[...pendingQuotes]});}
+function restoreDraft(){const d=drafts.get(draftKey());$('#chat-input').value=d?.text||'';pendingImages=[...(d?.images||[])];pendingReferences=[...(d?.references||[])];pendingQuotes=[...(d?.quotes||[])];suggestionData=null;suggestionDismissed='';++suggestionTicket;$('#slash-menu').hidden=true;drawChips();autoSize();updateSendButton();}
 async function switchProject(path){const ticket=++projectSwitch;const next=await api('state',{workspace:path});if(ticket!==projectSwitch)return false;
   await syncProjects([next.workspace]);if(ticket!==projectSwitch)return false;
   saveDraft();rememberSelection();if(workspace)projectData.set(projectKey(workspace),{...state,saved:savedSessions});
@@ -2414,7 +2425,7 @@ function applyAttachedSnapshot(ch,r){buildItemsFromHistory(ch,r.messages);Object
 function setContextOpen(open){syncContext();contextOpen=open;syncContext();saveContextPrefs();if(open)guard(drawContext);else if($('#context-panel').contains(document.activeElement))$('#context-toggle').focus();}
 // One inspector beside the conversation, in the manner of Codex and Cursor: every tab
 // keeps its own state, follows the selected chat, and never steals focus from the composer.
-const CONTEXT_TABS=[['overview','概览'],['changes','变更'],['files','文件'],['tasks','任务'],['sisters','Sisters']];
+const CONTEXT_TABS=[['overview','概览'],['changes','变更'],['files','文件'],['tasks','任务'],['sisters','Sisters'],['side','侧边对话']];
 const contextPrefs=(()=>{const saved=jsonStored('misaka-context',{});return {open:false,tab:'overview',width:0,wide:false,follow:true,...(saved&&typeof saved==='object'&&!Array.isArray(saved)?saved:{})};})();
 if(CONTEXT_TABS.some(([tab])=>tab===contextPrefs.tab))contextTab=contextPrefs.tab;
 let changesScope='chat',gitState=null,gitBusy=false,activityFilter='all',activityAll=false,taskFilter='all',fileFilter='',fileResults=null,fileSearchTimer=null,fileInteractAt=0,followAt=0,fileTabs=[],fileTree=newFileTree(),contextChangeSig='';
@@ -2427,6 +2438,7 @@ function syncContext(){
   $('#view-chat').classList.toggle('context-open',shown);$('#context-panel').inert=!shown;$('#context-panel').setAttribute('aria-hidden',String(!shown));
   toggle.setAttribute('aria-expanded',String(contextOpen));toggle.title=(contextOpen?'收起':'展开')+'右侧边栏（Ctrl+Alt+B）';toggle.setAttribute('aria-label',contextOpen?'收起右侧边栏':'展开右侧边栏');if(contextOpen)toggle.classList.remove('has-news');
   for(const [tab] of CONTEXT_TABS){const b=$('#context-'+tab);b.setAttribute('aria-selected',String(contextTab===tab));b.tabIndex=contextTab===tab?0:-1;}
+  if(shown){const strip=$('.context-tabs'),a=$('#context-'+contextTab).getBoundingClientRect(),b=strip.getBoundingClientRect();if(a.left<b.left)strip.scrollLeft-=b.left-a.left;else if(a.right>b.right)strip.scrollLeft+=a.right-b.right;}
   $('#context-body').setAttribute('aria-labelledby','context-'+contextTab);applyContextWidth();
   if(shown)drawContextLive();
 }
@@ -2437,6 +2449,7 @@ async function drawContext(){if(!contextOpen)return;const ticket=++contextTicket
   if(contextTab==='tasks'){drawContextTasks(true);return;}
   if(contextTab==='overview'){drawOverviewPanel(true);return;}
   if(contextTab==='changes'){drawChangesPanel(true);if(changesScope==='git')await loadGitChanges();return;}
+  if(contextTab==='side'){drawSidePanel(true);return;}
   root.append(contextLoading());await loadRoster();if(ticket!==contextTicket||source!==workspace)return;drawContextSisters();}
 // Tabs render into a fixed toolbar and one scroller; reusing the frame keeps scroll and input focus.
 function contextFrame(tab){
@@ -2567,6 +2580,7 @@ function drawContextLive(force=false){
   else if(contextTab==='changes'&&changesScope==='chat')drawChangesPanel(force);
   else if(contextTab==='files')refreshTreeForChanges();
   else if(contextTab==='sisters')drawContextThread();
+  else if(contextTab==='side')drawSidePanel();
 }
 function drawOverviewPanel(force=false){
   const {bar,scroll}=contextFrame('overview');bar.hidden=true;
@@ -3048,7 +3062,7 @@ function appendSideImage(file,id,root){if(!file)return;if(isAttached(id))return 
   const draft=sideDraft(id);if(draft.images.length>=6)return toast('最多添加 6 张图片',true);const reader=new FileReader();reader.onload=()=>{if(draft.images.length>=6)return;draft.images.push({mime:file.type,data:String(reader.result).split(',',2)[1]});if(root.dataset.thread===id)drawSideChips(root,id);};reader.readAsDataURL(file);
 }
 function restoreWithdrawn(id,item,side=false){const source=chatState(id).meta.workspace||workspace,images=(item.images||[]).map(i=>({data:i.data,mime:i.mime||i.mimeType}));
-  if(!side&&id===selectedChat){const input=$('#chat-input');input.value=[input.value,item.text].filter(Boolean).join('\n\n');pendingImages.push(...images);pendingReferences.push(...(item.files||[]).map(path=>({path,workspace:source,token:'@'+JSON.stringify(path)})));drawChips();autoSize();input.focus();saveDraft();}
+  if(!side&&id===selectedChat){const input=$('#chat-input'),parsed=splitQuotes(item.text);input.value=[input.value,parsed.text].filter(Boolean).join('\n\n');pendingQuotes.push(...parsed.quotes);pendingImages.push(...images);pendingReferences.push(...(item.files||[]).map(path=>({path,workspace:source,token:'@'+JSON.stringify(path)})));drawChips();autoSize();input.focus();saveDraft();}
   else{const draft=sideDraft(id);draft.text=[draft.text,item.text].filter(Boolean).join('\n\n');draft.images.push(...images);draft.files=[...new Set([...draft.files,...(item.files||[])])];if(contextThread?.id===id){const input=$('.context-reply textarea');if(input){input.value=draft.text;input.dispatchEvent(new Event('input'));input.focus();drawSideChips($('#context-body'),id);}}}
 }
 async function sendQueuedNow(id,p){const ch=chatState(id),source=ch.meta.workspace||workspace;await resumeForSend(id);
@@ -3100,9 +3114,9 @@ async function showQuickOpen(){
   modal('快速打开',box);$('#dialog').classList.add('palette');$('#dialog').addEventListener('close',()=>$('#dialog').classList.remove('palette'),{once:true});
   items=recent();draw();input.focus();
 }
-const SHORTCUTS=[['对话',[['Enter','发送消息'],['Shift Enter','换行'],['Esc','停止当前回复'],['↑','输入框为空时取回上一条消息'],['/','指令与技能'],['@','引用项目文件']]],
+const SHORTCUTS=[['对话',[['Enter','发送消息'],['Shift Enter','换行'],['Esc','停止当前回复'],['↑','输入框为空时取回上一条消息'],['/','指令与技能'],['/btw','侧边对话'],['@','引用项目文件']]],
   ['导航',[['Ctrl Shift O','新对话'],['Ctrl K','搜索对话'],['Ctrl B','显示或隐藏左侧栏'],['Ctrl P','快速打开文件']]],
-  ['右侧工作区',[['Ctrl Alt B','显示或隐藏右侧栏'],['Ctrl Alt 1 – 5','切换概览、变更、文件、任务、Sisters'],['← →','在标签之间移动（焦点在标签上时）']]],['其他',[['Ctrl /','打开本页']]]];
+  ['右侧工作区',[['Ctrl Alt B','显示或隐藏右侧栏'],['Ctrl Alt 1 – 6','切换概览、变更、文件、任务、Sisters、侧边对话'],['← →','在标签之间移动（焦点在标签上时）']]],['其他',[['Ctrl /','打开本页']]]];
 function showShortcuts(){const box=el('div','shortcut-sheet');for(const [group,rows] of SHORTCUTS){const s=el('section'),grid=el('div','shortcut-grid');s.append(el('h3','',group));for(const [keys,label] of rows){const k=el('span','keys');for(const part of keys.split(' '))k.append(el('kbd','',part));grid.append(k,el('span','',label));}s.append(grid);box.append(s);}modal('键盘快捷键',box);}
 function transcriptMarkdown(id){
   const ch=chatState(id),who=agentName(ch.meta.role),title=(id===selectedChat?currentSessionEntry()?.title:'')||chatTitle(ch.meta),out=['# '+title,'','> '+who+' · 导出于 '+new Date().toLocaleString('zh-CN'),''];
@@ -3113,6 +3127,226 @@ function transcriptMarkdown(id){
   return {title,text:out.join('\n')};
 }
 function exportTranscript(id=selectedChat){if(!id)return;const {title,text}=transcriptMarkdown(id),blob=new Blob([text],{type:'text/markdown;charset=utf-8'}),a=el('a');a.href=URL.createObjectURL(blob);a.download=(title.replace(/[\\/:*?"<>|\s]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'对话')+'.md';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);toast('已导出 '+a.download);}
+/* ---------- 分叉、撤回与还原 ---------- */
+function isSide(id) {return String(id).startsWith('btw:');}
+// A turn forks at its newest finished reply; live chats ask their runner, saved ones fork from the file.
+function forkPoint(turn,id){
+  const ch=id&&chats[id];if(!ch||isAttached(id)||isSide(id))return null;
+  if(isSnapshot(id)||['closed','error'].includes(ch.meta.status)){if(!(ch.meta.sessionPath||ch.meta.sessionFile))return null;}
+  else if(ch.meta.status!=='ready'||!sessionSupports(id,'fork'))return null;
+  return [...turn.items].reverse().find(i=>Number.isFinite(i.ts)&&!i.streaming)?.ts??null;
+}
+async function forkTurn(id,ts){
+  const ch=chatState(id),source=ch.meta.workspace||workspace,live=!isSnapshot(id)&&ch.meta.status==='ready';
+  const title=(id===selectedChat?currentSessionEntry()?.title:'')||ch.meta.title||chatTitle(ch.meta),name=String(title).replace(/ · 分支$/,'').slice(0,100)+' · 分支';
+  const r=await api('chat_fork',{workspace:source,timestamp:ts,name,...(live?{chat_id:id}:{path:ch.meta.sessionPath||ch.meta.sessionFile,role:ch.meta.role||null})});
+  const next=chatState(r.chat_id);next.meta={...next.meta,workspace:source,role:ch.meta.role||null,status:next.meta.status||'starting',name};
+  await refreshState();if(!samePath(source,workspace))return;
+  selectChat(r.chat_id);toast('已分叉为新对话，原对话保持不变');
+}
+function lastUserItem(ch){return [...(ch?.items||[])].reverse().find(i=>i.kind==='user');}
+function rewindState(){
+  const {ch,native,readonly}=chatFlags(),id=selectedChat,last=lastUserItem(ch);
+  const ok=native&&!readonly&&sessionSupports(id,'rewind'),plain=!!last&&Number.isFinite(last.ts)&&!/^\s*<(agent-messages|sister-notification)>/.test(last.text||'');
+  const can=ok&&plain&&ch.meta.status==='ready'&&!ch.streaming&&!ch.stopping&&!ch.rewinding&&!ch.restoring&&!ch.outbox.length&&!(ch.meta.pendingPrompts||[]).length;
+  return {ch,id,last,can,shown:ok&&plain,restore:ok&&!!ch.rewound};
+}
+function updateRewindControls(){
+  const {ch,can,shown,restore}=rewindState(),undo=$('#rewind-btn'),redo=$('#restore-btn');
+  undo.hidden=!shown;undo.disabled=!can;
+  undo.title=can?'撤回上一轮：上一条消息放回输入框，回复移除（可还原）':ch?.streaming?'回复完成后可撤回上一轮':'暂时不能撤回';
+  redo.hidden=!restore;redo.disabled=!!ch?.restoring;
+  redo.title=ch?.rewound?.sent?'停止新的回复，回到撤回前的对话':'还原刚才撤回的那一轮';
+}
+function composerDraft(){return {text:$('#chat-input').value,images:[...pendingImages],references:[...pendingReferences],quotes:[...pendingQuotes]};}
+function applyComposer(d){const input=$('#chat-input');input.value=d.text||'';pendingImages=[...(d.images||[])];pendingReferences=[...(d.references||[])];pendingQuotes=[...(d.quotes||[])];
+  drawChips();autoSize();updateSendButton();input.focus();input.setSelectionRange(input.value.length,input.value.length);}
+const REFERENCE_MARK='\n\n[引用的当前项目文件，可按需读取]\n';
+function splitReferences(raw,source=workspace){
+  const text=String(raw??''),at=text.lastIndexOf(REFERENCE_MARK);if(at<0)return {text,references:[]};
+  const paths=text.slice(at+REFERENCE_MARK.length).split('\n').filter(l=>l.startsWith('- ')).map(l=>projectRelative(l.slice(2),source));
+  return {text:text.slice(0,at),references:paths.map(path=>({path,workspace:source,token:'@'+JSON.stringify(path)}))};
+}
+async function rewindLast(){
+  const {ch,id,can,last}=rewindState();if(!can)return;
+  const source=ch.meta.workspace||workspace;ch.rewinding=true;updateRewindControls();
+  try{
+    const r=await api('chat_rewind',{workspace:source,chat_id:id,timestamp:last.ts});
+    if(!ch.rewound)ch.rewound={leaf:r.leaf_id,draft:composerDraft(),sent:false};
+    const at=ch.items.lastIndexOf(last);if(at>=0)ch.items=ch.items.slice(0,at);
+    if(id===selectedChat){const refs=splitReferences(r.text,source),parsed=splitQuotes(refs.text);
+      applyComposer({text:parsed.text,quotes:parsed.quotes,references:refs.references,images:(r.images||[]).map(i=>({data:i.data,mime:i.mime||'image/png'}))});saveDraft();}
+  }finally{ch.rewinding=false;scheduleRender();}
+}
+async function restoreRewound(){
+  const id=selectedChat,ch=id&&chats[id],r=ch?.rewound;if(!r||ch.restoring)return;
+  ch.restoring=true;updateRewindControls();
+  try{
+    await api('chat_restore',{workspace:ch.meta.workspace||workspace,chat_id:id,leaf_id:r.leaf});
+    ch.rewound=null;ch.outbox=ch.outbox.filter(o=>!o.sent);
+    if(!r.sent&&id===selectedChat){applyComposer(r.draft);saveDraft();}
+    toast(r.sent?'已停止新的回复，回到撤回前的对话':'已还原撤回的那一轮');
+  }finally{ch.restoring=false;scheduleRender();}
+}
+
+/* ---------- 引用：选中回复里的文字，加批注后放进输入框 ---------- */
+const QUOTE_BLOCK=/(?:^|\n\n)\[引用 (\d+)：原文\]\n([\s\S]*?)\n(?:\[引用 \1：批注\]\n([\s\S]*?)\n)?\[引用 \1：完\](?=\n|$)/g;
+function quoteBlock(q,i){const n=i+1;return ['[引用 '+n+'：原文]',q.text,...(q.note?['[引用 '+n+'：批注]',q.note]:[]),'[引用 '+n+'：完]'].join('\n');}
+function composeOutgoing(text,quotes=[]){return [text,...quotes.map(quoteBlock)].filter(Boolean).join('\n\n');}
+function splitQuotes(raw){
+  const value=String(raw??''),quotes=[];
+  for(const m of value.matchAll(QUOTE_BLOCK))quotes.push({text:m[2],note:m[3]||''});
+  return quotes.length?{text:value.replace(QUOTE_BLOCK,'').trim(),quotes}:{text:value,quotes};
+}
+function quoteLabel(q,i){const t=q.text.replace(/\s+/g,' ').trim();return '引用 '+(i+1)+' · '+(t.length>16?t.slice(0,16)+'…':t);}
+function showQuote(anchor,q,i,{remove=null,edit=null}={}){
+  if(togglePopover(anchor))return;
+  const box=el('div','quote-view');box.append(el('div','menu-head','引用 '+(i+1)+' · 原文'),el('blockquote','quote-source',q.text),el('div','menu-head','批注'),el('p','quote-note'+(q.note?'':' empty'),q.note||'没有批注'));
+  if(edit||remove){const row=el('div','quote-actions');
+    if(edit)row.append(button('编辑批注',()=>{closePopover();editQuote(anchor,q.text,q.note,note=>{q.note=note;edit();},'保存');},'btn ghost sm','pencil'));
+    if(remove)row.append(button('移除',()=>{closePopover();remove();},'btn ghost sm danger','trash'));box.append(row);}
+  openPopover(anchor,box,{prefer:'top',width:320});
+}
+function editQuote(anchor,text,note,onSave,label='添加'){
+  const box=el('form','quote-editor'),area=el('textarea'),row=el('div','quote-actions'),ok=el('button','btn primary sm',label);
+  area.rows=3;area.value=note||'';area.placeholder='写下你的批注（可选）…';area.setAttribute('aria-label','批注');ok.type='submit';
+  row.append(el('small','quote-hint','Enter 确认 · Shift+Enter 换行'),button('取消',closePopover,'btn ghost sm'),ok);
+  box.append(el('div','menu-head','引用原文'),el('blockquote','quote-source',text),area,row);
+  box.onsubmit=e=>{e.preventDefault();closePopover();onSave(area.value.trim());};
+  area.onkeydown=e=>{if(e.isComposing)return;if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();box.requestSubmit();}else if(e.key==='Escape'){e.preventDefault();closePopover();}};
+  openPopover(anchor,box,{prefer:'top',width:340});setTimeout(()=>area.focus(),0);
+}
+function quoteChip(q,i,remove,edit){
+  const chip=el('span','quote-chip'),open=button('',()=>showQuote(open,q,i,{remove,edit}),'quote-open'),x=button('',remove,'chip-remove','x');
+  open.append(icon('quote'),el('span','',quoteLabel(q,i)));if(q.note)open.append(el('i','quote-dot'));open.title='查看原文与批注';
+  x.setAttribute('aria-label','移除引用 '+(i+1));chip.append(open,x);return chip;
+}
+function quoteRow(quotes){
+  const row=el('div','msg-quotes');
+  quotes.forEach((q,i)=>{const b=button('',()=>showQuote(b,q,i),'quote-pill');b.append(icon('quote'),el('span','',quoteLabel(q,i)));if(q.note)b.append(el('i','quote-dot'));b.title='查看原文与批注';row.append(b);});
+  return row;
+}
+function quoteIntoComposer(anchor,text){
+  if(pendingQuotes.length>=12)return toast('一条消息最多引用 12 段',true);
+  editQuote(anchor,text,'',note=>{pendingQuotes.push({text,note});drawChips();saveDraft();$('#chat-input').focus();});
+}
+let selectionTip=null,selectionTimer=0;
+function selectionExcerpt(){
+  const sel=getSelection();if(!sel||sel.isCollapsed||!sel.rangeCount)return null;
+  const range=sel.getRangeAt(0),body=n=>(n?.nodeType===1?n:n?.parentElement)?.closest('.turn-body');
+  const start=body(range.startContainer),end=body(range.endContainer),stream=start?.closest('#chat-stream,.side-stream');
+  if(!start||!end||!stream||end.closest('#chat-stream,.side-stream')!==stream)return null;
+  const text=sel.toString().replace(/\n{3,}/g,'\n\n').trim();if(!text)return null;
+  const rects=range.getClientRects();
+  return {text:text.slice(0,6000),rect:rects[rects.length-1]||range.getBoundingClientRect(),side:stream.classList.contains('side-stream')};
+}
+function hideSelectionTip(){selectionTip?.remove();selectionTip=null;}
+function showSelectionTip(){
+  hideSelectionTip();const pick=selectionExcerpt();if(!pick)return;
+  const {ch,native,readonly}=chatFlags(),canQuote=!readonly,canSide=native&&!readonly&&ch.meta.status==='ready'&&sessionSupports(selectedChat,'side');
+  if(!canQuote&&!canSide)return;
+  const tip=el('div','selection-tip'),done=()=>{hideSelectionTip();getSelection()?.removeAllRanges();};
+  tip.setAttribute('role','toolbar');tip.setAttribute('aria-label','选中文字的操作');tip.onpointerdown=e=>e.preventDefault();
+  if(canQuote){const add=button('添加至对话',()=>{quoteIntoComposer(add,pick.text);done();},'tip-btn','quote');add.title='加上批注后放进输入框';tip.append(add);}
+  if(canSide){const side=button('侧边对话',()=>{done();guard(()=>openSideChat({quotes:[{text:pick.text,note:''}],keep:pick.side}));},'tip-btn','chats');side.title=pick.side?'在侧边对话中追问这段':'带着这段原文打开侧边对话';tip.append(side);}
+  document.body.append(tip);
+  const r=pick.rect,w=tip.offsetWidth,h=tip.offsetHeight;let top=r.top-h-8;if(top<8)top=r.bottom+8;
+  tip.style.left=Math.max(8,Math.min(r.right-w/2,innerWidth-w-8))+'px';tip.style.top=Math.min(top,innerHeight-h-8)+'px';selectionTip=tip;
+}
+document.addEventListener('mouseup',e=>{if(e.button!==0||e.target.closest?.('.selection-tip'))return;clearTimeout(selectionTimer);selectionTimer=setTimeout(showSelectionTip,10);});
+document.addEventListener('keyup',e=>{if(e.shiftKey&&/^(Arrow|Home|End)/.test(e.key))showSelectionTip();});
+document.addEventListener('selectionchange',()=>{if(selectionTip&&getSelection()?.isCollapsed)hideSelectionTip();});
+document.addEventListener('pointerdown',e=>{if(selectionTip&&!e.target.closest?.('.selection-tip'))hideSelectionTip();},true);
+document.addEventListener('scroll',()=>{if(selectionTip)hideSelectionTip();},true);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&selectionTip)hideSelectionTip();});
+window.addEventListener('resize',hideSelectionTip);
+
+/* ---------- 侧边对话（/btw）：带着当前上下文顺带问一句，只读，不写入主对话 ---------- */
+function sideKey(mainId,sid){return 'btw:'+mainId+':'+sid;}
+function sideActiveId(ch){const sid=ch.sideActive!==undefined?ch.sideActive:ch.sideLatest;return sid&&ch.sides?.[sid]?sid:null;}
+function sideThread(mainId,sid){
+  const key=sideKey(mainId,sid),main=chatState(mainId),side=(main.sides??={})[sid]??={...freshChat(),items:[]};
+  side.meta.status='ready';side.meta.workspace=main.meta.workspace;side.meta.role=main.meta.role;return chats[key]=side;
+}
+function applySideEvent(ch,ev){
+  if(ev.type==='side_closed'){if(ch.sides)delete ch.sides[ev.side];if(ch.sideLatest===ev.side)ch.sideLatest=null;return;}
+  const side=(ch.sides??={})[ev.side]??={...freshChat(),items:[]};side.items??=[];ch.sideLatest=ev.side;
+  if(ev.type==='side_error'){side.items.push({kind:'error',text:'侧边对话失败：'+(ev.message||'未知错误')});side.streaming=false;return;}
+  applyChatEvent(side,{type:'event',event:ev.event});
+}
+function restoreSides(ch,sides){for(const s of sides||[]){const side=(ch.sides??={})[s.id]??={...freshChat(),items:[]};buildItemsFromHistory(side,s.messages);side.streaming=!!s.streaming;ch.sideLatest=s.id;}}
+function sideDraftOf(ch){return ch.btwDraft??={text:'',quotes:[]};}
+function sideUnavailable(){
+  const {ch,native,readonly}=chatFlags();
+  if(!ch)return '侧边对话会带上主对话的上下文。先开始一段对话，再输入 /btw 加问题，或选中回复里的文字。';
+  if(!native||readonly)return '只读记录和任务对话不支持侧边对话；继续这段对话后即可使用。';
+  if(ch.meta.status!=='ready')return '会话正在启动，稍候即可使用侧边对话。';
+  if(!sessionSupports(selectedChat,'side'))return '这个会话进程版本较旧，不支持侧边对话。结束后从历史继续这段对话即可使用。';
+  return '';
+}
+async function openSideChat({text='',quotes=[],keep=false}={}){
+  const blocked=sideUnavailable();if(blocked)throw new Error(blocked);
+  const id=selectedChat,ch=chatState(id),sid=sideActiveId(ch),thread=sid&&ch.sides[sid];
+  if(!keep&&thread&&(thread.items?.length||thread.streaming))closeSideThread(id);
+  const draft=sideDraftOf(ch);draft.quotes.push(...quotes);if(text)draft.text=text;
+  await activateContext('side');if(id!==selectedChat)return;
+  if(text)await sendSide(id);else $('.side-reply textarea')?.focus();
+}
+function closeSideThread(mainId){
+  const ch=chatState(mainId),sid=sideActiveId(ch);ch.sideActive=null;if(!sid)return;
+  delete ch.sides[sid];delete chats[sideKey(mainId,sid)];
+  api('chat_side_close',{workspace:ch.meta.workspace||workspace,chat_id:mainId,side_id:sid}).catch(()=>{});
+}
+async function sendSide(mainId){
+  const ch=chatState(mainId),draft=sideDraftOf(ch),typed=draft.text.trim();if(!typed&&!draft.quotes.length)return;
+  const source=ch.meta.workspace||workspace,text=composeOutgoing(typed,draft.quotes),saved={text:draft.text,quotes:[...draft.quotes]};
+  let sid=sideActiveId(ch);if(sid&&ch.sides[sid].streaming)throw new Error('侧边对话还在回复，请稍候或先停止');
+  draft.text='';draft.quotes=[];drawSidePanel(true);
+  try{sid=(await api('chat_side',{workspace:source,chat_id:mainId,...(sid?{side_id:sid}:{}),text})).side_id;}
+  catch(e){Object.assign(draft,saved);drawSidePanel(true);throw e;}
+  ch.sideActive=sid;const thread=sideThread(mainId,sid);thread.streaming=true;thread.outbox.push({text,sent:true,base:userCount(thread),at:Date.now()});
+  drawSidePanel(true);
+}
+async function stopSide(mainId){const ch=chatState(mainId),sid=sideActiveId(ch);if(!sid)return;await api('chat_side_stop',{workspace:ch.meta.workspace||workspace,chat_id:mainId,side_id:sid});ch.sides[sid].streaming=false;drawSidePanel();}
+function drawSideQuoteChips(root,ch){
+  const draft=sideDraftOf(ch),wrap=$('.image-chips',root);wrap.replaceChildren();
+  draft.quotes.forEach((q,i)=>wrap.append(quoteChip(q,i,()=>{draft.quotes.splice(i,1);drawSideQuoteChips(root,ch);},()=>drawSideQuoteChips(root,ch))));
+  wrap.hidden=!draft.quotes.length;
+}
+function drawSidePanel(force=false){
+  if(!contextOpen||contextTab!=='side'||view!=='chat')return;
+  const root=$('#context-body'),id=selectedChat,blocked=sideUnavailable();
+  if(blocked){const {bar,scroll}=contextFrame('side-off');bar.hidden=true;if(scroll._note!==blocked){scroll._note=blocked;scroll.replaceChildren(ctxEmpty(blocked));}return;}
+  const ch=chatState(id),sid=sideActiveId(ch),thread=sid?sideThread(id,sid):null,key=id+'|'+(sid||'new');
+  if(force||root.dataset.tab!=='side'||root.dataset.side!==key){
+    root.replaceChildren();root.classList.add('has-thread');root.dataset.tab='side';root.dataset.thread='';root.dataset.side=key;
+    const tools=el('div','context-tools'),title=el('div','thread-title'),seal=el('span','side-seal');seal.append(icon('chats'));
+    title.append(el('b','','侧边对话'),el('small','thread-status',''));
+    const fresh=iconAction('compose','新的侧边对话（重新带上主对话的最新上下文）',()=>{closeSideThread(id);drawSidePanel(true);$('.side-reply textarea')?.focus();},'icon-btn');fresh.disabled=!thread;
+    tools.append(seal,title,fresh);
+    const scroll=el('div','context-scroll'),messages=el('div','chat-stream context-thread side-stream');scroll.append(messages);
+    if(!thread){const intro=el('div','side-intro');intro.append(icon('chats'),el('b','','顺带问一句'),el('p','','侧边对话带着主对话到目前为止的上下文作答，只读取资料，不修改任何文件，问答也不会写入主对话。'));messages.append(intro);}
+    const dock=el('div','context-dock'),form=el('form','composer context-reply side-reply'),chips=el('div','image-chips'),input=el('textarea'),bar=el('div','composer-bar'),right=el('div','cb-right'),send=button('',()=>form.requestSubmit(),'send-btn side-send','arrow-up');
+    input.rows=1;input.spellcheck=false;input.setAttribute('aria-label','侧边对话问题');input.placeholder=thread?'继续追问…':'问一个旁支问题…';input.value=sideDraftOf(ch).text;
+    send.setAttribute('aria-label','发送侧边问题');right.append(send);bar.append(el('div','cb-left'),right);form.append(chips,input,bar);
+    const size=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,200)+'px';};
+    input.oninput=()=>{sideDraftOf(ch).text=input.value;size();updateSideSend(root,ch,id);};
+    input.onkeydown=e=>{if(e.isComposing)return;if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();form.requestSubmit();}else if(e.key==='Escape'&&sideActiveId(ch)&&ch.sides[sideActiveId(ch)].streaming){e.preventDefault();guard(()=>stopSide(id));}};
+    form.onsubmit=e=>{e.preventDefault();const s=sideActiveId(ch);if(s&&ch.sides[s].streaming&&!input.value.trim())return guard(()=>stopSide(id));guard(()=>sendSide(id));};
+    dock.append(form,el('small','side-hint','Enter 发送 · Esc 停止 · 只读，不写入主对话'));root.append(tools,scroll,dock);setTimeout(size,0);
+  }
+  if(thread)renderConversation(sideKey(id,sid),$('.side-stream',root),$('.context-scroll',root));
+  drawSideQuoteChips(root,ch);updateSideSend(root,ch,id);
+  const status=$('.thread-status',root),label=thread?.streaming?'正在回复…':'基于主对话上下文 · 只读';if(status.textContent!==label){status.textContent=label;status.className='thread-status'+(thread?.streaming?' tone-busy':'');}
+}
+function updateSideSend(root,ch,id){
+  const input=$('.side-reply textarea',root),send=$('.side-send',root),sid=sideActiveId(ch),busy=!!sid&&ch.sides[sid].streaming,stop=busy&&!input.value.trim(),draft=sideDraftOf(ch);
+  send.replaceChildren(icon(stop?'stop':'arrow-up'));send.classList.toggle('stop',stop);send.disabled=!stop&&(busy||!input.value.trim()&&!draft.quotes.length);
+  send.title=stop?'停止回复（Esc）':busy?'等这条回复完成后再追问':'发送（Enter）';
+}
+$('#rewind-btn').onclick=e=>guard(rewindLast,e.currentTarget);
+$('#restore-btn').onclick=e=>guard(restoreRewound,e.currentTarget);
+
 /* ---------- 启动 ---------- */
 async function boot(){
   if (localStorage.getItem('misaka-sidebar')==='collapsed'&&innerWidth>860) $('#app').classList.add('sb-collapsed');

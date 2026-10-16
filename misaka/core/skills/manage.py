@@ -591,10 +591,17 @@ def _precheck(action, skill_dir, name, content, file_path, file_content, old_str
 # Hermes exposes ONE shape; legacy calls are normalized before schema validation.
 # Keep unknown keys so validation reports them rather than silently dropping work.
 _OPERATION_KEYS = {"action", "name", "content", "category", "file_path", "file_content",
-                   "old_string", "new_string", "replace_all", "absorbed_into"}
+                   "old_string", "new_string", "replace_all", "absorbed_into", "source"}
 MANAGE_PARAMETERS = copy.deepcopy(SKILL_MANAGE_SCHEMA["parameters"])
 MANAGE_PARAMETERS["additionalProperties"] = False
 MANAGE_PARAMETERS["properties"]["operations"]["items"]["additionalProperties"] = True
+MANAGE_PARAMETERS["properties"]["operations"]["items"]["properties"]["source"] = {
+    "type": "string",
+    "description": ("Exact indexed SKILL.md source path, as accepted by skill_view. "
+                    "Select it when the user names a particular project/host copy or names collide. "
+                    "Existing skills are edited at this source, not copied into MISAKA. "
+                    "Not an arbitrary destination; unavailable for create."),
+}
 
 
 def prepare_arguments(raw):
@@ -603,11 +610,14 @@ def prepare_arguments(raw):
     result = copy.deepcopy(raw)
     if result.get("operations") is not None:
         default_name = result.get("name")
+        default_source = result.get("source")
         result = {k: v for k, v in result.items() if k not in _OPERATION_KEYS}
         if isinstance(result["operations"], list):
             for op in result["operations"]:
                 if isinstance(op, dict) and not op.get("name") and default_name:
                     op["name"] = default_name
+                if isinstance(op, dict) and not op.get("source") and default_source:
+                    op["source"] = default_source
     else:
         op = {k: v for k, v in result.items() if k in _OPERATION_KEYS}
         result = {k: v for k, v in result.items() if k not in _OPERATION_KEYS and k != "operations"}
@@ -696,12 +706,15 @@ def _bind_operations(profile_dir, operations, visible_roots):
     from . import index
     role_root = _skills_root(profile_dir).absolute()
     created = {}
+    destinations = {}
     bound = []
     for original in operations:
         op = dict(original)
         name = op["name"]
         layer_root = None
         if op["action"] == "create":
+            if op.get("source"):
+                return None, "source selects an existing indexed skill; it cannot set a create destination."
             if err := _validate_category(op.get("category")):
                 return None, err
             if "/" in name or "\\" in name:
@@ -711,10 +724,11 @@ def _bind_operations(profile_dir, operations, visible_roots):
             rel = str(Path(op.get("category") or "") / name)
             created[name] = rel
             created[rel] = rel
-        elif name in created:
+        elif name in created and not op.get("source"):
             rel = created[name]
         else:
-            entry, err = index.resolve(visible_roots, name, require_compatible=False)
+            entry, err = index.resolve(visible_roots, name, source=op.get("source") or None,
+                                       require_compatible=False)
             if err:
                 return None, err
             layer = entry.get("layer") or ""
@@ -733,6 +747,12 @@ def _bind_operations(profile_dir, operations, visible_roots):
             return None, err
         op["name"] = rel
         op["live_dir"] = str(Path(checked).resolve())
+        # Staging uses relative skill names. Never collapse two independent
+        # host copies into one staged tree and publish one copy over the other.
+        if rel in destinations and destinations[rel] != op["live_dir"]:
+            return None, (f"Skill '{rel}' selects different source directories in this batch. "
+                          "Use a separate skill_manage call for each source.")
+        destinations[rel] = op["live_dir"]
         if op.get("absorbed_into"):
             target, err = index.resolve(visible_roots, op["absorbed_into"], require_compatible=False)
             if err or Path(target.get("root", "")).resolve() != role_root.resolve():
@@ -746,7 +766,7 @@ def manage(action=None, name=None, *, profile_dir, content=None, file_path=None,
            file_content=None, old_string=None, new_string=None, category=None,
            replace_all=False, absorbed_into=None, base=None, operations=None,
            approved_payload_hash=None, visible_roots=_VISIBLE_ROOTS_UNSET,
-           workspace=None, _reviewed=None):
+           workspace=None, source=None, _reviewed=None):
     """One isolated, recoverable transaction for single calls, batches, and approvals."""
     from .layers import skill_roots
     from .scope import scope_for, using_scope
@@ -756,7 +776,8 @@ def manage(action=None, name=None, *, profile_dir, content=None, file_path=None,
     profile_dir = os.path.abspath(os.path.expanduser(profile_dir))
     flat = {k: v for k, v in {"action": action, "name": name, "content": content, "file_path": file_path,
             "file_content": file_content, "old_string": old_string, "new_string": new_string,
-            "category": category, "replace_all": replace_all, "absorbed_into": absorbed_into}.items() if v is not None}
+            "category": category, "replace_all": replace_all, "absorbed_into": absorbed_into,
+            "source": source}.items() if v is not None}
     canonical = prepare_arguments({**flat, **({"operations": operations} if operations is not None else {})})["operations"]
     if err := _validate_operations(canonical):
         return {"success": False, "error": err}

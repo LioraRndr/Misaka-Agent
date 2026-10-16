@@ -71,15 +71,15 @@ class ServerReuseTests(unittest.TestCase):
         self.assertEqual(new_log.parent, start_gui.RUNTIME)
 
     def test_same_protocol_without_a_source_revision_is_not_reused(self):
-        self.assertFalse(self.healthy({"version": "0.18.5", "native_chat": True, "project_gui": 13}))
+        self.assertFalse(self.healthy({"version": "0.18.5", "native_chat": True, "project_gui": 14}))
 
     def test_old_source_snapshot_is_not_reused(self):
         self.assertFalse(self.healthy({"version": "0.18.5", "native_chat": True,
-                                      "project_gui": 13, "source_revision": "old"}))
+                                      "project_gui": 14, "source_revision": "old"}))
 
     def test_current_source_snapshot_is_reused(self):
         self.assertTrue(self.healthy({"version": "0.18.5", "native_chat": True,
-                                     "project_gui": 13,
+                                     "project_gui": 14,
                                      "source_revision": start_gui.source_revision(start_gui.SOURCE)}))
 
     def test_frontend_and_model_handler_edits_change_the_revision(self):

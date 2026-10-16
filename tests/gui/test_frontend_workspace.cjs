@@ -39,7 +39,7 @@ load('function renderQueue(', 'function drawMessageQueue(');
   ctx.chats['attached:old']={items:[],results:{},exec:{},meta:{workspace:'project'},outbox:[],streaming:true};
   vm.runInContext("applyAttachedSnapshot(chats['attached:old'],{messages:[],state:'working',paused:true})",ctx);
   assert.equal(ctx.chats['attached:old'].streaming,false,'a paused owner never renders as running');
-  ctx.selectedChat='attached:old';ctx.readOnlyView=null;ctx.pendingImages=[];
+  ctx.selectedChat='attached:old';ctx.readOnlyView=null;ctx.pendingImages=[];ctx.pendingQuotes=[];
   const input={value:''},send={classList:{toggle:(name,on)=>{send.stop=on;}}};
   ctx.$=id=>id==='#chat-input'?input:send;
   load('function chatFlags(', 'function updateChatHeader(');

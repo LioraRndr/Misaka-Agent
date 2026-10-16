@@ -278,6 +278,34 @@ class ChatManager:
     def stop(self, data: dict) -> dict:
         return self.request(data, "stop", {}, timeout=60)
 
+    def fork(self, data: dict) -> dict:
+        name = data.get("name")
+        return self.request(data, "fork", {"timestamp": data.get("timestamp"),
+                                           "name": name if isinstance(name, str) else None})
+
+    def rewind(self, data: dict) -> dict:
+        return self.request(data, "rewind", {"timestamp": data.get("timestamp")}, timeout=60)
+
+    def restore(self, data: dict) -> dict:
+        leaf = data.get("leaf_id")
+        if not isinstance(leaf, str) or len(leaf) > 64:
+            raise ValueError("还原标识无效")
+        return self.request(data, "restore", {"leaf_id": leaf}, timeout=90)
+
+    def side(self, data: dict) -> dict:
+        text, side_id = data.get("text"), data.get("side_id")
+        if not isinstance(text, str) or not text.strip() or len(text) > 262144:
+            raise ValueError("问题不能为空，且不能超过 262144 个字符")
+        if side_id is not None and (not isinstance(side_id, str) or len(side_id) > 64):
+            raise ValueError("侧边对话标识无效")
+        return self.request(data, "side", {"side_id": side_id, "text": text})
+
+    def side_stop(self, data: dict) -> dict:
+        return self.request(data, "side_stop", {"side_id": data.get("side_id")}, timeout=60)
+
+    def side_close(self, data: dict) -> dict:
+        return self.request(data, "side_close", {"side_id": data.get("side_id")})
+
     def compact(self, data: dict) -> dict:
         return self.request(data, "compact", {"instructions": data.get("instructions")}, timeout=120)
 

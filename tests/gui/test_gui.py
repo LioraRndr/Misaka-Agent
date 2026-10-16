@@ -307,7 +307,7 @@ class HTTPTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(payload["native_chat"])
-        self.assertEqual(payload["project_gui"], 13)
+        self.assertEqual(payload["project_gui"], 14)
         self.assertEqual(payload["source_revision"], self.server.source_revision)
         self.assertEqual(len(payload["source_revision"]), 64)
 
